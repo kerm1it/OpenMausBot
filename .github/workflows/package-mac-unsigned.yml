@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   package:
-    name: Unsigned DMG + ZIP (arm64 + x64)
+    name: Unsigned DMG (arm64)
     runs-on: macos-14
     timeout-minutes: 90
     steps:
@@ -33,41 +33,32 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Clean generated output
         run: pnpm clean
-      - name: Package both architectures without a signing identity
+      - name: Package arm64 DMG without a signing identity
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: pnpm package:mac
-      - name: Verify test packages
+          OPENMAUSBOT_CUA_ARCHES: arm64
+          OPENMAUSBOT_CUA_ARCHES_PARTIAL: "1"
+        run: |
+          pnpm package:prepare
+          pnpm build:speech
+          pnpm build:cua
+          pnpm exec electron-builder --mac dmg --arm64 --publish never
+      - name: Verify test package
         run: |
           set -euo pipefail
           version="$(node -p "require('./package.json').version")"
-          for arch in arm64 x64; do
-            test -s "release/OpenMausBot-${version}-${arch}.dmg"
-            test -s "release/OpenMausBot-${version}-${arch}.zip"
-          done
-          for app in release/mac-arm64/OpenMausBot.app release/mac/OpenMausBot.app; do
-            test -d "$app"
-            if codesign -dv --verbose=4 "$app" 2>&1 | grep -q '^Authority=Developer ID Application:'; then
-              echo "::error::$app unexpectedly has a Developer ID signature"
-              exit 1
-            fi
-            OMB_SMOKE_DIST="$app/Contents/Resources/server" node scripts/smoke-packaged-server.mjs
-          done
-          shasum -a 256 \
-            "release/OpenMausBot-${version}-arm64.dmg" \
-            "release/OpenMausBot-${version}-arm64.zip" \
-            "release/OpenMausBot-${version}-x64.dmg" \
-            "release/OpenMausBot-${version}-x64.zip" \
-            > release/SHA256SUMS-mac-unsigned.txt
-          cat release/SHA256SUMS-mac-unsigned.txt
+          dmg="release/OpenMausBot-${version}-arm64.dmg"
+          app="release/mac-arm64/OpenMausBot.app"
+          test -s "$dmg"
+          test -d "$app"
+          if codesign -dv --verbose=4 "$app" 2>&1 | grep -q '^Authority=Developer ID Application:'; then
+            echo "::error::$app unexpectedly has a Developer ID signature"
+            exit 1
+          fi
+          OMB_SMOKE_DIST="$app/Contents/Resources/server" node scripts/smoke-packaged-server.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: openmausbot-macos-unsigned-${{ github.run_number }}
-          path: |
-            release/OpenMausBot-*-arm64.dmg
-            release/OpenMausBot-*-arm64.zip
-            release/OpenMausBot-*-x64.dmg
-            release/OpenMausBot-*-x64.zip
-            release/SHA256SUMS-mac-unsigned.txt
+          name: openmausbot-macos-arm64-dmg-${{ github.run_number }}
+          path: release/OpenMausBot-*-arm64.dmg
           if-no-files-found: error
           retention-days: 7
