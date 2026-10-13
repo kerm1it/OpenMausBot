@@ -1,0 +1,73 @@
+# Manually build macOS packages for tester distribution without importing a
+# Developer ID certificate or submitting anything to Apple's notary service.
+# These artifacts are intentionally not suitable for a production release:
+# Gatekeeper will require the tester to approve the app manually.
+name: Package macOS unsigned test build
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Commit/tag/branch to build (defaults to the branch this is run from)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Unsigned DMG + ZIP (arm64 + x64)
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          persist-credentials: false
+      - uses: pnpm/action-setup@ff378ebe6b225b0680b81c1ad4498ae0d1d3a5e3 # v6.0.10
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Clean generated output
+        run: pnpm clean
+      - name: Package both architectures without a signing identity
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: pnpm package:mac
+      - name: Verify test packages
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          for arch in arm64 x64; do
+            test -s "release/OpenMausBot-${version}-${arch}.dmg"
+            test -s "release/OpenMausBot-${version}-${arch}.zip"
+          done
+          for app in release/mac-arm64/OpenMausBot.app release/mac/OpenMausBot.app; do
+            test -d "$app"
+            if codesign -dv --verbose=4 "$app" 2>&1 | grep -q '^Authority=Developer ID Application:'; then
+              echo "::error::$app unexpectedly has a Developer ID signature"
+              exit 1
+            fi
+            OMB_SMOKE_DIST="$app/Contents/Resources/server" node scripts/smoke-packaged-server.mjs
+          done
+          shasum -a 256 \
+            "release/OpenMausBot-${version}-arm64.dmg" \
+            "release/OpenMausBot-${version}-arm64.zip" \
+            "release/OpenMausBot-${version}-x64.dmg" \
+            "release/OpenMausBot-${version}-x64.zip" \
+            > release/SHA256SUMS-mac-unsigned.txt
+          cat release/SHA256SUMS-mac-unsigned.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: openmausbot-macos-unsigned-${{ github.run_number }}
+          path: |
+            release/OpenMausBot-*-arm64.dmg
+            release/OpenMausBot-*-arm64.zip
+            release/OpenMausBot-*-x64.dmg
+            release/OpenMausBot-*-x64.zip
+            release/SHA256SUMS-mac-unsigned.txt
+          if-no-files-found: error
+          retention-days: 7
