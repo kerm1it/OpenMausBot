@@ -203,6 +203,13 @@ export function BotTab({ bot, derived, editingInstructions, onEditInstructions, 
           onClick={() => onOpen("skills")}
         />
         <NavRow
+          data-panel-page="plugins"
+          icon={Sparkles}
+          title={t("connectors.title")}
+          value={bot.plugins?.length || t("botPanel.none")}
+          onClick={() => onOpen("plugins")}
+        />
+        <NavRow
           data-panel-page="folder"
           icon={Folder}
           title={t("computer.files.folder")}

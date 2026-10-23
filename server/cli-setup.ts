@@ -12,6 +12,7 @@ import type { InstanceConfig, ModelCatalog, ProviderSnapshot } from "./contracts
 import { acquireDataDirLease } from "./data-dir-lease.ts";
 import { augmentedPath, resetPathCache } from "./env-path.ts";
 import { resolveCli } from "./procs.ts";
+import { codexRuntimeEnvironment } from "./codex-runtime.ts";
 import { ProviderRegistry } from "./harness/registry.ts";
 import { BUILT_IN_DRIVERS } from "./drivers/builtIn.ts";
 import { defaultSetupIo, SetupCancelled, type SetupIo } from "./cli-prompts.ts";
@@ -149,7 +150,7 @@ async function connectNative(
       args = method === 1 ? ["login", "--device-auth"] : ["login"];
     }
     if (args.includes("--device-auth")) io.log("Enable device-code login in ChatGPT security settings if your account requests it.");
-    await deps.runCli(cli, args, entry.environment);
+    await deps.runCli(cli, args, choice.id === "codex" ? codexRuntimeEnvironment(entry.environment ?? {}) : entry.environment);
     state = await deps.inspect(id, entry);
     if (state.snapshot.state !== "available" || !state.snapshot.authenticated) {
       throw new Error("Sign-in was not confirmed. Your OpenMausBot settings are unchanged; complete provider sign-in and try again.");

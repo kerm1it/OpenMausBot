@@ -738,3 +738,12 @@ describe("connection security and discovery", () => {
     expect(() => validateToolArguments("send_bot_message", { bot_id: "bot-1", text: "hello", extra: true })).toThrow("not supported");
   });
 });
+
+
+describe("plugin installation sources", () => {
+  it.each(["/tmp/plugin", "./plugin", "file:///tmp/plugin"])("rejects %s before an API request", async source => {
+    const fetcher = vi.fn();
+    await expect(handleToolCall("install_plugin", { source }, fetcher)).rejects.toThrow();
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+});

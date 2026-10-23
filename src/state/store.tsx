@@ -1,3 +1,5 @@
+import type { AppSettingsSection, BotSettingsSection } from "./settings-sections";
+export type { AppSettingsSection, BotSettingsSection } from "./settings-sections";
 import { cloudAsleep, onCloudPower } from "../lib/cloud-power";
 import { api, ApiError } from "./api";
 import {
@@ -342,6 +344,7 @@ export interface Bot extends DefaultBotFields {
   cacheKeepWarm?: boolean | null;
   helperModel?: boolean;
   mcpServers?: string[] | null;
+  plugins?: string[];
   browserProfile?: string | null;
   visibility?: BotVisibility;
   installedPackage?: InstalledPackageMetadata;
@@ -543,43 +546,6 @@ export interface InstanceInfo {
   claudeAccount?: { configDir: string; signInCommand: string; signInShell: "powershell" | "sh"; isDefault: boolean };
   freeUpSpace?: boolean;
 }
-
-export type AppSettingsSection =
-  | "general"
-  | "desktopWorkspaces"
-  | "organization"
-  | "cloudAccount"
-  | "appearance"
-  | "experimental"
-  | "connections"
-  | "decisionModel"
-  | "engines"
-  | "companion"
-  | "remote"
-  | "computer"
-  | "logins"
-  | "usage"
-  | "people"
-  | "activity"
-  | "backups"
-  | "workspaces"
-  | "skills" | "import";
-
-export type BotSettingsSection =
-  | "overview"
-  | "identity"
-  | "slack"
-  | "soul"
-  | "skills"
-  | "memory"
-  | "routines"
-  | "access"
-  | "model"
-  | "permissions"
-  | "voice"
-  | "visibility"
-  | "history"
-  | "usage";
 
 export interface ModelVariantSession {
   instanceId: string;

@@ -379,6 +379,8 @@ export interface WireBot extends DefaultBotFields {
   helperModel?: boolean;
   /** Which of the app-wide MCP servers this bot mounts, by name. */
   mcpServers?: string[];
+  /** IDs from the shared plugin library; absent means no plugins. */
+  plugins?: string[];
   /** Owner-selected original tool identities. An empty allowlist permits none. */
   toolScope?: ToolScope;
   /** Id of a named browser profile; absent = the bot's own private session. */

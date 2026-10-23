@@ -40,6 +40,7 @@ export type BotUpdatePatch = Partial<
     | "memoryUpkeep"
     | "cacheKeepWarm"
     | "mcpServers"
+    | "plugins"
     | "modelSelection"
   >
 > & {

@@ -51,6 +51,7 @@ export const HELP = `control-omb — the openmausbot headless verbs (docs/headle
 read-only (every verb also takes --url URL):
   doctor
   bots
+  plugins
   channels
   models
   messages --bot ID [--task ID] [--limit 30]
@@ -61,7 +62,9 @@ read-only (every verb also takes --url URL):
   events --job THREAD_ID --until-settled
 
 mutating (an explicit --url or OPENMAUSBOT_URL/OMB_PORT is required):
-  new-bot --name NAME [--section TEAM]
+  install-plugin --source HTTP_OR_HTTPS_URL
+  uninstall-plugin --id PLUGIN_ID
+  new-bot --name NAME [--section TEAM] [--plugins ID,ID]
   new-channel --name NAME --members ID,ID
   send --bot ID --text TEXT [--task ID] [--dry-run]
   send-channel --channel ID --text TEXT [--task ID] [--dry-run]

@@ -11,7 +11,8 @@ import { openStartupModelCatalog, writeStartupModelCache } from "../startup-mode
 import { writeFileAtomic, writeFileAtomicIfChanged } from "../atomic.ts";
 import { augmentedPath } from "../env-path.ts";
 import { brokerSocketPath, describeSpawnFailure, execCli, killCliTree, spawnCli } from "../procs.ts";
-import { claudeAuthStatus } from "./claude-auth-status.ts";
+export { claudeInheritWarning } from "./claude-auth-status.ts";
+import { claudeAuthStatus, claudeInheritWarning, inheritsUserConfig } from "./claude-auth-status.ts";
 import { projectMcpServers } from "./claude-project-mcp.ts";
 import { claudeBilling, claudeCallUsage } from "./claude-billing.ts";
 import { claudeAuthFailure, claudeAuthRecovery } from "./claude-auth-recovery.ts";
@@ -137,25 +138,6 @@ function claudeEnvironment(
   // An inherited ANTHROPIC_API_KEY would flip a subscription login to pay-as-you-go.
   if (!applied.injected && !instanceEnvironment.ANTHROPIC_API_KEY) delete env.ANTHROPIC_API_KEY;
   return env;
-}
-
-/** Escape hatch: the bot inherits this machine's Claude Code setup (MCP servers, connectors,
- * skills, agents, hooks, personal CLAUDE.md). */
-function inheritsUserConfig(env: NodeJS.ProcessEnv): boolean {
-  return env.OMB_CLAUDE_INHERIT_USER_CONFIG === "1";
-}
-
-export function claudeInheritWarning(env: NodeJS.ProcessEnv): ProviderSnapshot["warning"] | undefined {
-  if (!inheritsUserConfig(env)) return undefined;
-  return {
-    title: "Bots inherit this machine's Claude Code setup",
-    message:
-      "OMB_CLAUDE_INHERIT_USER_CONFIG=1 is set on the OpenMausBot process, so every Claude bot also loads this " +
-      "computer's own MCP servers, connectors, skills, hooks and personal CLAUDE.md on every turn — often thousands " +
-      "of extra tokens per model call, and tools nobody gave the bot. Unless a bot genuinely needs a server from " +
-      "your user-scope Claude config, remove the variable and restart; add the server under Settings → MCP servers " +
-      "or the bot project's .mcp.json instead.",
-  };
 }
 
 /** The selected CLI account's auth settings, without its hooks, permissions, MCP servers or
@@ -1061,6 +1043,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         "--include-partial-messages",
         "--permission-mode", permissionMode,
       ];
+      for (const plugin of turn.plugins ?? []) args.push("--plugin-dir", plugin.path);
       if (turn.guestConfined && permissionMode !== "default") {
         throw new Error("A guest's turn on this Cloud runs only in Ask.");
       }
@@ -1232,6 +1215,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeConfig> = {
         base: env.ANTHROPIC_BASE_URL ?? null,
         configDir: env.CLAUDE_CONFIG_DIR ?? null,
         hooks: Boolean(hooks),
+        plugins: turn.plugins ?? [],
         // Rotating an account's key/helper must not reuse the old process.
         auth: createHash("sha256").update(JSON.stringify({
           settings: authSettings,

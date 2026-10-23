@@ -56,6 +56,9 @@ const WAITING = {
 const VERBS: Record<string, { options: ParseArgsOptionsConfig; positionals: number }> = {
   doctor: { options: { wait: { type: "string" } }, positionals: 0 },
   bots: { options: {}, positionals: 0 },
+  plugins: { options: {}, positionals: 0 },
+  "install-plugin": { options: { source: { type: "string" } }, positionals: 0 },
+  "uninstall-plugin": { options: { id: { type: "string" } }, positionals: 0 },
   channels: { options: {}, positionals: 0 },
   models: { options: {}, positionals: 0 },
   messages: { options: { ...TARGET, limit: { type: "string" } }, positionals: 1 },
@@ -69,7 +72,7 @@ const VERBS: Record<string, { options: ParseArgsOptionsConfig; positionals: numb
   wait: { options: { ...TARGET, ...WAITING, for: { type: "string" }, since: { type: "string" } }, positionals: 1 },
   interrupt: { options: { ...TARGET, tree: { type: "boolean" }, "dry-run": { type: "boolean" } }, positionals: 1 },
   "new-bot": {
-    options: { name: { type: "string" }, title: { type: "string" }, team: { type: "string" }, section: { type: "string" },
+    options: { name: { type: "string" }, plugins: { type: "string" }, title: { type: "string" }, team: { type: "string" }, section: { type: "string" },
       model: { type: "string" }, instance: { type: "string" }, effort: { type: "string" } },
     positionals: 1,
   },
@@ -111,7 +114,7 @@ export const HEADLESS_VERBS: ReadonlySet<string> = new Set(Object.keys(VERBS).ma
 
 /** Verbs that change something; control-omb refuses them on a discovered server. */
 export const MUTATING_VERBS: ReadonlySet<string> = new Set([
-  "send", "send-channel", "run", "interrupt", "new-bot", "new-channel", "set-model", "edit", "team apply", "engine set",
+  "install-plugin", "uninstall-plugin", "send", "send-channel", "run", "interrupt", "new-bot", "new-channel", "set-model", "edit", "team apply", "engine set",
 ]);
 
 export type Flags = Record<string, string | boolean | string[] | undefined>;

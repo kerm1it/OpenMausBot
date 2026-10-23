@@ -42,6 +42,7 @@ vi.mock("./SettingsPrimitives", async (importOriginal) => {
 const { marker } = vi.hoisted(() => ({
   marker: (name: string) => () => `MARKER:${name};`,
 }));
+vi.mock("./NativePluginsSettings", () => ({ NativePluginsSettings: marker("plugins") }));
 vi.mock("./EnginesSettings", () => ({ EnginesSettings: marker("engines") }));
 vi.mock("./DecisionModelSettings", () => ({ DecisionModelSettings: marker("decisionModel") }));
 vi.mock("./ApiKeys", () => ({
@@ -109,8 +110,8 @@ describe("Settings in Simple mode", () => {
     const placed = SIMPLE_PAGES.flatMap((page) => page.sections);
     expect(new Set(placed).size).toBe(placed.length);
     const hidden = SECTIONS.map((entry) => entry.id).filter((id) => !placed.includes(id));
-    expect(hidden).toEqual(["skills", "backups", "workspaces", "experimental"]);
-    for (const id of hidden) expect(SIMPLE_HIDDEN_SECTIONS).toContain(id);
+    expect(hidden).toEqual(["plugins", "skills", "backups", "workspaces", "experimental"]);
+    for (const id of hidden.filter(id => id !== "plugins")) expect(SIMPLE_HIDDEN_SECTIONS).toContain(id);
   });
 
   it("keeps General as it is, Advanced mode switch first", () => {

@@ -222,11 +222,13 @@ describe("CursorAgentDriver", () => {
     });
     const recorder = recordEvents(instance.adapter);
     try {
-      await instance.adapter.sendTurn({ threadId: "t-cursor", text: "hi", model: "gpt-5.3-codex", approvalMode: "full" });
+      const pluginPath = join(scratch, "proof-plugin");
+      await instance.adapter.sendTurn({ threadId: "t-cursor", text: "hi", model: "gpt-5.3-codex", approvalMode: "full",
+        plugins: [{ id: "proof", version: "1.0.0", source: pluginPath, path: pluginPath, installedAt: 1 }] });
       await recorder.until((e) => e.type === "turn.completed");
 
       const seen = JSON.parse(readFileSync(dump, "utf8"));
-      expect(seen.argv).toEqual(["--force", "--model", "gpt-5.3-codex", "acp"]);
+      expect(seen.argv).toEqual(["--plugin-dir", pluginPath, "--force", "--model", "gpt-5.3-codex", "acp"]);
       expect(seen.env.CURSOR_API_KEY).toBe("cursor-should-keep");
       expect(seen.env.XAI_API_KEY).toBeUndefined();
 

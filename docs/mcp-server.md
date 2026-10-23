@@ -122,8 +122,11 @@ described above; it is not a generic reverse-proxy secret.
 | Purpose | Tools |
 |---|---|
 | Inspect | `get_system_health`, `list_bots`, `list_channels`, `get_bot_messages`, `get_channel_messages`, `search_messages`, `list_available_models` |
+| Plugin library | `install_plugin`, `list_plugins` |
 | Create and organize | `create_bot`, `update_bot_profile`, `create_channel`, `update_channel`, `create_task`, `switch_task`, `rename_task` |
 | Run work | `send_bot_message`, `send_channel_message`, `wait_for_conversation`, `interrupt_conversation`, `set_bot_model` |
+
+`install_plugin` accepts a `source`: an HTTP/HTTPS archive URL or a GitHub repository/subdirectory URL. Local filesystem paths and `file://` URLs are rejected. It installs globally and returns the plugin ID and version. Installation does not select it for any bot. Pass `plugins: ["pstack"]` to `create_bot` or `update_bot_profile` to select installed IDs; an empty array clears the selection.
 
 `wait_for_conversation` returns `settled`, `needs-user`, `failed`, `stalled`, or `timed-out`, along with a
 small redacted transcript tail. That `status` keeps its earlier meaning: `settled` says the conversation is

@@ -42,6 +42,7 @@ export type BotPatch = Partial<
     | "browser"
     | "recordBrowserSteps"
     | "mcpServers"
+    | "plugins"
     | "modelSelection"
   >
 > & {

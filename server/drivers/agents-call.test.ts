@@ -308,3 +308,17 @@ describe("page tools", () => {
       { path: "/api/internal/pages/unpublish", body: { page_id: "abcdefghijklmnopqrstuvwxyz" } }]);
   });
 });
+
+
+describe("install_plugin sources", () => {
+  it.each(["/tmp/plugin", "./plugin", "file:///tmp/plugin", "ftp://example.test/plugin.zip"])("rejects %s without requesting the harness", async source => {
+    let requested = false;
+    const result = await callTool("install_plugin", { source }, context({ client: {
+      api: async () => { requested = true; return {}; },
+      apiResponse: async () => ({ ok: true, status: 200, body: {} }),
+    } }));
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("local paths are not supported");
+    expect(requested).toBe(false);
+  });
+});

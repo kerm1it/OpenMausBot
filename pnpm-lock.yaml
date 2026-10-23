@@ -71,6 +71,9 @@ importers:
       croner:
         specifier: 10.0.1
         version: 10.0.1
+      fflate:
+        specifier: 0.8.2
+        version: 0.8.2
       jmespath:
         specifier: 0.16.0
         version: 0.16.0
@@ -3415,6 +3418,9 @@ packages:
     peerDependenciesMeta:
       picomatch:
         optional: true
+
+  fflate@0.8.2:
+    resolution: {integrity: sha512-cPJU47OaAoCbg0pBvzsgpTPhmhqI5eJjh/JIu8tPj5q+T7iLvW/JAYUqmE7KOB4R1ZyEhzBaIQpQpardBF5z8A==}
 
   fflate@0.4.9:
     resolution: {integrity: sha512-zdxgIEddhfsyCaWpJ2SdXEP8ZMrKJ6+5jl4OupODcywU0IhRk6gdXuVGcPICyfx2H97hVK7xmJtRLPjkxAX8Vw==}
@@ -8234,6 +8240,8 @@ snapshots:
       picomatch: 4.0.5
 
   fflate@0.4.9: {}
+
+  fflate@0.8.2: {}
 
   filelist@1.0.6:
     dependencies:

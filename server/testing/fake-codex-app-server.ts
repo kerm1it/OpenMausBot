@@ -405,6 +405,16 @@ process.stdin.on("data", (chunk) => {
     if (msg.method) calls.push({ method: msg.method, params: msg.params ?? null });
 
     switch (msg.method) {
+      case "plugin/installed": {
+        dump();
+        const plugins = process.argv.flatMap((arg, index) => {
+          const match = process.argv[index - 1] === "-c" ? /^plugins\.([a-z0-9-]+@openmausbot)\.enabled=(true|false)$/.exec(arg) : null;
+          return match ? [{ id: match[1], installed: true, enabled: process.env.FAKE_CODEX_IGNORE_PLUGIN_OVERRIDES === "1" || match[2] === "true" }] : [];
+        });
+        if (process.env.FAKE_CODEX_EXTRA_ENABLED_PLUGIN === "1") plugins.push({ id: "extra@openmausbot", installed: true, enabled: true });
+        out({ jsonrpc: "2.0", id: msg.id, result: { marketplaces: [{ name: "openmausbot", plugins }] } });
+        break;
+      }
       case "initialize": {
         experimentalApi = msg.params?.capabilities?.experimentalApi === true;
         logStartup("initialize");

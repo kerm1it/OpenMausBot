@@ -23,15 +23,15 @@ describe("the bot panel's page registry", () => {
   it.each([
     ["overview", { tab: "bot" }], ["identity", { tab: "bot" }],
     ["soul", { tab: "bot", anchor: "instructions", editInstructions: true }],
-    ["skills", { tab: "bot", page: "skills" }], ["memory", { tab: "bot", page: "memory" }], ["routines", { tab: "bot", page: "routines" }],
+    ["skills", { tab: "bot", page: "skills" }], ["plugins", { tab: "bot", page: "plugins" }], ["memory", { tab: "bot", page: "memory" }], ["routines", { tab: "bot", page: "routines" }],
     ["access", { tab: "computer" }], ["model", { tab: "bot", anchor: "model" }], ["permissions", { tab: "bot", anchor: "approval" }],
     ["voice", { tab: "bot" }], ["visibility", { tab: "bot" }], ["history", { tab: "bot" }], ["usage", { tab: "bot" }], ["slack", { tab: "bot" }],
   ] as const)("sends a %s link to %o", (section, target) => {
     expect(sectionTarget(section)).toEqual(target);
   });
 
-  it("draws only the six Simple pages, each on the Bot tab but the browser", () => {
-    expect(SIMPLE_PAGES).toEqual(["apps", "routines", "memory", "skills", "folder", "browser"]);
+  it("draws the Simple pages, each on the Bot tab but the browser", () => {
+    expect(SIMPLE_PAGES).toEqual(["apps", "routines", "memory", "skills", "plugins", "folder", "browser"]);
     for (const page of SIMPLE_PAGES) expect(PAGES[page].home).toBe(page === "browser" ? "computer" : "bot");
     expect(isSimplePage("mcp")).toBe(false);
   });

@@ -1,3 +1,6 @@
+import type { CatalogProfile } from "./agents-catalog-profile.ts";
+export { catalogProfileFromEnv, type CatalogProfile } from "./agents-catalog-profile.ts";
+import { NATIVE_PLUGIN_TOOLS } from "../../shared/plugin-tools.ts";
 // The agents tool catalog and which tools a turn sees: definitions only, no environment, no calls.
 import { CREDENTIAL_TARGETS } from "../../shared/credential-request.ts";
 import { OPTIONS_CARD_LIMITS, WATCHER_OPTIONS_CARD_BOT_ID } from "../../shared/options-card.ts";
@@ -5,37 +8,6 @@ import { agentToolAnnotations } from "../agent-tool-policy.ts";
 import { CHAT_CARD_TOOL_DEFINITIONS } from "./agents-chat-card-tools.ts";
 import { RESEARCH_TOOL_DEFINITIONS, RESEARCH_TOOL_NAMES } from "./agents-research-tools.ts";
 
-/** Which tools a turn is shown. Presentation only: the server still authenticates and scopes every call. */
-export interface CatalogProfile {
-  skillAuthoring: boolean;
-  sharedComputers: boolean;
-  voiceNotes: boolean;
-  /** A treg key or a Cloud plan's research credential is held and this bot's research switch is on. Absent means off. */
-  xResearch?: boolean;
-  cloudHome: boolean;
-  memoryEnabled?: boolean;
-  /** The section's Chief of Staff; the server refuses Chief-only tools to every other bot. */
-  chief: boolean;
-  /** Written into start_thread's schema: the only bot_id it accepts. */
-  botId: string;
-  /** features.chiefEscalations: raise_escalation is mounted. */
-  escalations?: boolean;
-}
-
-/** Everything is off unless the harness says "1". */
-export function catalogProfileFromEnv(env: NodeJS.ProcessEnv): CatalogProfile {
-  return {
-    skillAuthoring: env.OMB_SKILL_AUTHORING_ENABLED === "1",
-    sharedComputers: env.OMB_SHARED_COMPUTERS_ENABLED === "1",
-    voiceNotes: env.OMB_VOICE_NOTES === "1",
-    xResearch: env.OMB_X_RESEARCH === "1",
-    cloudHome: env.OMB_CLOUD_HOME === "1",
-    memoryEnabled: env.OMB_MEMORY_ENABLED !== "0",
-    chief: env.OMB_CHIEF_OF_STAFF === "1",
-    botId: env.OMB_BOT_ID ?? "",
-    escalations: env.OMB_ESCALATIONS === "1",
-  };
-}
 
 export const WEEKDAYS = [
   "monday",
@@ -377,6 +349,7 @@ const TOOL_DEFINITIONS = [
       required: ["group_id", "message"],
     },
   },
+  ...NATIVE_PLUGIN_TOOLS,
   {
     name: "create_bot",
     description:
@@ -385,6 +358,7 @@ const TOOL_DEFINITIONS = [
       type: "object",
       properties: {
         name: { type: "string", description: "Short, unique display name for the specialist." },
+        plugins: { type: "array", items: { type: "string" }, maxItems: 100, description: "Installed plugin IDs from list_plugins. Omit or use [] for no plugins." },
         role: { type: "string", description: "The specialist's job title or role." },
         instructions: { type: "string", description: "What this specialist is responsible for and how it should work." },
         modelSelection: { type: "object", additionalProperties: false, properties: {
@@ -425,6 +399,7 @@ const TOOL_DEFINITIONS = [
             key: { type: "string", description: "For create: your stable short name for this new bot in this plan." },
             botId: { type: "string", description: "For update: exact existing bot ID from list_team_setup." },
             fields: { type: "object", additionalProperties: false, properties: {
+              plugins: { type: "array", items: { type: "string" }, maxItems: 100, description: "Installed plugin IDs from list_plugins. Omit on create for no plugins; omit on update to keep the selection. [] clears it." },
               name: { type: "string", maxLength: 100 }, title: { type: "string", maxLength: 200 },
               chiefOfStaff: { type: "boolean", description: "Appoint or remove this team's Chief. At most one Chief per team: explicitly demote the current Chief in the same plan when replacing them. Does not grant access to other teams or change execution permissions." },
               description: { type: "string", maxLength: 4000 }, soul: { type: "string", description: "Standing instructions; required with name/title/modelSelection for every new bot." },

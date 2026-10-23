@@ -565,6 +565,51 @@
       }
     },
     {
+      "name": "install_plugin",
+      "description": "Install a shared plugin from an HTTP/HTTPS archive or GitHub URL; no local paths. Returns its ID for a bot's plugins selection. Components stay native.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source": {
+            "type": "string",
+            "maxLength": 4096,
+            "pattern": "^[hH][tT][tT][pP][sS]?://",
+            "description": "HTTP/HTTPS archive or GitHub URL; no local paths."
+          }
+        },
+        "required": [
+          "source"
+        ]
+      }
+    },
+    {
+      "name": "uninstall_plugin",
+      "description": "Uninstall a shared plugin and clear bot/default selections. Refuses while a turn uses it.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "plugin_id": {
+            "type": "string",
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "plugin_id"
+        ]
+      }
+    },
+    {
+      "name": "list_plugins",
+      "description": "List installed shared plugins and their IDs, versions and sources. Does not enable anything.",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      }
+    },
+    {
       "name": "create_bot",
       "description": "Chief of Staff only: add a specialist to your section now; the person can undo it. instructions become its soul. Omit modelSelection for the workspace default, or use exact IDs from list_team_setup. It starts with connected apps off, at the default access level. Assign work with coordinate_bots. At most four per turn.",
       "inputSchema": {
@@ -573,6 +618,14 @@
           "name": {
             "type": "string",
             "description": "Short, unique display name for the specialist."
+          },
+          "plugins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "description": "Installed plugin IDs from list_plugins. Omit or use [] for no plugins."
           },
           "role": {
             "type": "string",
@@ -689,6 +742,14 @@
                   "type": "object",
                   "additionalProperties": false,
                   "properties": {
+                    "plugins": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "maxItems": 100,
+                      "description": "Installed plugin IDs from list_plugins. Omit on create for no plugins; omit on update to keep the selection. [] clears it."
+                    },
                     "name": {
                       "type": "string",
                       "maxLength": 100

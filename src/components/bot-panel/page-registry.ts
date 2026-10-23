@@ -11,13 +11,13 @@ export const TAB_LABEL: Record<PanelTab, LocaleKey> = {
 
 export type PageId =
   | "setup" | "model" | "instructions" | "approvals" | "always" | "routines" | "apps"
-  | "memory" | "skills"
+  | "memory" | "skills" | "plugins"
   | "browser" | "folder" | "android"
   | "voice" | "blurb" | "team" | "chiefteams" | "mcp" | "tools" | "webhooks" | "visibility" | "slack"
   | "overview" | "prompt" | "history";
 
 /** The pages Simple mode draws; a link to any other page lands where its section does. */
-export const SIMPLE_PAGES = ["apps", "routines", "memory", "skills", "folder", "browser"] as const satisfies readonly PageId[];
+export const SIMPLE_PAGES = ["apps", "routines", "memory", "skills", "plugins", "folder", "browser"] as const satisfies readonly PageId[];
 export type SimplePageId = (typeof SIMPLE_PAGES)[number];
 
 export function isSimplePage(page: PageId): page is SimplePageId {
@@ -38,6 +38,7 @@ export const PAGES: Record<PageId, PageMeta> = {
   routines: { title: "botSettings.simple.routines", home: "bot" },
   apps: { title: "botPanel.appsRow", home: "bot", intro: "botPanel.apps.intro" },
   memory: { title: "botPanel.memoryRow", home: "bot", intro: "botPanel.memory.intro" },
+  plugins: { title: "connectors.title", home: "bot" },
   skills: { title: "botSettings.simple.skills", home: "bot", intro: "botSettings.simple.skillsHint" },
   browser: { title: "settings.sites.title", home: "computer" },
   folder: { title: "computer.files.folder", home: "bot", intro: "botPanel.folder.intro" },
@@ -72,6 +73,7 @@ const SECTION_TARGET: Record<BotSettingsSection, PanelTarget> = {
   identity: { tab: "bot" },
   slack: { tab: "bot" },
   soul: { tab: "bot", anchor: "instructions", editInstructions: true },
+  plugins: { tab: "bot", page: "plugins" },
   skills: { tab: "bot", page: "skills" },
   memory: { tab: "bot", page: "memory" },
   routines: { tab: "bot", page: "routines" },

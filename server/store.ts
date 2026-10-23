@@ -1,8 +1,10 @@
+import { clearVoiceSelections, removePluginReferences } from "./bot-selections.ts";
 import { chmodSync, existsSync, readFileSync, mkdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import { writeFileAtomic, writeFileAtomicIfChanged } from "./atomic.ts";
 import { commitRegistryChange, keptRevocation, saveRegistryFor } from "./registry-save.ts";
+import { pluginLibrary } from "./plugins.ts";
 import { parseToolScope, toolScopeWidens } from "../shared/tool-scope.ts";
 import { reorderStable } from "../shared/bot-order.ts";
 import { ensureSections, readSections, changeEmptySection } from "./section-context.ts";
@@ -31,7 +33,7 @@ import type { AgentPart, PartPair, RoomPart } from "./package-parts.ts";
 import type {
   BotActivity, GroupDefaultResponder, GroupTask as GroupTaskRecord, MausColor,
   TaskClosedBy, TaskOpenedBy, TaskUsage, WireBot, WireGroup,
-  WireMessage, WireTask, BotProject as BotProjectRecord,
+  WireMessage as Message, WireTask, BotProject as BotProjectRecord,
 } from "../shared/wire.ts";
 import { movesThreadToTop, nextOpenThread } from "../shared/wire.ts";
 import { parseConnectorTools } from "./connector-tools.ts";
@@ -40,12 +42,10 @@ import { initialGreetingMessage } from "./initial-greeting.ts"; import { createD
 import { ThreadCache, type ThreadState } from "./thread-cache.ts";
 export type {
   BotActivity, ConnectorCardData, GroupDefaultResponder, OptionCardData,
-  SecretRequestCardData, Surface, TaskClosedBy, TaskOpenedBy, TaskUsage,
+  SecretRequestCardData, Surface, TaskClosedBy, TaskOpenedBy, TaskUsage, WireMessage as Message,
 } from "../shared/wire.ts";
 export type { GroupTask as GroupTaskRecord, BotProject as BotProjectRecord } from "../shared/wire.ts";
 export type { InstalledPlaybook, InstalledPackageMetadata, MausColor, MausExpression } from "../shared/wire.ts";
-
-export type Message = WireMessage;
 
 export interface GroupPackageStamp {
   installId: string;
@@ -1330,13 +1330,14 @@ export class Store {
     profile: Partial<
       Pick<
         BotRecord,
-        "name" | "title" | "description" | "soul" | "color" | "mascotExpression" | "mascotBody" | "modelSelection" | "section" | "cwd" | "visibility" | "toolScope"
+        "name" | "title" | "description" | "soul" | "color" | "mascotExpression" | "mascotBody" | "modelSelection" | "section" | "cwd" | "visibility" | "toolScope" | "plugins"
       >
     > = {},
     opts: {
       seedMessages?: boolean; id?: string; threadId?: string;
     } = {},
   ): BotRecord {
+    const plugins = pluginLibrary.selection(profile.plugins ?? []);
     const toolScope = parseToolScope(profile.toolScope);
     if (!toolScope.ok) throw new Error(toolScope.error);
     this.rememberSections([profile.section]);
@@ -1349,6 +1350,7 @@ export class Store {
       title: profile.title ?? "",
       description: profile.description ?? "",
       soul: profile.soul ?? "",
+      plugins,
       soulHash: soulHash(profile.soul ?? ""),
       notifications: true,
       color: profile.color ?? COLORS[this.bots.length % COLORS.length],
@@ -1400,6 +1402,7 @@ export class Store {
     const nextBots = [...this.bots];
     const changed: BotRecord[] = [];
     for (const operation of request.operations) {
+      if (operation.fields.plugins !== undefined) pluginLibrary.selection(operation.fields.plugins);
       const at = nextBots.findIndex((bot) => bot.id === operation.botId);
       let next: BotRecord;
       if (operation.action === "create") {
@@ -1408,7 +1411,7 @@ export class Store {
         const modelSelection = this.newBotSelection(operation.fields.modelSelection);
         next = { id: operation.botId, threadId: operation.threadId, name: operation.fields.name,
           title: "", description: "", soul: "", notifications: true, color: COLORS[nextBots.length % COLORS.length], unread: false,
-          resumeCursors: {}, createdAt, ...operation.fields, modelSelection,
+          resumeCursors: {}, createdAt, plugins: [], ...operation.fields, modelSelection,
           autoApprove: false, composio: false, approvePeerComms: false,
           // Absent would mean every tool once connected apps are turned on.
           connectorTools: {},
@@ -1534,6 +1537,7 @@ export class Store {
       if (!parsed.ok) throw new Error(parsed.error);
       patch = { ...patch, connectorTools: parsed.grants };
     }
+    if (Object.hasOwn(patch, "plugins")) patch = { ...patch, plugins: pluginLibrary.selection(patch.plugins) };
     if (Object.hasOwn(patch, "toolScope")) {
       const parsed = parseToolScope(patch.toolScope);
       if (!parsed.ok) throw new Error(parsed.error);
@@ -1569,16 +1573,11 @@ export class Store {
   }
 
   clearVoiceSelections(): BotRecord[] {
-    const changed = this.bots.filter((bot) => bot.voice !== undefined && bot.voice !== "");
-    if (!changed.length) return [];
-    const next = this.bots.map((bot) =>
-      bot.voice === undefined || bot.voice === "" ? bot : { ...bot, voice: undefined });
-    this.saveBots(next);
-    for (const bot of changed) {
-      delete bot.voice;
-      this.emit({ type: "bot", botId: bot.id });
-    }
-    return changed;
+    return clearVoiceSelections(this.bots, next => this.saveBots(next), bot => this.emit({ type: "bot", botId: bot.id }));
+  }
+
+  removePluginReferences(id: string): BotRecord[] {
+    return removePluginReferences(this.bots, id, next => this.saveBots(next), bot => this.emit({ type: "bot", botId: bot.id }));
   }
 
   patchBotProfile(id: string, patch: BotProfilePatch & Partial<Pick<BotRecord, "cwd" | "lastProfileRequestId">>): BotRecord | null {

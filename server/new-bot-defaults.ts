@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { botPluginsSchema } from "../shared/plugins.ts";
 import { profilePatchSchema, fitsOnOneLine } from "./bot-profile.ts";
 import { EFFORT_LEVELS, MAUS_COLOR_NAMES } from "../shared/wire.ts";
 import { isModelVariant } from "./contracts.ts";
@@ -39,6 +40,7 @@ export const botDefaultsProfileSchema = profilePatchSchema.extend({
   browser: z.boolean().optional(),
   browserProfile: z.string().max(100).nullable().optional(),
   mcpServers: strings(100, 100).nullable().optional(),
+  plugins: botPluginsSchema.optional(),
   toolScope: z.custom<ToolScope>((value) => value !== undefined && parseToolScope(value).ok, "Invalid tool selection")
     .transform((value) => { const parsed = parseToolScope(value); return parsed.ok ? parsed.scope! : value; }).nullable().optional(),
   parkDirectMessages: z.boolean().optional(),
@@ -115,7 +117,7 @@ export function resolveBotCreationDefaults(saved: NewBotDefaults | undefined, bo
   if (!checked.success) throw Object.assign(new Error(checked.error.message), { status: 400 });
   const explicit = checked.data;
   const profile = { ...template.profile, ...explicit };
-  for (const key of ["name", "title", "description", "modelSelection", "section"] as const) {
+  for (const key of ["name", "title", "description", "modelSelection", "section", "plugins"] as const) {
     if (Object.hasOwn(body, key)) Object.assign(profile, { [key]: key === "section" && body[key] === null ? "" : body[key] });
   }
   const resolved = botDefaultsProfileSchema.safeParse(profile);

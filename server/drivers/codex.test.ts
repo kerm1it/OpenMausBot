@@ -4,7 +4,7 @@ import { once } from "node:events";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { tmpdir } from "node:os";
-import { dirname, join, sep } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -21,6 +21,7 @@ import { TEAM_TOOLS_FAILED } from "./team-tools.ts";
 import { rebuiltSessionNotice } from "../resume-recovery.ts";
 import { startFakeHttpMcp, type FakeHttpMcp } from "../testing/fake-http-mcp-server.ts";
 import * as procs from "../procs.ts";
+import * as nativePlugins from "./codex-plugins.ts";
 import { autoVerdict } from "../auto-approve.ts";
 import { formatQuestionAnswers } from "../../shared/ask-question.ts";
 
@@ -154,11 +155,87 @@ describe("CodexDriver turns (fake app-server)", () => {
     scratch = mkdtempSync(join(tmpdir(), "omb-codex-test-"));
   });
 
+  it.each([false, true])("checks empty plugin snapshots before sending a prompt (extra enabled=%s)", async extra => {
+    const dump = join(scratch, "empty-plugin-discovery.json"); process.env.FAKE_CODEX_DUMP = dump;
+    await create({ environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex"), FAKE_CODEX_EXTRA_ENABLED_PLUGIN: extra ? "1" : "0" } });
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "empty-plugins", text: "Fixture", pluginLibrary: { root: join(scratch, "library"), installed: [] } });
+    expect(await recorder.until(event => event.type === "turn.completed" && event.turnId === turnId)).toMatchObject({ ok: !extra });
+    const methods = JSON.parse(readFileSync(dump, "utf8")).calls.map((call: { method: string }) => call.method);
+    expect(methods).toContain("plugin/installed");
+    if (extra) expect(methods).not.toContain("turn/start");
+    else expect(methods).toContain("turn/start");
+  });
+
+  it("reports native plugin preparation failure and releases the turn", async () => {
+    await create();
+    vi.spyOn(nativePlugins, "prepareCodexPlugins").mockRejectedValueOnce(new Error("fixture plugin install failed"));
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "prepare-failure", text: "Fixture" });
+    expect(await recorder.until(event => event.type === "turn.completed" && event.turnId === turnId)).toMatchObject({ ok: false, stopReason: "startup_error" });
+    expect(recorder.events).toContainEqual(expect.objectContaining({ type: "runtime.error", message: "fixture plugin install failed" }));
+    expect(instance.adapter.hasSession?.("prepare-failure")).toBe(false);
+    const next = await instance.adapter.sendTurn({ threadId: "prepare-failure", text: "Retry" });
+    expect(await recorder.until(event => event.type === "turn.completed" && event.turnId === next.turnId)).toMatchObject({ ok: true });
+  });
+
+  it("stops while native plugin preparation is pending without spawning later", async () => {
+    await create();
+    const dump = join(scratch, "must-not-spawn.json"); process.env.FAKE_CODEX_DUMP = dump;
+    let finish!: (value: nativePlugins.CodexPluginLaunch) => void;
+    vi.spyOn(nativePlugins, "prepareCodexPlugins").mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "prepare-stop", text: "Never send" });
+    await instance.adapter.interruptTurn("prepare-stop");
+    expect(await recorder.until(event => event.type === "turn.completed" && event.turnId === turnId)).toMatchObject({ ok: false, stopReason: "interrupted" });
+    finish({ args: [], expected: {} });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(existsSync(dump)).toBe(false);
+    expect(recorder.events.filter(event => event.type === "turn.completed" && event.turnId === turnId)).toHaveLength(1);
+  });
+
   it("says once when its team tools did not start", async () => {
     await create({ environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex"), FAKE_CODEX_MCP_FAILED: "agents" } });
     await instance.adapter.sendTurn({ threadId: "team-tools", text: "Fixture" });
     await recorder.until((event) => event.type === "turn.completed");
     expect(recorder.events.filter((e) => e.type === "runtime.notice").map((e) => (e as { message: string }).message)).toEqual([TEAM_TOOLS_FAILED]);
+  });
+
+  it("defaults to the application home even when the parent process points at personal Codex", async () => {
+    const personal = join(scratch, ".codex");
+    mkdirSync(personal);
+    writeFileSync(join(personal, "config.toml"), "# personal sentinel\n");
+    vi.stubEnv("CODEX_HOME", personal);
+    process.env.FAKE_CODEX_DUMP = join(scratch, "runtime-home.json");
+    await create();
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "home-isolation", text: "fixture" });
+    await recorder.until(event => event.type === "turn.completed" && event.turnId === turnId);
+    const seen = JSON.parse(readFileSync(process.env.FAKE_CODEX_DUMP, "utf8"));
+    expect(seen.env.CODEX_HOME).toBe(join(DATA_DIR, "providers", "codex"));
+    expect(readFileSync(join(personal, "config.toml"), "utf8")).toBe("# personal sentinel\n");
+  });
+
+  it.each([false, true])("verifies native plugin selection before start/resume (ignored=%s)", async ignored => {
+    const dump = join(scratch, "plugins.json"); process.env.FAKE_CODEX_DUMP = dump;
+    const nativeHome = join(scratch, ".codex");
+    await create({ mode: "resume", environment: { HOME: scratch, CODEX_HOME: nativeHome,
+      FAKE_CODEX_IGNORE_PLUGIN_OVERRIDES: ignored ? "1" : "0" } });
+    vi.spyOn(nativePlugins, "prepareCodexPlugins").mockResolvedValue({ args: ["-c", "plugins.alpha@openmausbot.enabled=false"], expected: { "alpha@openmausbot": false } });
+    for (const resumeCursor of [undefined, "codex-thread-1"]) {
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "plugin-selection", text: "fixture", resumeCursor });
+      const completed = await recorder.until(event => event.type === "turn.completed" && event.turnId === turnId);
+      expect(completed).toMatchObject({ ok: !ignored });
+      const seen = JSON.parse(readFileSync(dump, "utf8"));
+      expect(seen.env.CODEX_HOME).toBe(nativeHome);
+      expect(seen.argv.indexOf("plugins.alpha@openmausbot.enabled=false")).toBeGreaterThan(seen.argv.findIndex((arg: string) => arg.startsWith("plugins={")));
+      const methods = seen.calls.map((call: { method: string }) => call.method);
+      expect(methods).toContain("plugin/installed");
+      if (ignored) {
+        expect(methods).not.toContain("thread/start");
+        expect(methods).not.toContain("thread/resume");
+        expect(methods).not.toContain("turn/start");
+        expect(recorder.events.some(event => event.type === "runtime.error" && event.message.includes("shared CODEX_HOME"))).toBe(true);
+      } else {
+        expect(methods.indexOf("plugin/installed")).toBeLessThan(methods.indexOf(resumeCursor ? "thread/resume" : "thread/start"));
+      }
+    }
   });
 
   it("refuses native selection before a Codex prompt, including resumed Full-access turns", async () => {
@@ -1800,8 +1877,7 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
       expect(seen.env.OPENMAUSBOT_CHATGPT_TOKEN).toBe(plan ? "synthetic-chatgpt-token" : undefined);
       expect(JSON.stringify({ argv: seen.argv, calls: seen.calls })).not.toContain("synthetic-chatgpt-token");
       if (plan) {
-        expect(seen.env.CODEX_HOME.startsWith(join(DATA_DIR, "providers", "chatgpt-plan") + sep)).toBe(true);
-        expect(seen.env.CODEX_HOME).not.toBe(join(scratch, ".codex"));
+        expect(seen.env.CODEX_HOME).toBe(join(scratch, ".codex"));
         expect(seen.argv.some((arg: string) => arg.startsWith("shell_environment_policy.exclude="))).toBe(false);
       } else expect(seen.env.CODEX_HOME).toBe(join(scratch, ".codex"));
       const threadCalls = seen.calls.filter((call: { method: string }) => ["thread/start", "thread/resume"].includes(call.method));

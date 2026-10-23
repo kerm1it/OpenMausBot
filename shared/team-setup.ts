@@ -10,6 +10,7 @@ export interface TeamSetupFields {
   section?: string;
   modelSelection?: ModelSelection;
   chiefOfStaff?: boolean;
+  plugins?: string[];
 }
 
 export interface TeamSetupOperation {

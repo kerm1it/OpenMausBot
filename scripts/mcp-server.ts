@@ -2,33 +2,11 @@
 // Model Context Protocol (MCP) server for OpenMausBot over JSON-RPC 2.0 stdio,
 // for external agents (Hermes, Claude Desktop, Cursor, etc.).
 import readline from "node:readline";
+import { NATIVE_PLUGIN_TOOLS } from "../shared/plugin-tools.ts";
+import { callPluginTool } from "./mcp-plugin-tools.ts";
 
-export function validateBaseUrl(url: string): string {
-  const trimmed = url.replace(/\/+$/, "");
-  let parsed: URL;
-  try {
-    parsed = new URL(trimmed);
-  } catch {
-    throw new Error(`Invalid OpenMausBot URL: '${url}'`);
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error("OpenMausBot URL must use http:// or https://");
-  }
-  if (parsed.username || parsed.password) {
-    throw new Error("OpenMausBot URL must not contain credentials; use OPENMAUSBOT_TOKEN instead");
-  }
-  if ((parsed.pathname !== "/" && parsed.pathname !== "") || parsed.search || parsed.hash) {
-    throw new Error("OpenMausBot URL must be an origin without a path, query, or fragment");
-  }
-  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  const isLoopback = hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
-  if (parsed.protocol === "http:" && !isLoopback && process.env.ALLOW_INSECURE_HTTP !== "true") {
-    throw new Error(
-      `Insecure cleartext HTTP origin '${parsed.origin}' is rejected. Use https:// or set ALLOW_INSECURE_HTTP=true.`,
-    );
-  }
-  return parsed.origin;
-}
+import { validateBaseUrl } from "./mcp-url.ts";
+export { validateBaseUrl } from "./mcp-url.ts";
 
 const configuredUrl = process.env.OPENMAUSBOT_URL ||
   (process.env.OMB_PORT ? `http://127.0.0.1:${process.env.OMB_PORT}` : undefined);
@@ -204,6 +182,8 @@ export const TOOLS: McpToolDefinition[] = [
     },
     annotations: AGENT_ACTION,
   },
+  ...NATIVE_PLUGIN_TOOLS.map(tool => ({ ...tool, annotations: tool.name === "install_plugin"
+    ? { ...ADDITIVE, openWorldHint: true } : tool.name === "uninstall_plugin" ? DESTRUCTIVE : READ_ONLY })),
   {
     name: "create_bot",
     description: "Create a new bot and optionally configure its profile, section, and exact model selection.",
@@ -211,6 +191,7 @@ export const TOOLS: McpToolDefinition[] = [
       type: "object",
       properties: {
         name: { type: "string", description: "Bot display name." },
+        plugins: { type: "array", items: { type: "string" }, maxItems: 100, description: "Installed plugin IDs from list_plugins. Omit to use new bot defaults; [] selects no plugins." },
         title: { type: "string", description: "Optional short role title." },
         description: { type: "string", description: "Optional persona or responsibility description." },
         section: { type: "string", description: "Optional sidebar section." },
@@ -225,12 +206,13 @@ export const TOOLS: McpToolDefinition[] = [
   },
   {
     name: "update_bot_profile",
-    description: "Update safe bot profile fields. This cannot alter permissions, computer access, or approval settings.",
+    description: "Update bot profile fields and installed plugin selection. This cannot alter execution approval or computer settings.",
     inputSchema: {
       type: "object",
       properties: {
         bot_id: { type: "string", description: "The ID of the bot." },
         name: { type: "string", description: "Optional bot display name." },
+        plugins: { type: "array", items: { type: "string" }, maxItems: 100, description: "Installed plugin IDs from list_plugins. Omit to keep the selection; [] clears it." },
         title: { type: "string", description: "Optional short role title." },
         description: { type: "string", description: "Optional persona or responsibility description." },
         section: { type: ["string", "null"], description: "Optional sidebar section. Null clears it." },
@@ -620,6 +602,7 @@ function projectBot(bot: Record<string, any>) {
     section: bot.section ?? null,
     chiefOfStaff: Boolean(bot.chiefOfStaff),
     modelSelection: bot.modelSelection,
+    plugins: bot.plugins ?? [],
     busy: Boolean(bot.busy),
     waitingForTeammates: Boolean(bot.waitingForTeammates),
     activity: bot.activity,
@@ -928,6 +911,9 @@ export async function handleToolCall(
       return { success: true, botId, taskId, ...sendReceipt(receipt) };
     }
 
+    case "install_plugin":
+    case "uninstall_plugin":
+    case "list_plugins": return callPluginTool(name, args, fetcher);
     case "create_bot": {
       const name = stringArg(args, "name", { max: 100 });
       const title = optionalStringArg(args, "title", { trim: false, allowEmpty: true, max: 200 });
@@ -942,6 +928,7 @@ export async function handleToolCall(
         method: "POST",
         body: JSON.stringify({
           name,
+          ...(args.plugins !== undefined ? { plugins: args.plugins } : {}),
           ...(title !== undefined ? { title } : {}),
           ...(description !== undefined ? { description } : {}),
           ...(section !== undefined ? { section } : {}),
@@ -961,6 +948,7 @@ export async function handleToolCall(
       if (args.title !== undefined) patch.title = stringArg(args, "title", { trim: false, allowEmpty: true, max: 200 });
       if (args.description !== undefined) patch.description = stringArg(args, "description", { trim: false, allowEmpty: true, max: 4_000 });
       if ("section" in args) patch.section = args.section === null ? null : stringArg(args, "section", { max: 60 });
+      if (args.plugins !== undefined) patch.plugins = args.plugins;
       if (!Object.keys(patch).length) throw new ToolInputError("provide at least one profile field to update");
       const result = await fetcher(`/api/bots/${encodeURIComponent(botId)}`, {
         method: "PATCH",

@@ -11,7 +11,7 @@ let ui: MountedPreview | undefined;
 try {
   const api = fixtureApi(fixture.info.url);
   const fixtureHome = fixture.info.dataDir;
-  const codexDir = join(fixtureHome, ".codex");
+  const codexDir = join(fixtureHome, "providers", "codex");
   const wrapper = join(fixtureHome, "offline-codex-account.mjs");
   const commandLog = join(fixtureHome, "offline-codex-commands.jsonl");
   const failLogoutMarker = join(fixtureHome, ".omb-fake-codex-logout-fail");
@@ -40,7 +40,7 @@ try {
   const config = JSON.parse(readFileSync(configPath, "utf8"));
   config.instances.codex = {
     driver: "codex", displayName: "Codex", config: { cli: wrapper },
-    environment: { HOME: fixtureHome, USERPROFILE: fixtureHome, CODEX_HOME: codexDir, OMB_DEVICE_AUTH_FIXTURE: "1", FAKE_CODEX_ACCOUNT_EMAIL: "ada@example.test" },
+    environment: { HOME: fixtureHome, USERPROFILE: fixtureHome, OMB_DEVICE_AUTH_FIXTURE: "1", FAKE_CODEX_ACCOUNT_EMAIL: "ada@example.test" },
   };
   writeFileSync(configPath, JSON.stringify(config, null, 2), { mode: 0o600 });
   await api("PUT", "/api/config", { defaultModelSelection: { instanceId: "codex", model: "gpt-6-astra" } });

@@ -437,6 +437,7 @@ const support = (run: typeof execCli): AcpSupport => ({
 
   // Global flags precede `acp`; `--force` is the documented auto-approve switch.
   spawnArgs: (config, turn) => [
+    ...(turn.plugins ?? []).flatMap(plugin => ["--plugin-dir", plugin.path]),
     ...(config.fullAuto ? ["--force"] : turn.approvalMode === "auto" ? ["--auto-review"] : []),
     ...(turn.model ? ["--model", turn.model] : []),
     "acp",

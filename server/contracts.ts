@@ -107,6 +107,10 @@ export interface SendTurnInput {
   approvalMode?: ApprovalMode;
   /** Fresh owner selection, independent of execution approval and resume state. */
   toolScope?: ToolScope;
+  /** Resolved shared packages selected by this bot. Content is loaded by the native CLI. */
+  plugins?: import("../shared/plugins.ts").InstalledPlugin[];
+  /** Application plugin inventory used to synchronize the shared native cache. */
+  pluginLibrary?: import("../shared/plugins.ts").PluginLibrarySnapshot;
   /** A guest turn: no shell or command execution, no reads outside its folder. Sent only to drivers whose guestTurns is "confined". */
   guestConfined?: boolean;
   /** Why this turn is confined, in the owner's words, for a refusal to end with. */

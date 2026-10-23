@@ -687,6 +687,13 @@ describe("the Bot tab", () => {
     expect(rowValue(botTab(makeBot()), "skills")).toBeUndefined();
   });
 
+  it("opens Plugins beside Skills with the saved selection count", () => {
+    const rendered = botTab(makeBot({ plugins: ["proof"] }));
+    expect(rowValue(rendered, "plugins")).toBe(1);
+    click(find(rendered, "data-panel-page", "plugins"));
+    expect(onOpen).toHaveBeenLastCalledWith("plugins");
+  });
+
   it("values Working folder as Private or the folder's short name, and opens the folder page", () => {
     const rendered = botTab(makeBot());
     expect(rowValue(rendered, "folder")).toBe("Private");

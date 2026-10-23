@@ -1,7 +1,7 @@
 import { HEADLESS_USAGE } from "../cli-usage.ts";
 import { EXIT, HeadlessError, MUTATING_VERBS, parseCommand } from "./args.ts";
 import { explain, loadMcp, openClient, type ClientDeps, type HeadlessClient } from "./client.ts";
-import { doctor, edit, interrupt, list, messages, newBot, newChannel, send, setModel } from "./commands.ts";
+import { doctor, edit, interrupt, list, messages, newBot, newChannel, pluginVerb, send, setModel } from "./commands.ts";
 import { connectVerb } from "./connect.ts";
 import type { VerbContext, VerbOutcome } from "./context.ts";
 import { engineVerb } from "./engine.ts";
@@ -18,6 +18,9 @@ export const VERB_HELP: Record<string, string> = {
   doctor: `openmausbot doctor [--wait DURATION]
   Check the server answers, is new enough, says who you are to it, and has an engine ready.
   --wait 2m keeps checking until it is ready. Exit 0 ready, 1 no engine, 5 unreachable or too old.`,
+  plugins: "openmausbot plugins\n  List installed native plugins.",
+  "install-plugin": "openmausbot install-plugin --source URL\n  Install a native plugin from HTTP or HTTPS.",
+  "uninstall-plugin": "openmausbot uninstall-plugin --id ID\n  Uninstall a native plugin.",
   bots: "openmausbot bots\n  Your bots and what each is doing.",
   channels: "openmausbot channels\n  Your rooms (group chats) and who is in them.",
   models: "openmausbot models\n  The engines and the models each offers (use them as INSTANCE/MODEL).",
@@ -45,7 +48,7 @@ export const VERB_HELP: Record<string, string> = {
   ${T}`,
   interrupt: `openmausbot interrupt TARGET [--tree] [--dry-run]\n  Press Stop on a conversation. --tree also stops every teammate still working on its job.
   ${T}`,
-  "new-bot": "openmausbot new-bot NAME [--title T] [--team T] [--model INSTANCE/MODEL] [--effort E]\n  Make a bot.",
+  "new-bot": "openmausbot new-bot NAME [--title T] [--team T] [--model INSTANCE/MODEL] [--effort E] [--plugins ID,ID]\n  Make a bot.",
   "new-channel": "openmausbot new-channel NAME --members A,B [--team T]\n  Make a room from bots, by name or id.",
   "set-model": "openmausbot set-model BOT --model INSTANCE/MODEL [--effort E] [--task ID] [--dry-run]\n  Change an idle bot's model (or one idle conversation's, with --task).",
   edit: "openmausbot edit BOT --message ID (TEXT | --text TEXT) [--task ID] [--dry-run]\n  Rewrite an earlier message of yours and have the bot answer again from there.",
@@ -92,6 +95,7 @@ export interface HeadlessOptions {
 
 const VERBS: Record<string, (ctx: VerbContext) => Promise<VerbOutcome>> = {
   doctor, bots: list, channels: list, models: list, messages, send, "send-channel": send, run: runVerb, wait: waitVerb,
+  plugins: pluginVerb, "install-plugin": pluginVerb, "uninstall-plugin": pluginVerb,
   interrupt, "new-bot": newBot, "new-channel": newChannel, "set-model": setModel, edit, export: exportVerb, events: eventsVerb,
   "team apply": teamApplyVerb, "team export": teamExportVerb, "engine set": engineVerb, "engine list": engineVerb, connect: connectVerb,
 };

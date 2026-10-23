@@ -1,5 +1,6 @@
 // Provider instance registry — port of upstream's ProviderInstanceRegistryLive behavior, minus Effect.
 import { findCliCandidates } from "../env-path.ts";
+import { codexRuntimeEnvironment } from "../codex-runtime.ts";
 import { installNpmEngine, npmAvailable, serverInstallFor } from "../engine-install.ts";
 import { withEngineMemory } from "../engine-memory.ts";
 export { engineMemory } from "../engine-memory.ts";
@@ -129,7 +130,7 @@ export class ProviderRegistry {
       const live = withEngineMemory(await driver.create({
         instanceId,
         displayName: entry.displayName ?? driver.metadata.displayName,
-        environment: entry.environment ?? {},
+        environment: entry.driver === "codex" ? codexRuntimeEnvironment(entry.environment ?? {}) : entry.environment ?? {},
         enabled: entry.enabled ?? true,
         config,
       }));

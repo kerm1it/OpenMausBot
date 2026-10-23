@@ -164,7 +164,8 @@ export async function newBot(ctx: VerbContext): Promise<VerbOutcome> {
   if (!name) throw usageError("--name is required (the new bot's name)");
   const team = (flag(ctx.flags, "team") ?? flag(ctx.flags, "section"))?.trim();
   const title = flag(ctx.flags, "title");
-  const result = await (await ctx.client()).tool("create_bot", { name, ...(title ? { title } : {}), ...(team ? { section: team } : {}), ...modelArgs(ctx, false) });
+  const plugins = flag(ctx.flags, "plugins");
+  const result = await (await ctx.client()).tool("create_bot", { name, ...(plugins !== undefined ? { plugins: plugins.split(",").map(id => id.trim()).filter(Boolean) } : {}), ...(title ? { title } : {}), ...(team ? { section: team } : {}), ...modelArgs(ctx, false) });
   return { result, exitCode: EXIT.done, human: [`Created ${result.bot.name}${team ? ` in team ${team}` : ""} (id ${result.bot.id}).`] };
 }
 
@@ -211,4 +212,11 @@ export async function edit(ctx: VerbContext): Promise<VerbOutcome> {
   if (preview) return preview;
   const result = await (await ctx.client()).tool("edit_bot_message", args);
   return { result, exitCode: EXIT.done, human: [`Edited the message and asked ${resolved.name ?? resolved.id} again.`] };
+}
+
+export async function pluginVerb(ctx: VerbContext): Promise<VerbOutcome> {
+  const tool = ctx.verb === "plugins" ? "list_plugins" : ctx.verb === "install-plugin" ? "install_plugin" : "uninstall_plugin";
+  const args = ctx.verb === "plugins" ? {} : ctx.verb === "install-plugin" ? { source: requiredFlag(ctx.flags, "source") } : { plugin_id: requiredFlag(ctx.flags, "id") };
+  const result = await (await ctx.client()).tool(tool, args);
+  return { result, exitCode: EXIT.done, human: [JSON.stringify(result)] };
 }

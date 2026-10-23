@@ -44,6 +44,18 @@ describe("the headless command line", () => {
     expect(human.out.join("\n")).not.toContain("sk-ant-abcdefghijklmnopqrstuv0123");
   });
 
+  it.each([
+    [["plugins"], "list_plugins", {}],
+    [["install-plugin", "--source", "https://example.test/plugin.zip"], "install_plugin", { source: "https://example.test/plugin.zip" }],
+    [["uninstall-plugin", "--id", "proof"], "uninstall_plugin", { plugin_id: "proof" }],
+    [["new-bot", "--name", "Worker", "--plugins", "proof,second"], "create_bot", { name: "Worker", plugins: ["proof", "second"] }],
+  ] as const)("routes native plugin command %j through its public tool", async (args, tool, input) => {
+    const { io } = capture();
+    const callTool = vi.fn(async () => ({ bot: { id: "worker", name: "Worker" }, plugins: [] }));
+    expect(await runHeadless([...args, "--url", "http://127.0.0.1:19999", "--json"], { io, env: {}, callTool: callTool as any })).toBe(0);
+    expect(callTool.mock.calls[0]?.slice(0, 2)).toEqual([tool, input]);
+  });
+
   it("has plain help for every verb, and the main usage names them", async () => {
     for (const verb of HEADLESS_VERBS) expect(VERB_HELP[verb], verb).toBeTruthy();
     const { io, out } = capture();

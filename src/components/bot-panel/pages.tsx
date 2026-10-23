@@ -10,6 +10,7 @@ import type { Routine } from "@/lib/routines";
 import { shortPath } from "@/lib/short-path";
 import { useStore, type Bot } from "@/state/store";
 import { useDesktopCapabilities } from "../DesktopCapabilities";
+import { NativePluginsSettings } from "../NativePluginsSettings";
 import { ServiceIcon } from "../PluginsPanel";
 import { RoutineEditor } from "../RoutinesPage";
 import { useWorkingFolder } from "../bot-settings/AccessSection";
@@ -396,6 +397,8 @@ export function PageBody({ page, ...context }: PageContext & { page: SimplePageI
       return <RoutinesPage {...context} />;
     case "memory":
       return <MemoryPage {...context} />;
+    case "plugins":
+      return <NativePluginsSettings bot={context.bot} patch={context.derived.patch} />;
     case "skills":
       return <SkillsPage {...context} />;
     case "folder":

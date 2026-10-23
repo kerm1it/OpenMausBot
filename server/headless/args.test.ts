@@ -40,10 +40,10 @@ describe("parseCommand", () => {
   });
 
   it("knows which verbs change something", () => {
-    for (const verb of ["send", "run", "interrupt", "team apply", "engine set"]) expect(MUTATING_VERBS.has(verb), verb).toBe(true);
+    for (const verb of ["send", "run", "interrupt", "team apply", "engine set", "install-plugin", "uninstall-plugin"]) expect(MUTATING_VERBS.has(verb), verb).toBe(true);
     for (const verb of ["doctor", "bots", "wait", "messages", "export", "events", "team export", "engine list"]) expect(MUTATING_VERBS.has(verb), verb).toBe(false);
-    expect([...HEADLESS_VERBS].sort()).toEqual(["bots", "channels", "connect", "doctor", "edit", "engine", "events", "export", "interrupt", "mcp",
-      "messages", "models", "new-bot", "new-channel", "run", "send", "send-channel", "set-model", "team", "wait"]);
+    expect([...HEADLESS_VERBS].sort()).toEqual(["bots", "channels", "connect", "doctor", "edit", "engine", "events", "export", "install-plugin", "interrupt", "mcp",
+      "messages", "models", "new-bot", "new-channel", "plugins", "run", "send", "send-channel", "set-model", "team", "uninstall-plugin", "wait"]);
   });
 });
 

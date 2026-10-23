@@ -1,8 +1,9 @@
 // A config written by a newer or differently built app must load as an unavailable shadow, never crash the fleet.
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DATA_DIR } from "../config.ts";
 
 import type { ModelCatalog } from "../contracts.ts";
 import { resetPathCacheForTests } from "../env-path.ts";
@@ -11,6 +12,19 @@ import { makeFakeDriver } from "../testing/fake-driver.ts";
 import { ProviderRegistry, SNAPSHOT_DEADLINE_MS, SNAPSHOT_REUSE_MS } from "./registry.ts";
 
 describe("ProviderRegistry", () => {
+  it("sets the shared application Codex home for every instance, overriding personal paths", async () => {
+    const fake = makeFakeDriver({ kind: "codex" });
+    const create = vi.spyOn(fake.driver, "create");
+    const registry = new ProviderRegistry([fake.driver]);
+    const personal = join(DATA_DIR, "personal-codex");
+    await registry.load({ first: { driver: "codex" }, second: { driver: "codex", environment: { CODEX_HOME: personal, LABEL: "kept" } } });
+    expect(create.mock.calls.map(([input]) => input.environment.CODEX_HOME)).toEqual([
+      join(DATA_DIR, "providers", "codex"), join(DATA_DIR, "providers", "codex"),
+    ]);
+    expect(create.mock.calls[1]![0].environment.LABEL).toBe("kept");
+    expect(existsSync(personal)).toBe(false);
+    await registry.disposeAll();
+  });
   it("creates live instances for known drivers", async () => {
     const fake = makeFakeDriver();
     const registry = new ProviderRegistry([fake.driver]);
@@ -471,6 +485,8 @@ process.exit(0);
     originalPath = process.env.PATH;
     const binDir = join(scratch, "fake-path");
     mkdirSync(binDir);
+    // The fake npm uses env node, while this fixture deliberately replaces PATH.
+    symlinkSync(process.execPath, join(binDir, "node"));
     if (present) addFakeNpm(binDir);
     process.env.PATH = binDir;
     process.env.FAKE_NPM_LOG = join(scratch, "npm-calls.jsonl");

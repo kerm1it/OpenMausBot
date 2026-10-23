@@ -1,3 +1,4 @@
+import { createWindowStatePersistence } from "./window-state-main.mjs";
 import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, Tray, WebContentsView, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, Notification, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, utilityProcess } from "electron";
 import { createRequire } from "node:module";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -26,6 +27,7 @@ import { activateExistingWindow, releaseSingleInstanceLock } from "./single-inst
 import { bootFailureMessage, listeningSignal, pollServerIdentity, SERVER_BOOT_TIMEOUT_MS, SERVER_LISTENING_GRACE_MS } from "./server-boot-probe.mjs";
 import { createServerSupervisor } from "./server-supervisor.mjs";
 import { serverChildLaunch } from "./server-child-launch.mjs";
+import { codexRuntimeHome } from "./codex-home.mjs";
 import { packageUrlFromCommandLine, packageUrlFromDeepLink } from "./package-link.mjs";
 import { chatLinkFrom, chatLinkFromCommandLine } from "./chat-link.mjs";
 import { createOrganizationEntry, isOrganizationDeepLink, takeOrganizationDeepLink, organizationRestartIntent, withOrganizationRestartIntent, withoutOrganizationRestartIntent } from "./organization-entry.mjs";
@@ -120,7 +122,7 @@ const { desktopViewerUrl, sameDesktopViewerOrigin } = require("./desktop-viewer.
 const { createDesktopWorkspaceManager } = require("./desktop-workspace.cjs");
 const { createTrustedApprovalModeCoordinator } = require("./approval-trusted-mode.cjs");
 const { DESKTOP_MUTATION_HEADER, desktopServerHeaders } = require("./desktop-server-auth.cjs");
-const { MIN_BOUNDS, normalizeUnreadCount, parseWindowState, resolveWindowState } = require("./window-state.cjs");
+const { MIN_BOUNDS, normalizeUnreadCount, resolveWindowState } = require("./window-state.cjs");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // vite binds IPv4; a bare "localhost" can resolve to ::1.
@@ -150,63 +152,9 @@ const serverUnavailableWindows = new WeakSet();
 let unreadCount = 0;
 let unreadOverlayIcon = null;
 
-function windowStateFile() {
-  return path.join(app.getPath("userData"), "window-state.json");
-}
-
-function readWindowState() {
-  try {
-    return parseWindowState(fs.readFileSync(windowStateFile(), "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-function writeWindowState(win) {
-  if (!win || win.isDestroyed()) return;
-  const file = windowStateFile();
-  const temporary = `${file}.${process.pid}.tmp`;
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(
-      temporary,
-      JSON.stringify({ bounds: win.getNormalBounds(), maximized: win.isMaximized() }),
-      { mode: 0o600 },
-    );
-    fs.renameSync(temporary, file);
-  } catch (error) {
-    try {
-      fs.rmSync(temporary, { force: true });
-    } catch {}
-    slog(`window state save failed: ${error?.message ?? error}`);
-  }
-}
-
-function installWindowStatePersistence(win) {
-  let timer = null;
-  const flush = () => {
-    if (timer) clearTimeout(timer);
-    timer = null;
-    writeWindowState(win);
-  };
-  const schedule = () => {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(flush, 250);
-    timer.unref?.();
-  };
-  win.on("resize", schedule);
-  win.on("move", schedule);
-  const pushMaximized = () => {
-    try {
-      if (!win.isDestroyed()) win.webContents.send("window:maximized-changed", win.isMaximized());
-    } catch {}
-  };
-  win.on("maximize", pushMaximized);
-  win.on("unmaximize", pushMaximized);
-  win.on("maximize", schedule);
-  win.on("unmaximize", schedule);
-  win.on("close", flush);
-}
+const { read: readWindowState, install: installWindowStatePersistence } = createWindowStatePersistence({
+  file: () => path.join(app.getPath("userData"), "window-state.json"), log: slog,
+});
 
 function applyUnreadBadge(win = mainWindow) {
   const count = normalizeUnreadCount(unreadCount);
@@ -1188,6 +1136,8 @@ async function startServerOn(port, dataDir = runningDataDir ?? startupEnvironmen
     // The parent owns the data-dir lease; a child only validates it, so fallback-port children never replace it.
     ...desktopDataDirLease.utilityServerLeaseEnvironment(),
     OMB_DATA_DIR: dataDir,
+    CODEX_HOME: codexRuntimeHome(dataDir),
+    OMB_CODEX_AUTH_HOME: process.env.OMB_CODEX_AUTH_HOME || process.env.CODEX_HOME || path.join(app.getPath("home"), ".codex"),
     // Fail-closed until this process sends the private connection; never a descriptor inherited from the shell.
     OMB_DESKTOP_PARENT: "1",
     OMB_DESKTOP_LAUNCH_ID: desktopLaunchId,

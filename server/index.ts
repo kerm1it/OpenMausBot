@@ -1,9 +1,11 @@
 // Import first: it reads a Cloud home's secrets off the launcher's pipe before any module can start a process.
 import { BOOT_CLOUD_SECRETS } from "./cloud-secrets-boot.ts";
+import { createModelSelectionChecker } from "./model-selection-check.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, realpathSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
+import { configureCodexRuntime } from "./codex-runtime.ts";
 import { rm as removeDirectory } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { ToolResults, TOOL_RESULT_MAX_CHARS } from "./tool-results.ts";
@@ -106,7 +108,7 @@ import { createDataRoutes } from "./data/routes.ts";
 import { DataSheetRegistry } from "./data/sheet.ts";
 import { DataFailure } from "./data/types.ts";
 import { TeamComputers, teamComputerOwner, type TeamComputerRecord } from "./team-computers.ts";
-import { isEffortLevel, type CardAnswerer, type ResolvedSender, type SignInRequestCardData, type SteerQueueReason, type WireBot, type WireGroup, type WireTask } from "../shared/wire.ts";
+import { type CardAnswerer, type ResolvedSender, type SignInRequestCardData, type SteerQueueReason, type WireBot, type WireGroup, type WireTask } from "../shared/wire.ts";
 import { isPersistentQuestionCard, shouldSettleRequestCard } from "../shared/ask-question.ts";
 import { parseToolScope } from "../shared/tool-scope.ts";
 import type { TeamComputersPayload } from "../shared/team-computer.ts";
@@ -201,7 +203,6 @@ import { HOSTED_CONTRACT_HEADER, HOSTED_CONTRACT_METADATA, HOSTED_CONTRACT_VERSI
 import { cliProbeEnvironment, testCliBinary } from "./cli-probe.ts";
 import { buildMentionNotification, buildNotification, buildSpendNotification, type Notification } from "./notify.ts";
 import {
-  isModelVariant,
   TurnNotStartedError, TurnAuthenticationRefusedError, TurnUsageLimitRefusedError,
   type ModelSelection,
   type RequestOutcome,
@@ -576,6 +577,9 @@ import { PASS, ROUTES, dispatchRoutes } from "./routes/table.ts"; import { apply
 import { createHostedSlackRoutes } from "./routes/hosted-slack.ts";
 import { createBotPresetRoutes } from "./routes/bot-presets.ts";
 import { createBotMemoryRoutes } from "./routes/bot-memory.ts";
+import { pluginLibrary } from "./plugins.ts";
+import { createPluginRoutes, createInternalPluginRoutes } from "./routes/plugins.ts";
+import { createPluginService } from "./plugin-service.ts";
 import { createBotCreateRoutes } from "./routes/bots-create.ts";
 import { createBotSettingsRoutes } from "./routes/bot-settings.ts";
 import { createBotPatchRoutes } from "./routes/bot-patch.ts";
@@ -639,6 +643,8 @@ const STATIC_DIR = process.env.OMB_STATIC_DIR || null;
 ensureDirs();
 // Acquire before any durable identity, sessions, config or Store state is loaded.
 const dataDirLease = acquireDataDirLeaseForProcess(DATA_DIR);
+configureCodexRuntime(process.env);
+
 let dataDirLeaseReleaseAttempted = false;
 function releaseDataDirLeaseAtExit(): void {
   if (dataDirLeaseReleaseAttempted) return;
@@ -2737,79 +2743,11 @@ function retryComputerEngineMove(): Promise<void> {
   return computerEngineMoveRunning;
 }
 
-function checkedModelSelection(
-  raw: unknown,
-  current?: { selection: ModelSelection; busy: boolean },
-  requireAvailableModel = false,
-): { ok: true; selection: ModelSelection } | { ok: false; status: number; error: string } {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return { ok: false, status: 400, error: "modelSelection must be an object" };
-  }
-  const value = raw as { instanceId?: unknown; model?: unknown; effort?: unknown; variant?: unknown };
-  if (typeof value.instanceId !== "string" || !value.instanceId.trim()) {
-    return { ok: false, status: 400, error: "modelSelection.instanceId is required" };
-  }
-  if (typeof value.model !== "string" || !value.model.trim()) {
-    return { ok: false, status: 400, error: "modelSelection.model is required" };
-  }
-  const selection: ModelSelection = {
-    instanceId: value.instanceId.trim(),
-    model: value.model.trim(),
-  };
-  if (hostedModels && !hostedModels.allows(selection)) return { ok: false, status: 400, error: hostedModels.error() };
-  if (value.effort !== undefined) {
-    if (!isEffortLevel(value.effort)) {
-      return { ok: false, status: 400, error: `effort "${String(value.effort)}" is not recognized` };
-    }
-    selection.effort = value.effort;
-  }
-  if (value.variant !== undefined) {
-    if (!isModelVariant(value.variant)) {
-      return { ok: false, status: 400, error: "variant must be a non-empty model variant ID" };
-    }
-    if (value.effort !== undefined) {
-      return { ok: false, status: 400, error: "choose either a model variant or an effort level" };
-    }
-    selection.variant = value.variant;
-  }
-  const changed = current && (
-    selection.instanceId !== current.selection.instanceId ||
-    selection.model !== current.selection.model ||
-    selection.effort !== current.selection.effort ||
-    selection.variant !== current.selection.variant
-  );
-  if (current?.busy && changed) {
-    return { ok: false, status: 409, error: "the bot is working — stop it before changing models" };
-  }
-  const target = registry.get(selection.instanceId);
-  if (providerInstancesChanging.has(selection.instanceId)) {
-    return { ok: false, status: 409, error: "this provider account is being updated — try again shortly" };
-  }
-    // Free-form model ids: custom engines accept ids outside their catalog, and some drivers learn the catalog only at turn start.
-  if (requireAvailableModel) {
-    if (!target) {
-      return { ok: false, status: 400, error: `model instance "${selection.instanceId}" is unavailable` };
-    }
-    const offered =
-      selection.model === target.models.default ||
-      target.models.options.some((option) => option.id === selection.model);
-    if (!offered) {
-      return {
-        ok: false,
-        status: 400,
-        error: `model "${selection.model}" is not offered by instance "${selection.instanceId}"`,
-      };
-    }
-  }
-  const allowed: readonly string[] = target?.adapter.capabilities.effortLevels ?? [];
-  if (target && selection.effort !== undefined && !allowed.includes(selection.effort)) {
-    return { ok: false, status: 400, error: `effort "${selection.effort}" is not offered by this bot's engine` };
-  }
-  if (target && selection.variant !== undefined && !target.adapter.capabilities.modelVariants) {
-    return { ok: false, status: 400, error: "model variants are not offered by this bot's engine" };
-  }
-  return { ok: true, selection };
-}
+const checkedModelSelection = createModelSelectionChecker({
+  get: id => registry.get(id),
+  changing: id => providerInstancesChanging.has(id),
+  refusal: selection => hostedModels && !hostedModels.allows(selection) ? hostedModels.error() : undefined,
+});
 
 function engineSwitchNeedsAsk(mode: ApprovalMode, from: ModelSelection, to: ModelSelection): boolean {
   return modelSwitchNeedsAsk(mode, registry.cliTarget(from.instanceId)?.driverKind, registry.cliTarget(to.instanceId)?.driverKind);
@@ -5477,6 +5415,7 @@ bus.subscribe((event: RuntimeEvent) => {
   if (shouldIgnoreProviderEvent(event)) return;
   if (event.type === "turn.completed" || event.type === "session.exited") {
     runningTurnEngines.delete(event.threadId);
+    runningTurnPlugins.delete(event.threadId);
     const rows = endMemoryTurn(event.threadId);
     if (rows.length && (store.botByThread(event.threadId) || store.groupByThread(event.threadId))) {
       memoryRowsByThread.set(event.threadId, rows);
@@ -6514,6 +6453,7 @@ function continueComputerSelection(threadId: string, generation: string | undefi
 
 /** An interrupt or steer must reach the engine actually running, whatever the bot's settings say now. */
 const runningTurnEngines = new Map<string, NonNullable<ReturnType<typeof registry.get>>>();
+const runningTurnPlugins = new Map<string, string[]>();
 function runningTurnInstance(bot: BotRecord | null | undefined, threadId: string): ReturnType<typeof registry.get> {
   return runningTurnEngines.get(threadId) ?? (bot ? registry.get(bot.modelSelection.instanceId) : null);
 }
@@ -8066,6 +8006,7 @@ async function startTurn(
   const policyRefusal = policyModelRefusal(instance);
   if (policyRefusal) throw Object.assign(new Error(policyRefusal), { status: 409, code: "managed_policy" });
   const toolScope = toolScopeForTurn(bot.id);
+  pluginLibrary.resolve(bot.plugins, instance.driverKind);
   guestDrivenTurns.delete(threadId);
   const guestConfined = cloudGuestDriven(threadId) || cloudGuestDrivenHandoff(opts?.coordination?.id);
   if (guestConfined && instance.adapter.capabilities.guestTurns !== "confined") {
@@ -8857,6 +8798,9 @@ async function startTurn(
       const startupRecovery = cfg.automaticRecovery?.enabled === true && (opts?.automaticRecoveryIndex ?? 0) < ((liveBot ?? bot).fallback?.length || (cfg.automaticRecovery.backup ? 1 : 0));
       const limitedUntil = startupRecovery ? limitClock.blockedUntil(instanceId) : null;
       if (limitedUntil) throw new TurnUsageLimitRefusedError(`limit-${randomUUID()}`, `${engineName(instanceId)} is at its usage limit.`, limitedUntil);
+      const pluginSnapshot = { root: pluginLibrary.root, installed: pluginLibrary.list() };
+      const nativePlugins = pluginLibrary.resolve((liveBot ?? bot).plugins, instance.driverKind, pluginSnapshot.installed);
+      runningTurnPlugins.set(threadId, nativePlugins.map(plugin => plugin.id));
       const dispatch = await guardTurnDispatch(shareNote.after(instance.adapter.sendTurn({
         threadId,
         botId: bot.id,
@@ -8866,6 +8810,8 @@ async function startTurn(
         images: dispatchContext.images,
         approvalMode: approvalModeForTurn(bot, commsDepth > 0, threadId),
         toolScope,
+        plugins: nativePlugins,
+        pluginLibrary: pluginSnapshot,
         ...(guestConfined ? { guestConfined: true, confinedWhy: confinedWhy(threadId) } : {}),
         model,
         effort,
@@ -8945,6 +8891,7 @@ async function startTurn(
       releaseTurnResources(resourceOwner);
       if (ownsLatestGeneration) {
         runningTurnEngines.delete(threadId);
+        runningTurnPlugins.delete(threadId);
         endMemoryTurn(threadId);
         clearTurnDigestState(threadId);
         releaseLocalVmThread(threadId);
@@ -10779,6 +10726,9 @@ async function runClaimedGroupMemberTurn(
         tool: { name: roomResetNote(readyBot.name, roomReset), ok: true },
       });
     }
+    const pluginSnapshot = { root: pluginLibrary.root, installed: pluginLibrary.list() };
+    const nativePlugins = pluginLibrary.resolve(readyBot.plugins, instance.driverKind, pluginSnapshot.installed);
+    runningTurnPlugins.set(threadId, nativePlugins.map(plugin => plugin.id));
     if (roomReset || displaced) broadcast({ kind: "group", group: publicGroupState(store.group(groupId) ?? group) });
     const roomShareNote = skillsHost.shareNote(bot, threadId, Boolean(workspace));
     const clock = turnClockLine(Date.now(), hostTimeZone());
@@ -10786,7 +10736,7 @@ async function runClaimedGroupMemberTurn(
     const roomSession = roomSessions.dispatch({
       threadId, botId: readyBot.id, claimId: internalGeneration, instance, guestConfined: roomGuestConfined, reset: Boolean(roomReset), hooks: Boolean(integrations.hooks),
       context: () => ({ ...roomMemberContexts.forThread(threadId)?.[readyBot.id], compactAt: nativeCompactTokens(instance) }),
-      config: [roomSystem.stable, cwd, readyBot.modelSelection, turnApprovalMode, roomToolScope, roomUserMcp, integrations],
+      config: [roomSystem.stable, cwd, readyBot.modelSelection, turnApprovalMode, roomToolScope, roomUserMcp, integrations, nativePlugins],
       window: roomWindow, tail: roomTail, wrap: (body) => withTurnClock(clock, withRecalled(roomRecalled, body + roomShareNote.text)),
     });
     guardTurnDispatch(roomShareNote.after(instance.adapter.sendTurn({
@@ -10798,6 +10748,8 @@ async function runClaimedGroupMemberTurn(
         images: turnImages,
         approvalMode: turnApprovalMode,
         toolScope: roomToolScope,
+        plugins: nativePlugins,
+        pluginLibrary: pluginSnapshot,
         ...(roomGuestConfined ? { guestConfined: true, confinedWhy: confinedWhy(threadId) } : {}),
         system: roomSystem.text,
         systemStable: roomSystem.stable,
@@ -12897,6 +12849,7 @@ async function reloadProviders(before: Record<string, unknown>) {
       closeOpenApprovals(threadId);
       directTurnBots.delete(threadId);
       runningTurnEngines.delete(threadId);
+      runningTurnPlugins.delete(threadId);
       routines?.failThread(threadId, "Provider settings changed while this thread was running");
       if (store.taskByThread(botId, threadId)) {
         store.appendMessage(threadId, {
@@ -12915,6 +12868,7 @@ async function reloadProviders(before: Record<string, unknown>) {
       closeOpenApprovals(threadId);
       if (groupSpeakers.get(threadId) !== speaker) continue;
       runningTurnEngines.delete(threadId);
+      runningTurnPlugins.delete(threadId);
       groupSpeakers.delete(threadId);
       const group = store.groupByThread(threadId);
       if (group) store.patchGroup(group.id, { busyBotId: activeGroupSpeaker(group.id)?.botId ?? null });
@@ -13013,6 +12967,14 @@ ROUTES.push(createThreadRoutes({
   pageSize, messagePage, messageWindow, publicBotQueuedMessages, publicGroupState, wireBot,
   botComputerControlSnapshot, messageFileRootsForThread, viewerFor, visibleTo, coordinator, groupThreadIsWorking, memberDefaultBot: CLOUD_TEAM ? (email) => ensureDefaultBot(store, { dataDir: DATA_DIR, person: email, team: CLOUD_TEAM.name }) : undefined,
 }));
+const plugins = createPluginService({
+  store,
+  inUse: id => [...runningTurnPlugins.values()].some(ids => ids.includes(id)),
+  getDefaults: () => cfg.newBotDefaults,
+  saveDefaults: defaults => { saveConfig({ newBotDefaults: defaults }); cfg.newBotDefaults = defaults; },
+});
+ROUTES.push(createPluginRoutes(plugins));
+const internalPluginRoutes = createInternalPluginRoutes(plugins);
 ROUTES.push(createBotCreateRoutes({
   store, cfg, presetStore, orgInstallStatuses,
   hostedWorkspace: HOSTED_WORKSPACE, hostedFullAccessRefusal: HOSTED_FULL_ACCESS_REFUSAL, desktopManaged: DESKTOP_MANAGED,
@@ -13887,6 +13849,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
         task: store.taskByThread(internalSender.id, internalCapability.threadId),
         threadId: internalCapability.threadId,
       });
+      if (await internalPluginRoutes({ method, path, res, json, readBody: readInternalBody, requireActive: requireActiveInternalCapability }) !== PASS) return;
       if (path === "/api/internal/computer/select" && (method === "GET" || method === "POST")) {
         const source = computerSelectionTurns.get(internalCapability.threadId);
         const bot = store.projectBotForTask(internalSender.id, internalCapability.threadId);
@@ -15138,6 +15101,7 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
                 title: role,
                 description: summary.length > 200 ? `${summary.slice(0, 199).trimEnd()}…` : summary,
                 soul: instructions,
+                ...(body.plugins !== undefined ? { plugins: pluginLibrary.selection(body.plugins) } : {}),
                 modelSelection: selection,
                 ...(cwd !== undefined ? { cwd } : {}),
               },

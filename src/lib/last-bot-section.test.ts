@@ -30,12 +30,12 @@ describe("last bot section", () => {
     expect(readLastBotSection()).toBeNull();
   });
 
-  it("rememberBotSection round-trips through storage", () => {
+  it.each(["model", "plugins"] as const)("rememberBotSection round-trips %s through storage", section => {
     const store = surface();
     vi.stubGlobal("localStorage", store);
-    rememberBotSection("model");
-    expect(store.stored.get(LAST_BOT_SECTION_KEY)).toBe("model");
-    expect(readLastBotSection()).toBe("model");
+    rememberBotSection(section);
+    expect(store.stored.get(LAST_BOT_SECTION_KEY)).toBe(section);
+    expect(readLastBotSection()).toBe(section);
   });
 
   it("a throwing storage surface never breaks reads or writes", () => {
