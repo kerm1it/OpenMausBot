@@ -3,6 +3,7 @@ import { findCliCandidates } from "../env-path.ts";
 import { codexRuntimeEnvironment } from "../codex-runtime.ts";
 import { installNpmEngine, npmAvailable, serverInstallFor } from "../engine-install.ts";
 import { withEngineMemory } from "../engine-memory.ts";
+import { withEngineHomes } from "../engine-homes/engine-homes.ts";
 export { engineMemory } from "../engine-memory.ts";
 import type {
   AnyProviderDriver,
@@ -127,13 +128,13 @@ export class ProviderRegistry {
       // The RAW config: decodeConfig fills in the driver default, which would flag every instance as overridden.
       const rawCli = cliOfRaw(entry.config);
       if (rawCli) this.cliByInstance.set(instanceId, rawCli);
-      const live = withEngineMemory(await driver.create({
+      const live = withEngineHomes(withEngineMemory(await driver.create({
         instanceId,
         displayName: entry.displayName ?? driver.metadata.displayName,
         environment: entry.driver === "codex" ? codexRuntimeEnvironment(entry.environment ?? {}) : entry.environment ?? {},
         enabled: entry.enabled ?? true,
         config,
-      }));
+      })));
       this.shareSnapshot(live);
       return { instanceId, live: decorate ? decorate(live) : live };
     } catch (e) {

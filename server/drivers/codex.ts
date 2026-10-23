@@ -802,7 +802,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         if (!releaseSlot) return;
         const child = spawnHoldingSlot(releaseSlot, () => spawnCli(...codexLaunch(config.cli, appServerArgs), {
           cwd: turn.cwd ?? homedir(),
-          env,
+          env, box: { ro: turn.pluginLibrary ? [turn.pluginLibrary.root] : [] },
           stdio: ["pipe", "pipe", "pipe"],
         }, "bot"));
 

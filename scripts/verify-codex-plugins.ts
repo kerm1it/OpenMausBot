@@ -4,7 +4,7 @@ import { responseStream } from "./testing/native-plugin-protocol.ts";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { ProviderInstance } from "../server/contracts.ts";
@@ -12,6 +12,7 @@ import type { InstalledPlugin } from "../shared/plugins.ts";
 
 const cli = process.env.OMB_VERIFY_CODEX_CLI ?? execFileSync("/usr/bin/which", ["codex"], { encoding: "utf8" }).trim();
 const expectUnsupported = process.argv.includes("--expect-unsupported");
+const teamHomes = process.argv.includes("--team-homes");
 const fixture = mkdtempSync(join(tmpdir(), "omb-codex-shared-home-"));
 const home = join(fixture, "home"), personalHome = join(home, ".codex"), cwd = join(fixture, "workspace");
 const nativeHome = join(fixture, "data", "providers", "codex");
@@ -23,12 +24,15 @@ mkdirSync(join(process.env.OMB_DATA_DIR, "native"), { recursive: true });
 process.env.HOME = home;
 process.env.USERPROFILE = home;
 delete process.env.CODEX_HOME; // Runtime, not the fixture, must choose its own native home.
-const evidenceDir = resolve(`.omb-scratch/verify-evidence/codex-shared-home${expectUnsupported ? "-unsupported" : ""}`);
+const evidenceDir = resolve(`.omb-scratch/verify-evidence/codex-shared-home${teamHomes ? "-team-homes" : ""}${expectUnsupported ? "-unsupported" : ""}`);
 mkdirSync(evidenceDir, { recursive: true });
 const version = execFileSync(cli, ["--version"], { encoding: "utf8" }).trim();
 const { pluginLibrary } = await import("../server/plugins.ts");
 const { CodexDriver } = await import("../server/drivers/codex.ts");
 const { ProviderRegistry } = await import("../server/harness/registry.ts");
+const { engineHomes } = await import("../server/engine-homes/engine-homes.ts");
+if (teamHomes) engineHomes.start({ dataDir: process.env.OMB_DATA_DIR!, serverHome: home,
+  env: { HOME: home, CODEX_HOME: nativeHome }, audienceOf: id => id === "beta" ? "member:beta" : "member:alpha", threads: () => [] });
 const registry = new ProviderRegistry([CodexDriver]);
 const { recordEvents } = await import("../server/testing/events.ts");
 const { redactSecretsInText } = await import("../server/redact.ts");
@@ -154,10 +158,21 @@ try {
     assert.equal(existsSync(join(nativeHome, "auth.json")), false);
     assert.equal(readFileSync(join(personalHome, "config.toml"), "utf8"), personalConfig);
     assert.equal(existsSync(join(personalHome, "plugins")), false);
+    if (teamHomes) {
+      const homes = readdirSync(join(process.env.OMB_DATA_DIR!, "native")).flatMap(name =>
+        readFileSync(join(process.env.OMB_DATA_DIR!, "native", name), "utf8").trim().split("\n").flatMap(line => {
+          const home = JSON.parse(line).msg?.result?.codexHome;
+          return typeof home === "string" ? [realpathSync(home)] : [];
+        }));
+      assert.equal(new Set(homes).size, 2);
+      assert.ok(homes.every(home => home.includes("engine-homes") && home !== realpathSync(nativeHome)));
+      receipts.push({ audienceCodexHomes: [...new Set(homes)] });
+    }
   }
   recorder.stop();
 } finally {
   await registry.disposeAll();
+  engineHomes.stop();
   await sources.close();
   await new Promise<void>(resolve => api.close(() => resolve()));
   for (const label of ["alpha", "alpha-again", "beta", "none", "resumed"]) {

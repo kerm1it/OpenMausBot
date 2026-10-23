@@ -5,6 +5,7 @@ import { codexHome } from "./codex-identity.ts";
 import type { InstalledPlugin, PluginLibrarySnapshot } from "../../shared/plugins.ts";
 import { redactSecretsInText } from "../redact.ts";
 import { writeFileAtomic, writeFileAtomicIfChanged } from "../atomic.ts";
+import { engineHomes } from "../engine-homes/engine-homes.ts";
 
 const queues = new Map<string, Promise<unknown>>();
 
@@ -12,6 +13,15 @@ export type CodexPluginLaunch = { args: string[]; expected: Record<string, boole
 
 /** Install once in the provider's existing native home; selection is process-local. */
 export async function prepareCodexPlugins(cli: string, env: NodeJS.ProcessEnv, selected: InstalledPlugin[], library?: PluginLibrarySnapshot): Promise<CodexPluginLaunch> {
+  const launch = await synchronizeCodexPlugins(cli, env, selected, library);
+  const homed = library ? engineHomes.forSpawn(env) : null;
+  if (homed?.env.CODEX_HOME && homed.env.CODEX_HOME !== env.CODEX_HOME) {
+    return synchronizeCodexPlugins(cli, homed.env, selected, library);
+  }
+  return launch;
+}
+
+async function synchronizeCodexPlugins(cli: string, env: NodeJS.ProcessEnv, selected: InstalledPlugin[], library?: PluginLibrarySnapshot): Promise<CodexPluginLaunch> {
   if (!library) {
     if (selected.length) throw new Error("Codex plugins require an application library snapshot.");
     return { args: [], expected: {} };

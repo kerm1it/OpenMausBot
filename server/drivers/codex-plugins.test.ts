@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as procs from "../procs.ts";
 import { assertCodexPluginSelection, prepareCodexPlugins } from "./codex-plugins.ts";
 import type { InstalledPlugin } from "../../shared/plugins.ts";
+import { engineHomes } from "../engine-homes/engine-homes.ts";
 
 
 describe("Codex native plugins in a shared home", () => {
@@ -18,7 +19,43 @@ describe("Codex native plugins in a shared home", () => {
       queueMicrotask(() => callback(null, "", ""));
     });
   });
-  afterEach(() => { vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }); });
+  afterEach(() => { engineHomes.stop(); vi.restoreAllMocks(); rmSync(root, { recursive: true, force: true }); });
+
+  it("prepares plugins in the same audience home used by Team Cloud native spawns", async () => {
+    const env = { HOME: join(root, "home"), CODEX_HOME: join(root, "data", "providers", "codex") };
+    mkdirSync(env.HOME, { recursive: true });
+    vi.mocked(procs.execCli).mockImplementation((_cli, args, options, callback) => {
+      if (args[1] === "marketplace") {
+        mkdirSync(options.env!.CODEX_HOME!, { recursive: true });
+        writeFileSync(join(options.env!.CODEX_HOME!, "config.toml"), '# native plugin registration\n');
+      }
+      queueMicrotask(() => callback(null, "", ""));
+    });
+    engineHomes.start({ dataDir: join(root, "data"), serverHome: env.HOME,
+      audienceOf: threadId => `member:${threadId}`, threads: () => [], log: () => {} });
+    const homes: string[] = [];
+    for (const id of ["alice", "alice", "bob"]) {
+      await engineHomes.within(id, async () => {
+        const launched = await prepare(env, [installed[0]!]);
+        const spawned = engineHomes.forSpawn(env)!;
+        const scoped = spawned.env;
+        expect(scoped.CODEX_HOME).not.toBe(env.CODEX_HOME);
+        expect(launched.expected["alpha@openmausbot"]).toBe(true);
+        expect(existsSync(join(scoped.CODEX_HOME!, "plugins", "omb-installed.json"))).toBe(true);
+        expect(readFileSync(join(scoped.CODEX_HOME!, "config.toml"), "utf8")).toBe('# native plugin registration\n');
+        expect(spawned.shared.filter(file => file.source.startsWith(env.CODEX_HOME))).toEqual([
+          { source: join(env.CODEX_HOME, "auth.json"), target: join(scoped.CODEX_HOME!, "auth.json") },
+          { source: join(env.CODEX_HOME, "config.toml"), target: join(scoped.CODEX_HOME!, "config.toml") },
+        ]);
+        const calls = vi.mocked(procs.execCli).mock.calls;
+        expect(calls.at(-1)?.[2].env?.CODEX_HOME).toBe(scoped.CODEX_HOME);
+        homes.push(scoped.CODEX_HOME!);
+      });
+    }
+    expect(new Set(homes).size).toBe(2);
+    expect(procs.execCli).toHaveBeenCalledTimes(9);
+    expect(existsSync(join(env.CODEX_HOME, "plugins", "omb-installed.json"))).toBe(true);
+  });
 
   it("shares installation and credentials while concurrent selections stay in launch arguments", async () => {
     const home = join(root, "native"); mkdirSync(home);
