@@ -110,7 +110,7 @@ describe("Settings in Simple mode", () => {
     const placed = SIMPLE_PAGES.flatMap((page) => page.sections);
     expect(new Set(placed).size).toBe(placed.length);
     const hidden = SECTIONS.map((entry) => entry.id).filter((id) => !placed.includes(id));
-    expect(hidden).toEqual(["plugins", "skills", "backups", "workspaces", "experimental"]);
+    expect(hidden).toEqual(["decisionModel", "plugins", "skills", "backups", "workspaces", "experimental"]);
     for (const id of hidden.filter(id => id !== "plugins")) expect(SIMPLE_HIDDEN_SECTIONS).toContain(id);
   });
 
@@ -122,14 +122,14 @@ describe("Settings in Simple mode", () => {
     expect(blocks(html)).toEqual(["general"]);
   });
 
-  it("stacks Model providers, API keys and Decision model on AI, each under its heading", () => {
+  it("stacks Model providers and API keys on AI, each under its heading; Decision and extraction is Advanced only", () => {
     fixture.section = "engines";
     const html = render();
     expect(currentPage(html)).toBe("ai");
-    expect(blocks(html)).toEqual(["engines", "connections", "decisionModel"]);
+    expect(blocks(html)).toEqual(["engines", "connections"]);
     const headings = [...html.matchAll(/<h3[^>]*>([^<]+)<\/h3>/g)].map((match) => match[1]);
-    expect(headings).toEqual(["Model providers", "API keys", "Decision model"]);
-    expect(markers(html).filter((name) => name === "engines" || name === "decisionModel")).toEqual(["engines", "decisionModel"]);
+    expect(headings).toEqual(["Model providers", "API keys"]);
+    expect(markers(html).filter((name) => name === "engines" || name === "decisionModel")).toEqual(["engines"]);
     expect(html).toContain("More providers for OpenCode bots");
   });
 
@@ -188,7 +188,6 @@ describe("Settings in Simple mode", () => {
     ["appearance", "appearance"],
     ["engines", "ai"],
     ["connections", "ai"],
-    ["decisionModel", "ai"],
     ["companion", "computers"],
     ["remote", "computers"],
     ["desktopWorkspaces", "computers"],
@@ -206,6 +205,8 @@ describe("Settings in Simple mode", () => {
   it.each<[AppSettingsSection, string]>([
     ["backups", "backups"],
     ["experimental", "skillAuthoring"],
+    // The add-a-key suggestion's Add key opens it straight away.
+    ["decisionModel", "decisionModel"],
   ])("opens a hidden page (%s) for as long as it is the open one", (section, content) => {
     fixture.section = section;
     const html = render();

@@ -15,6 +15,7 @@ const OLIVE = { email: "olive@acme.test", role: "owner" as const };
 const ADA = { email: "ada@acme.test", role: "admin" as const };
 const BOB = { email: "bob@acme.test", role: "member" as const };
 // Every turn waits for the release file: present, it answers at once; removed, the turn holds while a card is asked.
+// The files live in the fixture folder, not the engine's HOME: on a team each audience's engine gets a home of its own.
 const ENGINE = `process.env.FAKE_CLAUDE_DUMP = process.env.FAKE_CLAUDE_FIXTURE_DIR + "/dump.json";
 process.env.FAKE_CLAUDE_TEXT_DUMP = process.env.FAKE_CLAUDE_FIXTURE_DIR + "/text-dump.json";
 process.env.FAKE_CLAUDE_MODE = "hang";
