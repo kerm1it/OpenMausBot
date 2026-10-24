@@ -13,6 +13,7 @@ import {
 } from "@/lib/export-transcript";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
+import { openBotTemplateExport } from "@/lib/extension-events";
 import { localizedTaskTitle } from "@/lib/task-title";
 import { ShortcutHint } from "./ShortcutHint";
 import { SidebarPopoverMenu, type SidebarMenuItem } from "./SidebarPopoverMenu";
@@ -82,6 +83,12 @@ function useChatMoreItems(profile: Bot): { items: SidebarMenuItem[]; on: boolean
       disabled: !hasMessages,
       onSelect: () => downloadMarkdownTranscript(slugifyTranscriptFilename(bot.name), transcript()),
     },
+    ...(remoteClient ? [] : [{
+      key: "export-bot-template",
+      label: t("extension.exportTitle"),
+      icon: <Copy size={16} />,
+      onSelect: () => openBotTemplateExport(profile.id),
+    } satisfies SidebarMenuItem]),
     ...(usage ? [{
       key: "usage",
       label: t("chat.usage.menu"),
