@@ -1,5 +1,10 @@
 import { createRequire } from "node:module";
-import { describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { createWindowStatePersistence } from "./window-state-main.mjs";
 
 const require = createRequire(import.meta.url);
 const { normalizeUnreadCount, parseWindowState, resolveWindowState } = require("./window-state.cjs");
@@ -8,6 +13,40 @@ const primary = { x: 0, y: 0, width: 1920, height: 1080 };
 const left = { x: -1600, y: 0, width: 1600, height: 900 };
 
 describe("desktop window state", () => {
+  it("persists window events and flushes pending bounds on close", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "omb-window-state-"));
+    const file = path.join(dir, "profile", "window-state.json");
+    const log = vi.fn();
+    const persistence = createWindowStatePersistence({ file: () => file, log });
+    const win = Object.assign(new EventEmitter(), {
+      isDestroyed: () => false,
+      getNormalBounds: () => ({ x: 40, y: 50, width: 1200, height: 800 }),
+      isMaximized: () => false,
+      webContents: { send: vi.fn() },
+    });
+    vi.useFakeTimers();
+    try {
+      expect(persistence.read()).toBeNull();
+      persistence.install(win);
+      win.emit("resize");
+      vi.advanceTimersByTime(250);
+      expect(persistence.read()).toEqual({
+        bounds: { x: 40, y: 50, width: 1200, height: 800 }, maximized: false,
+      });
+      win.getNormalBounds = () => ({ x: 60, y: 70, width: 1300, height: 900 });
+      win.emit("move");
+      win.emit("close");
+      expect(persistence.read()).toEqual({
+        bounds: { x: 60, y: 70, width: 1300, height: 900 }, maximized: false,
+      });
+      expect(vi.getTimerCount()).toBe(0);
+      expect(log).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects corrupt and incomplete saved state", () => {
     expect(parseWindowState("not json")).toBeNull();
     expect(parseWindowState({ bounds: { x: 1, y: 2, width: 0, height: 700 } })).toBeNull();

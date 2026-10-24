@@ -116,7 +116,7 @@ describe("native provider onboarding", () => {
     expect(await runSetup(options, ui.io, deps)).toBe(true);
     expect(deps.runCli.mock.calls).toEqual([
       ["npm", ["install", "-g", "@openai/codex"]],
-      ["codex", ["login", "--device-auth"], undefined],
+      ["codex", ["login", "--device-auth"], expect.objectContaining({ CODEX_HOME: join(DATA_DIR, "providers", "codex") })],
     ]);
     expect(ui.io.confirm.mock.invocationCallOrder[0]).toBeLessThan(deps.runCli.mock.invocationCallOrder[0]!);
     expect(deps.inspect).toHaveBeenCalledTimes(3);

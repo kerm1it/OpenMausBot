@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { botPluginsSchema } from "../shared/plugins.ts";
 import { profilePatchSchema, fitsOnOneLine } from "./bot-profile.ts";
-import { EFFORT_LEVELS } from "../shared/wire.ts";
+import { EFFORT_LEVELS, MAUS_COLOR_NAMES } from "../shared/wire.ts";
 import { isModelVariant } from "./contracts.ts";
 import { normalizeCronSchedule } from "../shared/routine-schedule.ts";
 import { parseToolScope, type ToolScope } from "../shared/tool-scope.ts";
@@ -18,12 +19,11 @@ export const botDefaultModelSchema = z.object({
 }).strict().refine(value => value.effort === undefined || value.variant === undefined,
   "choose either a model variant or an effort level");
 
-// Preferences only. Consent flags, live grants, bot IDs and execution state
-// cannot be stored here and therefore cannot be replayed as permission grants.
+// Preferences only: consent flags, live grants, bot IDs and execution state can never be replayed as permission grants.
 export const botDefaultsProfileSchema = profilePatchSchema.extend({
   name: z.string().max(100).refine(fitsOnOneLine, "name must fit on one line").optional(),
   section: z.string().trim().max(60).optional(),
-  color: z.enum(["green", "blue", "red", "orange", "purple", "cyan", "pink", "yellow", "teal", "coral"]).optional(),
+  color: z.enum(MAUS_COLOR_NAMES).optional(),
   mascotExpression: z.string().max(60).nullable().optional(),
   modelSelection: botDefaultModelSchema.optional(),
   computer: z.enum(["cloud", "vm", "local", "browser", "off"]).nullable().optional(),
@@ -40,9 +40,12 @@ export const botDefaultsProfileSchema = profilePatchSchema.extend({
   browser: z.boolean().optional(),
   browserProfile: z.string().max(100).nullable().optional(),
   mcpServers: strings(100, 100).nullable().optional(),
+  plugins: botPluginsSchema.optional(),
   toolScope: z.custom<ToolScope>((value) => value !== undefined && parseToolScope(value).ok, "Invalid tool selection")
     .transform((value) => { const parsed = parseToolScope(value); return parsed.ok ? parsed.scope! : value; }).nullable().optional(),
   parkDirectMessages: z.boolean().optional(),
+  /** At creation, so a copy of a bot kept off the helper model is off it from its first moment. */
+  helperModel: z.boolean().optional(),
 }).strict();
 
 const scheduleSchema = z.discriminatedUnion("type", [
@@ -105,8 +108,6 @@ export type BotDefaultsProfile = NewBotDefaults["profile"];
 export type BotRoutineTemplate = NewBotDefaults["routines"][number];
 export type BotSkillTemplate = NewBotDefaults["skills"][number];
 
-/** Explicit values (including empty values) win. A resolved renderer draft
- * opts out so deleted fields and template extras are not restored on POST. */
 export function resolveBotCreationDefaults(saved: NewBotDefaults | undefined, body: Record<string, unknown>) {
   if (body.useDefaults !== undefined && typeof body.useDefaults !== "boolean") {
     throw Object.assign(new Error("useDefaults must be true or false"), { status: 400 });
@@ -116,7 +117,7 @@ export function resolveBotCreationDefaults(saved: NewBotDefaults | undefined, bo
   if (!checked.success) throw Object.assign(new Error(checked.error.message), { status: 400 });
   const explicit = checked.data;
   const profile = { ...template.profile, ...explicit };
-  for (const key of ["name", "title", "description", "modelSelection", "section"] as const) {
+  for (const key of ["name", "title", "description", "modelSelection", "section", "plugins"] as const) {
     if (Object.hasOwn(body, key)) Object.assign(profile, { [key]: key === "section" && body[key] === null ? "" : body[key] });
   }
   const resolved = botDefaultsProfileSchema.safeParse(profile);
