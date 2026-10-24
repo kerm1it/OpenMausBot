@@ -225,7 +225,7 @@ name = "oMLX"
 });
 
 describe("CodexDriver catalog", () => {
-  it("loads the config catalog when the instance is created", async () => {
+  it("loads the explicit native home's config catalog when the instance is created", async () => {
     chmodSync(FAKE_CLI, 0o755);
     const home = scratchHome({
       "config.toml": `
@@ -239,7 +239,7 @@ name = "oMLX"
     const instance = await CodexDriver.create({
       instanceId: "codex-catalog",
       displayName: "Codex",
-      environment: { HOME: home, USERPROFILE: home },
+      environment: { HOME: home, USERPROFILE: home, CODEX_HOME: join(home, ".codex") },
       enabled: true,
       config: { ...CodexDriver.defaultConfig(), cli: FAKE_CLI },
     });

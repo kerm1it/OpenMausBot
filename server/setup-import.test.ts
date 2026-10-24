@@ -170,6 +170,22 @@ function contentsUnder(root: string): string {
 }
 
 describe("finding what another AI tool already set up on this computer", () => {
+  it("imports from the external Codex home while the application's native home stays separate", () => {
+    const home = fixtureHome(), external = join(home, "external-codex"), application = join(home, "application-codex");
+    put(external, "skills/personal/SKILL.md", skillMd("personal"));
+    put(external, "config.toml", '[mcp_servers.personal]\ncommand = "personal-tool"\n');
+    put(application, "skills/application/SKILL.md", skillMd("application"));
+    put(application, "config.toml", '[mcp_servers.application]\ncommand = "application-tool"\n');
+    const { machine, touched } = machineFor(home, process.platform, { CODEX_HOME: application, OMB_CODEX_AUTH_HOME: external });
+    const { host } = hostFor();
+    expect(detectSetup(machine, host)).toEqual({ skills: [{ name: "personal", source: "codex" }], tools: [{ name: "personal", source: "codex" }] });
+    const imported = applySetupImport(machine, host, { skills: true, tools: true });
+    expect(imported.skills?.added).toEqual(["personal"]);
+    expect(imported.tools?.added).toEqual(["personal"]);
+    expect(touched().some(path => path.startsWith(application))).toBe(false);
+    expect(readFileSync(join(external, "config.toml"), "utf8")).toBe('[mcp_servers.personal]\ncommand = "personal-tool"\n');
+  });
+
   it("finds nothing in an empty home", () => {
     const { machine } = machineFor(fixtureHome());
     expect(detectSetup(machine, hostFor().host)).toEqual({ skills: [], tools: [] });

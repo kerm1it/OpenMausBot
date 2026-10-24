@@ -296,6 +296,7 @@ function reloadFixture() {
     },
     runningTurnEngines: new Map([...threads.filter(thread => thread.busy), ...[...rooms].map(([threadId, room]) => ({ threadId, ...room }))]
       .map(thread => [thread.threadId, { instanceId: thread.engine }])),
+    runningTurnPlugins: new Map([...threads.filter(thread => thread.busy).map(thread => thread.threadId), ...rooms.keys()].map(threadId => [threadId, ["proof"]])),
     botForThread: (botId: string) => ({ modelSelection: { instanceId: botId === "eli" ? "compat" : "claude" } }),
     store: {
       bots: [{ id: "eli" }, { id: "mira" }],
@@ -348,6 +349,7 @@ it("saving the same provider settings again interrupts no turn and replaces no e
   expect(f.settled).toEqual([]);
   expect(f.revoked).toEqual([]);
   expect(f.held()).toEqual(before);
+  expect([...f.context.runningTurnPlugins.keys()]).toEqual(["eli-work", "mira-work", "room-compat", "room-claude"]);
   expect(f.threads.filter(thread => thread.busy).map(thread => thread.threadId)).toEqual(["eli-work", "mira-work"]);
 });
 
@@ -356,6 +358,7 @@ it("a changed key replaces only its engine and tells only that engine's requeste
   await f.save({ ...f.configs(), compat: { driver: "openai-compat", environment: { OPENAI_COMPAT_API_KEY: "k2" } } });
   expect(f.log.filter(line => line.includes("claude") || line.includes("mira"))).toEqual([]);
   expect(f.revoked).toEqual(["eli-work", "room-compat"]);
+  expect([...f.context.runningTurnPlugins.keys()]).toEqual(["mira-work", "room-claude"]);
   expect(f.held()).toEqual({
     "eli-work": [], "eli-idle": [], "mira-work": ["mira agents"], "mira-idle": ["mira agents"],
     "room-compat": ["mira agents"], "room-claude": ["mira agents"],

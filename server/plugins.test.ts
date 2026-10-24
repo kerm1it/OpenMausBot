@@ -149,12 +149,13 @@ describe("shared native plugin library", () => {
     await expect(library.install("https://example.test/interrupted.zip")).rejects.toThrow("connection lost");
     expect(readdirSync(library.root)).toEqual([]);
   });
-  it("preserves executable ZIP scripts and rejects ZIP links", async () => {
+  it("preserves ZIP scripts and Unix executable bits, and rejects ZIP links", async () => {
     const archive = join(root, "executable.zip");
     const manifest = strToU8(JSON.stringify({ name: "executable", version: "1.0.0" }));
     writeFileSync(archive, zipSync({ ".claude-plugin/plugin.json": manifest, "scripts/proof.sh": [strToU8("#!/bin/sh\nexit 0\n"), { os: 3, attrs: 0o100755 << 16 }] }));
     const plugin = await installSource(archive);
-    expect(statSync(join(plugin.path, "scripts/proof.sh")).mode & 0o111).toBe(0o111);
+    expect(readFileSync(join(plugin.path, "scripts/proof.sh"), "utf8")).toBe("#!/bin/sh\nexit 0\n");
+    if (process.platform !== "win32") expect(statSync(join(plugin.path, "scripts/proof.sh")).mode & 0o111).toBe(0o111);
     writeFileSync(archive, zipSync({ ".claude-plugin/plugin.json": manifest, "link": [strToU8("/outside"), { os: 3, attrs: 0o120777 << 16 }] }));
     await expect(installSource(archive)).rejects.toThrow("links");
     expect(library.list()).toHaveLength(1);

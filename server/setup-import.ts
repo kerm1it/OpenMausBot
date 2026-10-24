@@ -100,7 +100,7 @@ const CLAUDE_JSON_MAX_BYTES = 256 * 1024 * 1024;
 export function setupPaths(machine: Pick<SetupMachine, "home" | "platform" | "env">) {
   const { home, platform, env } = machine;
   const absolute = (value: string | undefined) => (value && isAbsolute(value) ? value : null);
-  const codexHome = absolute(env.CODEX_HOME) ?? join(home, ".codex");
+  const codexHome = absolute(env.OMB_CODEX_AUTH_HOME) ?? absolute(env.CODEX_HOME) ?? join(home, ".codex");
   const desktop = platform === "darwin" ? join(home, "Library", "Application Support", "Claude")
     : platform === "win32" ? join(absolute(env.APPDATA) ?? join(home, "AppData", "Roaming"), "Claude")
       : join(home, ".config", "Claude");
