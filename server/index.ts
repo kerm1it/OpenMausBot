@@ -379,7 +379,7 @@ import {
 } from "./skills.ts";
 import { fetchSkillFromSource } from "./skill-fetch.ts";
 import { ensureTaskWorkspaceWithSkills } from "./skill-task-links.ts";
-import { parseSkillManageReferences, previousSkillVersion, skillCardCopy, skillRequestReferences } from "./skill-request-card.ts";
+import { previousSkillVersion, skillCardCopy, skillRequestReferences } from "./skill-request-card.ts";
 import { skillReferencesSha256 } from "./skill-storage.ts";
 import { createSkillsLibraryHost } from "./host/skills-library.ts";
 import { skillExport } from "./skill-export.ts";
@@ -577,9 +577,14 @@ import { createHostedSlackRoutes } from "./routes/hosted-slack.ts";
 import { createBotPresetRoutes } from "./routes/bot-presets.ts";
 import { createBotMemoryRoutes } from "./routes/bot-memory.ts";
 import { pluginLibrary } from "./plugins.ts";
+import { createInternalSkillsRoutes } from "./routes/internal-skills.ts";
 import { createPluginRoutes, createInternalPluginRoutes } from "./routes/plugins.ts";
 import { createPluginService } from "./plugin-service.ts";
-import { createBotCreateRoutes } from "./routes/bots-create.ts";
+import { createBotCreateRoutes, type BotCreateRouteDeps } from "./routes/bots-create.ts";
+import { createExtensionHost } from "./extension-host.ts";
+import { createExtensionRoutes } from "./routes/extensions.ts";
+import { createImportedBot } from "./extension-create.ts";
+import { exportBotTemplate } from "./extension-export.ts";
 import { createTeamOwnerRoutes } from "./routes/team-owners.ts";
 import { createBotSettingsRoutes } from "./routes/bot-settings.ts";
 import { createBotPatchRoutes } from "./routes/bot-patch.ts";
@@ -2229,7 +2234,10 @@ function releaseTurnResources(owner: TurnOwner | undefined): void {
   if (settlingResourceOwners.get(owner.threadId) === owner.generation) settlingResourceOwners.delete(owner.threadId);
   cloudComputerPower.released(owner);
   turnResources.release(owner);
-  if (turnResourceOwners.get(owner.threadId)?.generation === owner.generation) turnResourceOwners.delete(owner.threadId);
+  if (turnResourceOwners.get(owner.threadId)?.generation === owner.generation) {
+    skillsHost.releaseTurnSkills(owner.threadId);
+    turnResourceOwners.delete(owner.threadId);
+  }
   if (turnComputerResources.get(owner.threadId)?.owner.generation === owner.generation) turnComputerResources.delete(owner.threadId);
   const teamTurn = teamComputerTurns.get(owner.threadId);
   if (teamTurn?.owner.generation === owner.generation) {
@@ -8148,6 +8156,7 @@ async function startTurn(
 
   void (async () => {
     try {
+      skillsHost.beginTurnSkills(bot, threadId);
       const engineRead = registry.engineRead(instance.instanceId);
       if (engineRead) {
         await engineRead;
@@ -8215,7 +8224,7 @@ async function startTurn(
       const plannedConfig = sessionConfig(bot.soul);
       const skillAuthoring = skillAuthoringEnabled(cfg) && agentsMounted;
       const skillCommandText = supportsWorkspaceFiles(instance.driverKind)
-        ? skillsHost.expandSkillCommand(bot, providerText, instance)
+        ? skillsHost.expandSkillCommand(bot, providerText, instance, threadId)
         : providerText;
       const setupText = agentsMounted ? expandSetupTurnText(skillCommandText) : skillCommandText;
       const userTurnText = (opts?.app?.context ?? "") + withReactionNotes(promptWithReply(
@@ -8818,6 +8827,7 @@ async function startTurn(
         integrations,
         ...(integrations.browser && browserIsThePlace(plan) ? { preloadBrowserTools: true } : {}),
         ...settingsTurnFields(cfg, DATA_DIR, managedPolicy.restrictsMcp()),
+        ...(privateWorkspace && cwd !== privateWorkspace ? { taskSkillsDir: privateWorkspace } : {}),
         cwd,
       }, route.quickModel ? { model, own: bot.modelSelection, onFallback: () => store.patchMessage(threadId, userMessage.id, { quickModel: undefined }) } : undefined)), () => !directTurnClaimExists(bot.id, dispatchClaimId, threadId), async () => {
         await instance.adapter.interruptTurn(threadId).catch(() => {});
@@ -9776,7 +9786,7 @@ function undoSkillCard(botId: string, threadId: string, messageId: string): Undo
     stagedId: request.stagedId,
     name: request.name,
     action: request.action,
-    ...(request.previous ? { previous: { skillMd: request.previous.preview, source: request.previous.source, references: request.previous.references ?? [] } } : {}),
+    ...(request.previous ? { previous: { skillMd: request.previous.preview, source: request.previous.source, references: request.previous.references ?? [], directoryRevision: request.previous.directoryRevision } } : {}),
   });
   if ("stale" in undone) return { claimed: true, state: "invalid", error: UNDO_STALE, status: 409, stale: true };
   if ("error" in undone) return { claimed: true, state: "invalid", error: undone.error, status: 409 };
@@ -10141,6 +10151,7 @@ async function runClaimedGroupMemberTurn(
   let roomFailure: string | undefined;
   const reportDispatchError = (message: string) => { roomFailure = message; onDispatchError?.(message); };
   try {
+  skillsHost.beginTurnSkills(bot, threadId);
   assertWithinBudget(cfg, DATA_DIR);
   assertModelVariantSupported(preparedSelection, instance.adapter.capabilities);
   const integrations: NonNullable<Parameters<typeof instance.adapter.sendTurn>[0]["integrations"]> = {};
@@ -10546,9 +10557,9 @@ async function runClaimedGroupMemberTurn(
   const worksInWorkspace = supportsWorkspaceFiles(instance.driverKind);
   const workspace = worksInWorkspace ? ensureWorkspace(bot.id, appLanguage()) : undefined;
   // The room's folder pins at its first dispatch, so a room that already worked somewhere never has its folder moved.
-  const cwd = workspace && cloudGuestOpened(threadId)
-    ? ensureTaskWorkspaceWithSkills(bot.id, threadId, skillsHost.turnImports(bot, threadId, instance))
-    : groupTurnCwd(workspace, () => store.pinGroupCwd(readyGroup.id, threadId));
+  const taskSkillsWorkspace = workspace ? ensureTaskWorkspaceWithSkills(bot.id, threadId, skillsHost.turnImports(bot, threadId, instance)) : undefined;
+  const cwd = taskSkillsWorkspace && cloudGuestOpened(threadId)
+    ? taskSkillsWorkspace : groupTurnCwd(workspace, () => store.pinGroupCwd(readyGroup.id, threadId));
   assertRoomFolder(cwd); if (workspace && bot.memoryEnabled !== false) beginMemoryTurn(teamHost.layer(bot.id, threadId), threadId); if (workspace) botBox.lend(bot.id, threadId, teamHost.layerDirs(bot.id, threadId));
   {
     const drift = checkSoulDrift(bot.id, bot.soul ?? "", bot.soulHash ?? "");
@@ -10745,6 +10756,7 @@ async function runClaimedGroupMemberTurn(
         system: roomSystem.text,
         systemStable: roomSystem.stable,
         systemVolatile: roomSystem.volatile,
+        ...(taskSkillsWorkspace && cwd !== taskSkillsWorkspace ? { taskSkillsDir: taskSkillsWorkspace } : {}),
         cwd,
         integrations,
         ...(integrations.browser && browserIsThePlace(roomPlan) ? { preloadBrowserTools: true } : {}),
@@ -11888,6 +11900,7 @@ function appendSkillRequestCard(args: {
     files: Array<{ path: string; content: string }>;
     sha256: string;
     referencesSha256?: string;
+    directorySha256?: string;
     warnings: string[];
   };
 } & Pick<SkillRequestCardData, "shared">): { requestId: string; summary: string } {
@@ -12013,7 +12026,7 @@ function resolveSkillRequest(args: {
     };
   }
   const previewSha256 = createHash("sha256").update(request.preview).digest("hex");
-  if (previewSha256 !== request.sha256 || skillReferencesSha256(request.references ?? []) !== request.referencesSha256) {
+  if (previewSha256 !== request.sha256 || (!request.directorySha256 && skillReferencesSha256(request.references ?? []) !== request.referencesSha256)) {
     return { claimed: true, status: 422, error: "the skill preview changed after review — deny and recreate it" };
   }
   const staged = getStagedSkillWrite(args.botId, request.stagedId);
@@ -12021,6 +12034,7 @@ function resolveSkillRequest(args: {
     const replayed = applyStagedSkillWrite(args.botId, request.stagedId, {
       expectedSha256: request.sha256,
       expectedReferencesSha256: request.referencesSha256 ?? null,
+      expectedDirectorySha256: request.directorySha256,
     });
     if (
       "error" in replayed ||
@@ -12058,13 +12072,15 @@ function resolveSkillRequest(args: {
     staged.name !== request.name ||
     staged.source !== request.source ||
     staged.sha256 !== request.sha256 ||
-    staged.referencesSha256 !== request.referencesSha256
+    staged.referencesSha256 !== request.referencesSha256 ||
+    staged.directorySha256 !== request.directorySha256
   ) {
     return { claimed: true, status: 422, error: "the staged skill no longer matches this approval card" };
   }
   const applied = applyStagedSkillWrite(args.botId, request.stagedId, {
     expectedSha256: request.sha256,
     expectedReferencesSha256: request.referencesSha256 ?? null,
+      expectedDirectorySha256: request.directorySha256,
     onApplied: () => {
       const patched = store.patchMessage(args.threadId, message.id, {
         card: { ...card, answered: "allow", held: undefined },
@@ -12966,14 +12982,21 @@ const plugins = createPluginService({
 });
 ROUTES.push(createPluginRoutes(plugins));
 const internalPluginRoutes = createInternalPluginRoutes(plugins);
-ROUTES.push(createBotCreateRoutes({
+const internalSkillsRoutes = createInternalSkillsRoutes({ cfg, store, skillsHost, connectorThread, listBotSkills,
+  stagedSkillListing, appliesDirectly, persistence: skillProposalPersistence, apply: applyOwnStagedSkill, appendCard: appendSkillRequestCard });
+const botCreateDeps: BotCreateRouteDeps = {
   store, cfg, presetStore, orgInstallStatuses,
   hostedWorkspace: HOSTED_WORKSPACE, hostedFullAccessRefusal: HOSTED_FULL_ACCESS_REFUSAL, desktopManaged: DESKTOP_MANAGED,
   maxWorkspaceBots: MAX_WORKSPACE_BOTS, cloudOwnerKey: CLOUD_OWNER_KEY,
   hostedModels, cloudRoutineAuthors,
   routines: () => routines,
   storedAvatarExists, defaultSelection, checkedModelSelection, cloudOwnerSession, wireBot, team: CLOUD_TEAM && teamOwners.people ? { name: CLOUD_TEAM.name, people: teamOwners.people } : null,
-}), createTeamOwnerRoutes({ team: CLOUD_TEAM, people: teamOwners.people, store, sees: (auth, botId) => visibleTo(viewerFor(auth)).bot(botId), publicBot,
+};
+const extensionHost = createExtensionHost({ dataDir: DATA_DIR, plugins,
+  createBot: (draft, options, ids, auth) => createImportedBot(botCreateDeps, draft, options, ids, auth) });
+ROUTES.push(createExtensionRoutes({ host: extensionHost,
+  exportBot: (id, options, auth) => exportBotTemplate({ store, plugins, routines: () => routines }, id, options, auth) }));
+ROUTES.push(createBotCreateRoutes(botCreateDeps), createTeamOwnerRoutes({ team: CLOUD_TEAM, people: teamOwners.people, store, sees: (auth, botId) => visibleTo(viewerFor(auth)).bot(botId), publicBot,
   nameOf: (email) => { const name = teamHost.personName(personKey({ id: "", email })); return name === email ? undefined : name; } }));
 ROUTES.push(createBotSettingsRoutes({
   store, cfg, registry, commandAllowlist, commandAllowlistDrivers: COMMAND_ALLOWLIST_DRIVERS,
@@ -14459,91 +14482,8 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           task: store.taskByThread(from.id, threadId)?.title,
         });
       }
-      if (method === "GET" && path === "/api/internal/skills") {
-        if (!skillAuthoringEnabled(cfg)) return json(res, 403, { error: "skill authoring is not enabled in Settings" });
-        if (!internalCapability.skillAuthoring) {
-          return json(res, 403, { error: "skill authoring is not enabled for this turn" });
-        }
-        const from = internalSender;
-        const fromThreadId = internalCapability.threadId;
-        if (!connectorThread(from.id, fromThreadId)) {
-          return json(res, 403, { error: "source conversation does not belong to sender" });
-        }
-        return json(res, 200, {
-          skills: skillsHost.harnessListing(from.id, listBotSkills(from)),
-          staged: listStagedSkillWrites(from.id).map(stagedSkillListing),
-        });
-      }
-      if (method === "POST" && path === "/api/internal/skills/stage") {
-        if (!skillAuthoringEnabled(cfg)) return json(res, 403, { error: "skill authoring is not enabled in Settings" });
-        if (!internalCapability.skillAuthoring) {
-          return json(res, 403, { error: "skill authoring is not enabled for this turn" });
-        }
-        const body = await readInternalBody();
-        const from = internalSender;
-        const fromThreadId = internalCapability.threadId;
-        if (!connectorThread(from.id, fromThreadId)) {
-          return json(res, 403, { error: "source conversation does not belong to sender" });
-        }
-        const direct = appliesDirectly(from.id, fromThreadId);
-        const persistence = skillProposalPersistence(from.id, fromThreadId, !direct);
-        if (!persistence.ok) return json(res, persistence.status, { error: persistence.error });
-        const action = body.action === "create" || body.action === "update" ? body.action : "";
-        if (!action) return json(res, 400, { error: 'action must be "create" or "update"' });
-        const skillMd = typeof body.skill_md === "string" ? body.skill_md : "";
-        if (!skillMd.trim()) {
-          return json(res, 400, { error: 'skill_manage needs skill_md: the full SKILL.md including YAML frontmatter, for example ---\\nname: file-expense\\ndescription: Files an expense in the company portal.\\n---\\n\\n# File expense\\n' });
-        }
-        const source = typeof body.source === "string" ? body.source.trim() : "";
-        if (!source) return json(res, 400, { error: 'source must be a URL, folder, or "conversation"' });
-        const targetName = typeof body.skill_name === "string" ? body.skill_name.trim() : "";
-        if (action === "update" && !targetName) {
-          return json(res, 400, { error: "skill_name is required when action is update" });
-        }
-        const references = parseSkillManageReferences(body.references);
-        if ("error" in references) return json(res, 400, references);
-        if (action === "update" && skillsHost.editable(from.id, targetName)) return references.length ? json(res, 400, { error: "A skill shared through the team library cannot keep reference files yet; put that guidance in SKILL.md." }) : json(res, ...skillsHost.harnessUpdate(from, fromThreadId, targetName, skillMd, body.gist, body.base_revision, direct));
-        const staged = stageSkillWrite(from.id, {
-          action,
-          targetName: targetName || undefined,
-          files: [{ path: "SKILL.md", content: skillMd }, ...references],
-          gist: typeof body.gist === "string" ? body.gist : undefined,
-          source: learnSource(source),
-        });
-        if ("error" in staged) return json(res, 422, { error: staged.error });
-        if (direct) {
-          const applied = applyOwnStagedSkill(from, fromThreadId, staged, direct);
-          if ("error" in applied) return json(res, 422, { state: "failed", error: applied.error });
-          return json(res, 201, { state: "applied", stagedId: staged.id, name: staged.name, action: staged.action,
-            gist: staged.gist, warnings: staged.warnings, ...applied, summary: `Skill ${staged.name} ${staged.action === "create" ? "enabled" : "updated"}.` });
-        }
-        let card: ReturnType<typeof appendSkillRequestCard>;
-        try {
-          card = appendSkillRequestCard({ botId: from.id, threadId: fromThreadId, staged });
-        } catch (error) {
-          rejectStagedSkillWrite(from.id, staged.id);
-          throw error;
-        }
-        appendDecision(DATA_DIR, {
-          threadId: fromThreadId,
-          requestId: card.requestId,
-          botId: from.id,
-          botName: from.name,
-          tool: "stage_skill",
-          summary: card.summary,
-          decision: "card-shown",
-          source: "skill",
-        });
-        return json(res, 201, {
-          state: "pending",
-          stagedId: staged.id,
-          name: staged.name,
-          action: staged.action,
-          gist: staged.gist,
-          warnings: staged.warnings,
-          summary: card.summary,
-        });
-      }
+      if (await internalSkillsRoutes({ method, path, res, json, from: internalSender, capability: internalCapability,
+        readBody: readInternalBody, requireActive: requireActiveInternalCapability }) !== PASS) return;
       const EXTERNAL = internalCapability.generation === EXTERNAL_RUNTIME_GENERATION;
       const coordinateBots = async (call: CoordinateBotsCall): Promise<{ status: number; body: Record<string, unknown> }> => {
         const refuse = (status: number, error: string, more: Record<string, unknown> = {}) => ({ status, body: { error, ...more } });
@@ -16626,6 +16566,7 @@ const gracefulShutdown = createGracefulShutdown({
       companyShutdown = true;
       // Before any provider is torn down, so what the teardown fails stays cut for the next start.
       coordinator.close();
+      extensionHost.close();
       noteTurnsCutByShutdown();
       if (workspaceAccessTimer) clearInterval(workspaceAccessTimer);
       // Invalidate turn bearers before any cleanup reaches an await: child MCP processes and the listener may outlive it.

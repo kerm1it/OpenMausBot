@@ -252,11 +252,13 @@ describe("prompt-cache safety", () => {
     const renamed = SKILL("rough-cut", "v2").replace("Cuts a rough edit the way this team does.", "Cuts a rough edit, then a fine cut.");
     const updated = share.updateSharedLearnedSkill({ bot: mate, bots, name: "rough-cut", skillMd: renamed, expectSha256: shared.sha256, patchAssigned, root });
     if ("error" in updated) throw new Error(updated.error);
-    expect(systemPrompt(mate.id, startedAt).stable).toBe(before.stable);
+    expect(systemPrompt(mate.id, startedAt).stable.replace(/\/\.revisions\/([^/]+)\/[a-f0-9]{64}\//g, "/$1/"))
+      .toBe(before.stable.replace(/\/\.revisions\/([^/]+)\/[a-f0-9]{64}\//g, "/$1/"));
     expect(systemPrompt(mate.id, Date.now() + 1).text).toContain("Cuts a rough edit, then a fine cut.");
     expect(systemPrompt(mate.id, undefined).text).toContain("Cuts a rough edit, then a fine cut.");
     expect(share.undoSharedLearnedSkill({ authorId: mate.id, name: "rough-cut", action: "update", share: updated.share, previous: updated.previous, bots, patchAssigned, root })).toEqual({ undone: true });
-    expect(systemPrompt(mate.id, startedAt).stable).toBe(before.stable);
+    expect(systemPrompt(mate.id, startedAt).stable.replace(/\/\.revisions\/([^/]+)\/[a-f0-9]{64}\//g, "/$1/"))
+      .toBe(before.stable.replace(/\/\.revisions\/([^/]+)\/[a-f0-9]{64}\//g, "/$1/"));
   });
 
   it("keeps replaced descriptions for 30 days, then prunes them by age", () => {

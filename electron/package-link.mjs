@@ -39,3 +39,17 @@ export function packageUrlFromCommandLine(argv) {
   }
   return null;
 }
+import { extensionImportFromLink } from "../shared/extension-link.mjs";
+
+
+export function packageInstallFromDeepLink(value) {
+  return extensionImportFromLink(value) ?? packageUrlFromDeepLink(value);
+}
+
+export function packageInstallFromCommandLine(argv) {
+  for (const value of argv) {
+    const parsed = packageInstallFromDeepLink(value);
+    if (parsed) return parsed;
+  }
+  return null;
+}

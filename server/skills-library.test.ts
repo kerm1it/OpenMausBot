@@ -36,7 +36,7 @@ describe("skills library store", () => {
     expect("error" in listing).toBe(false);
     if ("error" in listing) return;
     expect(listing).toMatchObject({ name: "code-review", enabled: true, editable: false, source: "https://example.com/skills" });
-    expect(existsSync(join(library.skillsLibraryRoot(), "skills", "code-review", "SKILL.md"))).toBe(true);
+    expect(existsSync(library.librarySkillFilePath("code-review"))).toBe(true);
     const index = library.readSkillLibraryIndex();
     expect(index["code-review"]).toMatchObject({ sha256: sha256(SKILL("code-review")), reviewState: "approved" });
     expect(events).toContainEqual({ kind: "install", name: "code-review" });
@@ -87,7 +87,7 @@ describe("skills library store", () => {
 
   it("fails closed on tampered bytes: listing disabled with a warning, reads return null", () => {
     library.installLibrarySkill({ name: "audit", instructions: SKILL("audit"), source: "a", reviewState: "approved" });
-    writeFileSync(join(library.skillsLibraryRoot(), "skills", "audit", "SKILL.md"), SKILL("audit", "Tampered."), { mode: 0o600 });
+    writeFileSync(library.librarySkillFilePath("audit"), SKILL("audit", "Tampered."), { mode: 0o600 });
     const [listing] = library.listLibrarySkills().filter((skill) => skill.name === "audit");
     expect(listing.enabled).toBe(false);
     expect(listing.warnings).toContain("stored SKILL.md changed after review — enablement is blocked");
@@ -156,7 +156,7 @@ describe("assignment resolution", () => {
     expect(without).not.toContain("library-skill");
     const withLibrary = skills.skillsSystemPrompt(bot, ["library-skill"]);
     expect(withLibrary).toContain("library-skill");
-    expect(withLibrary).toContain(JSON.stringify(join(library.skillsLibraryRoot(), "skills", "library-skill", "SKILL.md")));
+    expect(withLibrary).toContain(JSON.stringify(library.librarySkillFilePath("library-skill")));
     expect(withLibrary).toContain("own-skill");
   });
 });

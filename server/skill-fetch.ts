@@ -1,7 +1,11 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { downloadGithubDirectory, githubSource } from "./extension-source.ts";
+import { readSkillDirectoryFiles, type SkillFile } from "./skill-files.ts";
 import { z } from "zod";
 
-const MAX_FILES = 30;
-const MAX_FILE_BYTES = 256 * 1024;
+const MAX_FILE_BYTES = 32 * 1024 * 1024;
 const API = "https://api.github.com";
 class ImportLimitError extends Error {}
 
@@ -11,7 +15,11 @@ function boundedImportFetch(fetcher: typeof fetch): typeof fetch {
   let bytes = 0;
   const signal = AbortSignal.timeout(60_000);
   return async (input, init) => {
-    if (++requests > 128) throw new ImportLimitError("Import request limit reached — paste a specific skill folder instead.");
+    const url = new URL(String(input));
+    if (url.protocol !== "https:" || url.username || url.password || url.port || !["api.github.com", "raw.githubusercontent.com"].includes(url.hostname)) {
+      throw new Error("Skill downloads must stay on https://api.github.com or https://raw.githubusercontent.com");
+    }
+    if (++requests > 512) throw new ImportLimitError("Import request limit reached — paste a specific skill folder instead.");
     signal.throwIfAborted();
     const response = await fetcher(input, { ...init, signal });
     if (!response.ok) {
@@ -29,7 +37,7 @@ function boundedImportFetch(fetcher: typeof fetch): typeof fetch {
         if (chunk.done) break;
         size += chunk.value.byteLength;
         bytes += chunk.value.byteLength;
-        if (size > (listing ? 1_048_576 : MAX_FILE_BYTES) || bytes > 8 * 1_048_576) {
+        if (size > (listing ? 1_048_576 : MAX_FILE_BYTES) || bytes > 64 * 1_048_576) {
           throw new ImportLimitError("Import size limit reached — paste a smaller skill folder instead.");
         }
         chunks.push(chunk.value);
@@ -43,7 +51,7 @@ function boundedImportFetch(fetcher: typeof fetch): typeof fetch {
 
 export interface FetchedSkill {
   source: string;
-  files: Array<{ path: string; content: string }>;
+  files: SkillFile[];
 }
 
 interface Target {
@@ -130,7 +138,7 @@ async function fetchText(url: string, fetcher: typeof fetch): Promise<string> {
   const response = await fetcher(url, { headers: { "user-agent": "OpenMausBot-skills" }, redirect: "error" });
   if (!response.ok) throw new Error(`download failed (${response.status})`);
   const text = await response.text();
-  if (Buffer.byteLength(text, "utf8") > MAX_FILE_BYTES) throw new Error("file is larger than the 256KB import cap");
+  if (Buffer.byteLength(text, "utf8") > 256 * 1024) throw new Error("file is larger than the 256KB import cap");
   return text;
 }
 
@@ -212,30 +220,15 @@ export async function discoverSkillDirs(target: Target, fetcher: typeof fetch): 
   return found;
 }
 
-/** Entries that are not downloaded come back path-only (empty content) so the install lists them as skipped. */
 export async function fetchSkillDir(target: Target, dir: string, fetcher: typeof fetch): Promise<FetchedSkill> {
-  const entries = await listDir(target, dir, fetcher);
-  const markdown = entries.filter((entry) => entry.type === "file" && /\.md$/i.test(entry.name) && entry.download_url);
-  if (!markdown.some((entry) => entry.name === "SKILL.md")) {
-    throw new Error(`no SKILL.md in ${dir || "the repository root"}`);
-  }
-  const downloadable = [
-    markdown.find((entry) => entry.name === "SKILL.md")!,
-    ...markdown.filter((entry) => entry.name !== "SKILL.md").slice(0, MAX_FILES - 1),
-  ];
-  const files: FetchedSkill["files"] = [];
-  for (let i = 0; i < downloadable.length; i += 4) {
-    files.push(...await Promise.all(downloadable.slice(i, i + 4).map(async (entry) => ({
-      path: entry.name,
-      content: await fetchText(entry.download_url!, fetcher),
-    }))));
-  }
-  for (const entry of entries) {
-    if (downloadable.includes(entry)) continue;
-    files.push({ path: entry.type === "dir" ? `${entry.name}/` : entry.name, content: "" });
-  }
-  const ref = target.ref ? `@${target.ref}` : "";
-  return { source: `github.com/${target.owner}/${target.repo}${ref}/${dir}`.replace(/\/$/, ""), files };
+  const temporary = mkdtempSync(join(tmpdir(), "openmaus-skill-"));
+  try {
+    await downloadGithubDirectory({ repository: `${target.owner}/${target.repo}`, ref: target.ref, path: dir }, temporary, fetcher);
+    const files = readSkillDirectoryFiles(temporary);
+    if (!files.some(file => file.path === "SKILL.md")) throw new Error(`no SKILL.md in ${dir || "the repository root"}`);
+    const ref = target.ref ? `@${target.ref}` : "";
+    return { source: `github.com/${target.owner}/${target.repo}${ref}/${dir}`.replace(/\/$/, ""), files };
+  } finally { rmSync(temporary, { recursive: true, force: true }); }
 }
 
 export async function fetchSkillFromSource(
@@ -247,8 +240,12 @@ export async function fetchSkillFromSource(
   fetcher = boundedImportFetch(fetcher);
   try {
     if ("rawUrl" in parsed) {
-      const content = await fetchText(parsed.rawUrl, fetcher);
-      return { skills: [{ source: parsed.rawUrl, files: [{ path: "SKILL.md", content }] }] };
+      assertPinnedRawUrl(parsed.rawUrl);
+      const source = githubSource(parsed.rawUrl);
+      if (!source) return { error: "Invalid GitHub Skill URL" };
+      const [owner, repo] = source.repository.split("/");
+      const fetched = await fetchSkillDir({ owner: owner!, repo: repo!, ref: source.ref, path: source.path }, source.path, fetcher);
+      return { skills: [{ ...fetched, source: parsed.rawUrl }] };
     }
     const dirs = await discoverSkillDirs(parsed, fetcher);
     if (!dirs.length) {

@@ -1,124 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { copyFile, mkdir } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { gunzipSync } from "node:zlib";
-import * as tar from "tar";
-import { unzipSync } from "fflate";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { botPluginsSchema, pluginIdSchema, pluginSourceSchema, PLUGIN_SOURCE_ERROR, type InstalledPlugin } from "../shared/plugins.ts";
 import { DATA_DIR } from "./config.ts";
+import { resourcePath as inside, copyResourceDirectory as copyPackage } from "./resource-directory.ts";
+import { fetchExtensionSource, resourceDigest } from "./extension-source.ts";
 
 const MANIFESTS = ["plugin.json", ".cursor-plugin/plugin.json", ".claude-plugin/plugin.json", ".codex-plugin/plugin.json"];
-const MAX_BYTES = 64 * 1024 * 1024;
-const MAX_FILES = 10_000;
 type Manifest = Record<string, unknown>;
 const fail = (message: string): never => { throw Object.assign(new Error(message), { status: 400 }); };
 const record = (value: unknown): value is Manifest => Boolean(value && typeof value === "object" && !Array.isArray(value));
-
-function inside(root: string, path: string): string {
-  if (path.includes("\\") || isAbsolute(path) || path.split("/").includes("..")) fail(`Plugin path escapes its directory: ${path}`);
-  const target = resolve(root, path);
-  const rel = relative(root, target);
-  if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) fail(`Plugin path escapes its directory: ${path}`);
-  return target;
-}
-
-async function copyPackage(source: string, target: string): Promise<void> {
-  let count = 0;
-  let bytes = 0;
-  async function walk(from: string, to: string) {
-    const stat = lstatSync(from);
-    if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile())) fail("Plugin packages cannot contain links or special files");
-    if (++count > MAX_FILES || (bytes += stat.isFile() ? stat.size : 0) > MAX_BYTES) fail("Plugin package exceeds size or file-count limit");
-    if (stat.isDirectory()) {
-      await mkdir(to, { recursive: true });
-      for (const name of readdirSync(from)) {
-        if (name === ".git") continue;
-        await walk(join(from, name), join(to, name));
-      }
-    } else await copyFile(from, to);
-  }
-  await walk(source, target);
-}
-
-async function download(url: string): Promise<Buffer> {
-  let current = new URL(url);
-  const signal = AbortSignal.timeout(60_000);
-  for (let redirects = 0; redirects < 6; redirects++) {
-    if (!pluginSourceSchema.safeParse(current.href).success) fail(PLUGIN_SOURCE_ERROR);
-    const response = await fetch(current, { redirect: "manual", signal });
-    if (response.status >= 300 && response.status < 400 && response.headers.get("location")) {
-      await response.body?.cancel();
-      const next = new URL(response.headers.get("location")!, current);
-      if (current.protocol === "https:" && next.protocol === "http:") fail("HTTPS plugin downloads cannot redirect to HTTP");
-      current = next;
-      continue;
-    }
-    if (!response.ok) fail(`Plugin download failed (HTTP ${response.status})`);
-    if (Number(response.headers.get("content-length") ?? 0) > MAX_BYTES) fail("Plugin download exceeds 64 MiB");
-    const chunks: Uint8Array[] = [];
-    let bytes = 0;
-    for await (const chunk of response.body ?? []) {
-      bytes += chunk.length;
-      if (bytes > MAX_BYTES) fail("Plugin download exceeds 64 MiB");
-      chunks.push(chunk);
-    }
-    return Buffer.concat(chunks);
-  }
-  return fail("Too many plugin download redirects");
-}
-
-async function extract(bytes: Buffer, target: string, archive: string) {
-  mkdirSync(target, { recursive: true });
-  let total = 0;
-  let files = 0;
-  if (bytes[0] === 0x50 && bytes[1] === 0x4b) {
-    // Keep executable script bits, and reject Unix links, from the ZIP central directory.
-    const modes = new Map<string, number>();
-    let end = bytes.length - 22;
-    while (end >= Math.max(0, bytes.length - 65_557) && bytes.readUInt32LE(end) !== 0x06054b50) end--;
-    if (end < 0 || bytes.readUInt32LE(end) !== 0x06054b50) fail("Invalid ZIP directory");
-    let offset = bytes.readUInt32LE(end + 16);
-    const count = bytes.readUInt16LE(end + 10);
-    for (let index = 0; index < count; index++) {
-      if (offset + 46 > bytes.length || bytes.readUInt32LE(offset) !== 0x02014b50) fail("Invalid ZIP entry");
-      const nameLength = bytes.readUInt16LE(offset + 28);
-      const extraLength = bytes.readUInt16LE(offset + 30);
-      const commentLength = bytes.readUInt16LE(offset + 32);
-      const name = bytes.subarray(offset + 46, offset + 46 + nameLength).toString("utf8");
-      inside(target, name);
-      const mode = bytes.readUInt32LE(offset + 38) >>> 16;
-      const type = mode & 0o170000;
-      if (type && type !== 0o100000 && type !== 0o040000) fail("Plugin archives cannot contain links or special files");
-      modes.set(name, mode);
-      offset += 46 + nameLength + extraLength + commentLength;
-    }
-    const entries = unzipSync(bytes, { filter: entry => {
-      inside(target, entry.name);
-      if (++files > MAX_FILES || (total += entry.originalSize) > MAX_BYTES) fail("Plugin archive exceeds size or file-count limit");
-      return true;
-    } });
-    for (const [name, data] of Object.entries(entries)) {
-      const path = inside(target, name);
-      if (name.endsWith("/")) mkdirSync(path, { recursive: true });
-      else { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, data); chmodSync(path, 0o644 | ((modes.get(name) ?? 0) & 0o111)); }
-    }
-  } else {
-    const expanded = bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes, { maxOutputLength: MAX_BYTES }) : bytes;
-    writeFileSync(archive, expanded);
-    // Inspect the complete archive before extraction; neither links nor device entries are installed.
-    let invalid: Error | undefined;
-    await tar.t({ file: archive, onReadEntry: entry => {
-      try {
-        inside(target, entry.path);
-        if (!["File", "Directory", "ExtendedHeader", "GlobalExtendedHeader"].includes(entry.type)) fail("Plugin archives cannot contain links or special files");
-        if (++files > MAX_FILES || (total += entry.size) > MAX_BYTES) fail("Plugin archive exceeds size or file-count limit");
-      } catch (error) { invalid ??= error as Error; }
-    } });
-    if (invalid) throw invalid;
-    await tar.x({ file: archive, cwd: target, strict: true });
-  }
-}
 
 function packageRoot(root: string): string {
   if (MANIFESTS.some(file => existsSync(join(root, file)))) return root;
@@ -202,7 +93,12 @@ function prepareManifests(root: string): { id: string; version: string; descript
   return { id, version: version as string, ...(typeof original.description === "string" ? { description: original.description } : {}) };
 }
 
+export interface PreparedPlugin {
+  id: string; version: string; description?: string; source: string; path: string; token: string; digest: string;
+}
+
 export class PluginLibrary {
+  private prepared = new Map<string, PreparedPlugin>();
   private pending: Promise<unknown> = Promise.resolve();
   readonly root: string;
   constructor(root = join(DATA_DIR, "plugins")) { this.root = root; }
@@ -230,7 +126,11 @@ export class PluginLibrary {
     return this.selection(ids, snapshot).map(id => plugins.get(id)!);
   }
   install(source: string, beforeCommit?: (plugin: InstalledPlugin, replacing: boolean) => void): Promise<InstalledPlugin & { status: "installed" }> {
-    const result = this.pending.then(() => this.installOne(source, beforeCommit));
+    const result = this.pending.then(async () => {
+      const prepared = await this.prepare(source);
+      try { return await this.commitOne(prepared, beforeCommit); }
+      catch (error) { this.discard(prepared); throw error; }
+    });
     this.pending = result.catch(() => {});
     return result;
   }
@@ -249,47 +149,60 @@ export class PluginLibrary {
     this.pending = result.catch(() => {});
     return result;
   }
-  private async installOne(source: string, beforeCommit?: (plugin: InstalledPlugin, replacing: boolean) => void): Promise<InstalledPlugin & { status: "installed" }> {
+  async prepare(source: string, directory?: string): Promise<PreparedPlugin> {
     const parsed = pluginSourceSchema.safeParse(source);
     if (!parsed.success) return fail(PLUGIN_SOURCE_ERROR);
     source = parsed.data;
     mkdirSync(this.root, { recursive: true });
-    const stage = join(this.root, `.stage-${randomUUID()}`);
-    const content = join(stage, "content");
+    const token = randomUUID();
+    const stage = join(this.root, `.stage-${token}`);
+    const prepared = join(stage, "package");
     mkdirSync(stage);
+    try {
+      if (directory) await copyPackage(directory, prepared);
+      else {
+        const content = join(stage, "content");
+        const from = await fetchExtensionSource(source, content);
+        await copyPackage(from, prepared);
+        rmSync(content, { recursive: true, force: true });
+        rmSync(`${content}.tar`, { force: true });
+      }
+      const metadata = prepareManifests(packageRoot(prepared));
+      const result: PreparedPlugin = { ...metadata, source, path: prepared, token, digest: resourceDigest(prepared) };
+      this.prepared.set(token, result);
+      return result;
+    } catch (error) { rmSync(stage, { recursive: true, force: true }); throw error; }
+  }
+  discard(prepared: PreparedPlugin): void {
+    if (this.prepared.get(prepared.token) !== prepared) return;
+    this.prepared.delete(prepared.token);
+    rmSync(dirname(prepared.path), { recursive: true, force: true });
+  }
+  commit(prepared: PreparedPlugin, beforeCommit?: (plugin: InstalledPlugin, replacing: boolean) => void): Promise<InstalledPlugin & { status: "installed" }> {
+    const result = this.pending.then(() => this.commitOne(prepared, beforeCommit));
+    this.pending = result.catch(() => {});
+    return result;
+  }
+  private async commitOne(prepared: PreparedPlugin, beforeCommit?: (plugin: InstalledPlugin, replacing: boolean) => void): Promise<InstalledPlugin & { status: "installed" }> {
+    if (this.prepared.get(prepared.token) !== prepared) return fail("The prepared plugin expired. Prepare it again.");
+    if (resourceDigest(prepared.path) !== prepared.digest) return fail("The prepared plugin changed. Prepare it again.");
+    const installed: InstalledPlugin = { id: prepared.id, version: prepared.version, ...(prepared.description ? { description: prepared.description } : {}), source: prepared.source, installedAt: Date.now(), path: join(this.root, prepared.id, "package") };
+    const stage = dirname(prepared.path), destination = join(this.root, prepared.id);
+    writeFileSync(join(stage, "installation.json"), JSON.stringify(installed, null, 2) + "\n");
+    beforeCommit?.(installed, existsSync(destination));
     let previous: string | undefined;
     try {
-      const url = new URL(source);
-      if (url.username || url.password) fail("Plugin URLs cannot contain embedded credentials");
-      let archiveUrl = source;
-      let subdir = "";
-      if (url.hostname === "github.com") {
-        const parts = url.pathname.split("/").filter(Boolean).map(decodeURIComponent);
-        const [owner, repo, kind, ref, ...path] = parts;
-        if (!owner || !repo || (kind && kind !== "tree")) fail("Use a GitHub repository or /tree/REF/directory URL");
-        const repository = repo!.replace(/\.git$/, "");
-        archiveUrl = kind ? `https://codeload.github.com/${owner}/${repository}/tar.gz/${encodeURIComponent(ref!)}` : `https://api.github.com/repos/${owner}/${repository}/tarball`;
-        subdir = path.join("/");
-      }
-      await extract(await download(archiveUrl), content, join(stage, "download.tar"));
-      const roots = readdirSync(content);
-      const from = subdir ? inside(join(content, roots[0]!), subdir) : packageRoot(content);
-      const prepared = join(stage, "package");
-      await copyPackage(from, prepared);
-      const metadata = prepareManifests(prepared);
-      const installed: InstalledPlugin = { ...metadata, source, installedAt: Date.now(), path: join(this.root, metadata.id, "package") };
-      writeFileSync(join(stage, "installation.json"), JSON.stringify(installed, null, 2) + "\n");
-      rmSync(content, { recursive: true, force: true });
-      rmSync(join(stage, "download.tar"), { force: true });
-      const destination = join(this.root, metadata.id);
-      beforeCommit?.(installed, existsSync(destination));
       if (existsSync(destination)) { previous = join(this.root, `.previous-${randomUUID()}`); renameSync(destination, previous); }
       try { renameSync(stage, destination); }
       catch (error) { if (previous) renameSync(previous, destination); throw error; }
       if (previous) rmSync(previous, { recursive: true, force: true });
+      this.prepared.delete(prepared.token);
       return { ...installed, status: "installed" };
-    } finally { rmSync(stage, { recursive: true, force: true }); }
+    } finally { if (!this.prepared.has(prepared.token)) rmSync(stage, { recursive: true, force: true }); }
   }
+
 }
 
 export const pluginLibrary = new PluginLibrary();
+
+export { resourcePath, extractResourceArchive, copyResourceDirectory } from "./resource-directory.ts";

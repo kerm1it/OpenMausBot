@@ -28,7 +28,7 @@ import { bootFailureMessage, listeningSignal, pollServerIdentity, SERVER_BOOT_TI
 import { createServerSupervisor } from "./server-supervisor.mjs";
 import { serverChildLaunch } from "./server-child-launch.mjs";
 import { codexRuntimeHome } from "./codex-home.mjs";
-import { packageUrlFromCommandLine, packageUrlFromDeepLink } from "./package-link.mjs";
+import { packageInstallFromCommandLine, packageInstallFromDeepLink } from "./package-link.mjs";
 import { chatLinkFrom, chatLinkFromCommandLine } from "./chat-link.mjs";
 import { createOrganizationEntry, isOrganizationDeepLink, takeOrganizationDeepLink, organizationRestartIntent, withOrganizationRestartIntent, withoutOrganizationRestartIntent } from "./organization-entry.mjs";
 import { windowChromeOptions } from "./window-chrome.mjs";
@@ -145,7 +145,7 @@ const cloudEntry = createCloudEntry({
   },
 });
 cloudEntry.fromLaunch(process.argv);
-let pendingPackageInstallUrl = pendingOrganizationEntry ? null : packageUrlFromCommandLine(process.argv);
+let pendingPackageInstall = pendingOrganizationEntry ? null : packageInstallFromCommandLine(process.argv);
 let pendingChatLink = pendingOrganizationEntry ? null : chatLinkFromCommandLine(process.argv);
 let organizationEntryReady = false;
 let mainWindow = null;
@@ -202,7 +202,7 @@ function sendToPage(win, channel, value) {
 }
 
 function deliverPackageInstall(win = mainWindow) {
-  if (pendingPackageInstallUrl && sendToPage(win, "package:install", pendingPackageInstallUrl)) pendingPackageInstallUrl = null;
+  if (pendingPackageInstall && sendToPage(win, "package:install", pendingPackageInstall)) pendingPackageInstall = null;
 }
 
 function deliverChatLink(win = mainWindow) {
@@ -220,9 +220,9 @@ function revealForLink() {
 }
 
 function queuePackageInstall(rawLink) {
-  const packageUrl = packageUrlFromDeepLink(rawLink);
-  if (!packageUrl) return false;
-  pendingPackageInstallUrl = packageUrl;
+  const installRequest = packageInstallFromDeepLink(rawLink);
+  if (!installRequest) return false;
+  pendingPackageInstall = installRequest;
   revealForLink();
   deliverPackageInstall();
   return true;
@@ -248,8 +248,8 @@ app.on("second-instance", (_event, commandLine) => {
     return;
   }
   if (cloudEntry.fromArgs(commandLine)) return;
-  const packageUrl = packageUrlFromCommandLine(commandLine);
-  if (packageUrl) pendingPackageInstallUrl = packageUrl;
+  const installRequest = packageInstallFromCommandLine(commandLine);
+  if (installRequest) pendingPackageInstall = installRequest;
   const chatLink = chatLinkFromCommandLine(commandLine);
   if (chatLink) pendingChatLink = chatLink;
   revealForLink();

@@ -291,7 +291,7 @@ const __APP_VERSION__: string;
         onMaximizedChanged(cb: (maximized: boolean) => void): () => void;
       };
       /** Receives a GitHub package URL opened through openmausbot://install. */
-      onPackageInstall?(cb: (url: string) => void): () => void;
+      onPackageInstall?(cb: (input: string | import("../../shared/extension-import").ExtensionImportRequest) => void): () => void;
       /** Receives a chat link (openmausbot://thread/… or openmausbot://bot/…)
        * opened from outside the app. */
       onChatLink?(cb: (link: string) => void): () => void;

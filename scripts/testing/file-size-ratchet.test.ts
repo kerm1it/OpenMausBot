@@ -15,14 +15,14 @@ const HARD_CAP = 2000;
 const LISTED_FROM = 1000;
 
 const LINES: Record<string, number> = {
-  "server/index.ts": 16696,
+  "server/index.ts": 16637,
   "src/state/store.tsx": 3428,
   "electron/main.mjs": 3226,
   "server/store.ts": 2329,
-  "src/components/Sidebar.tsx": 2126,
-  "server/drivers/claude.ts": 2123,
+  "src/components/Sidebar.tsx": 2122,
+  "server/drivers/claude.ts": 2073,
   "server/drivers/acp/core.ts": 1840,
-  "server/drivers/codex.ts": 1847,
+  "server/drivers/codex.ts": 1833,
   "server/routines.ts": 1589,
   "src/components/ComputerPanel.tsx": 1823,
   "src/components/RoutineCalendarPage.tsx": 1750,
@@ -32,7 +32,7 @@ const LINES: Record<string, number> = {
   "src/components/GroupView.tsx": 1490,
   "src/components/LocalComputerSection.tsx": 1475,
   "src/components/CursorAvatar.tsx": 1324,
-  "server/skills.ts": 1391,
+  "server/skills.ts": 1243,
   "server/composio.ts": 1289,
   "server/vps-computer.ts": 1369,
   "scripts/mcp-server.ts": 1475,

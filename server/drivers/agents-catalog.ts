@@ -795,7 +795,7 @@ const TOOL_DEFINITIONS = [
   {
     name: "skill_manage",
     description:
-      "Submit a new or updated reusable SKILL.md. Never update unless the user explicitly asked to revise that named skill. If the result is pending, a create stays inactive and an update leaves the current version unchanged." + APPLIES_OUTCOME,
+      "Submit a new or updated reusable Skill directory. Never update unless the user explicitly asked to revise that named skill. Pending creates stay inactive; pending updates leave the current version unchanged." + APPLIES_OUTCOME,
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -812,8 +812,23 @@ const TOOL_DEFINITIONS = [
         skill_md: {
           type: "string",
           description:
-            "The full SKILL.md including YAML frontmatter. Example: ---\\nname: file-expense\\ndescription: Files an expense in the company portal.\\n---\\n\\n# File expense\\n",
+            "Required on create: the full SKILL.md with YAML name and description. On update omit it to keep the entry unchanged while patching supporting files.",
         },
+        files: {
+          type: "array", maxItems: 1000,
+          description: "Supporting-file writes. Unmentioned files stay; empty content writes an empty file. Do not combine with legacy references.",
+          items: {
+            type: "object", additionalProperties: false,
+            properties: {
+              path: { type: "string", description: "Path relative to the Skill root, such as scripts/run.py or assets/input.docx." },
+              content: { type: "string", description: "UTF-8 text, including an empty file; supply this or attachment_id." },
+              attachment_id: { type: "string", description: "Filename of an uploaded attachment in this conversation; no host path or base64." },
+              executable: { type: "boolean", description: "Whether the reviewed file is executable." },
+            },
+            required: ["path"],
+          },
+        },
+        remove_files: { type: "array", maxItems: 1000, items: { type: "string" }, description: "Explicit supporting-file removals relative to the Skill root; cannot remove SKILL.md." },
         references: {
           type: "array",
           maxItems: 8,
@@ -842,7 +857,7 @@ const TOOL_DEFINITIONS = [
           description: "Required provenance label: the URL, folder, or 'conversation' used to author the skill.",
         },
       },
-      required: ["action", "skill_md", "source"],
+      required: ["action", "source"],
     },
   },
   {

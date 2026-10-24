@@ -103,12 +103,12 @@ describe("shared native plugin library", () => {
     await expect(installSource(archive)).rejects.toThrow("escapes");
     expect(library.list()).toHaveLength(1);
   });
-  it("fetches HTTPS archives and GitHub subdirectories without following insecure redirects", async () => {
+  it("fetches HTTP archives without following insecure redirects", async () => {
     const bytes = zipSync({ "repo-main/pstack/.cursor-plugin/plugin.json": strToU8(JSON.stringify({ name: "pstack", version: "1.0.0" })), "repo-main/pstack/skills/proof/SKILL.md": strToU8(skill) });
     const fetcher = vi.fn().mockImplementation(async () => new Response(bytes));
     vi.stubGlobal("fetch", fetcher);
-    expect(await library.install("https://github.com/cursor/plugins/tree/main/pstack")).toMatchObject({ id: "pstack" });
-    expect(String(fetcher.mock.calls[0]?.[0])).toBe("https://codeload.github.com/cursor/plugins/tar.gz/main");
+    expect(await library.install("https://example.test/plugin.zip")).toMatchObject({ id: "pstack" });
+    expect(String(fetcher.mock.calls[0]?.[0])).toBe("https://example.test/plugin.zip");
     fetcher.mockResolvedValueOnce(new Response(null, { status: 302, headers: { location: "http://example.test/plugin.zip" } }));
     await expect(library.install("https://example.test/plugin.zip")).rejects.toThrow("HTTPS");
     fetcher.mockResolvedValueOnce(new Response(null, { status: 404 }));

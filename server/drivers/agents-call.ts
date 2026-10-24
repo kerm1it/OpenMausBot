@@ -791,7 +791,7 @@ export async function callTool(name: string, args: Json, context: ToolCallContex
       return { text: 'skill_manage action must be "create" or "update".', isError: true };
     }
     const skillMd = typeof args.skill_md === "string" ? args.skill_md : "";
-    if (!skillMd.trim()) {
+    if (args.action === "create" && !skillMd.trim()) {
       return { text: 'skill_manage needs skill_md: the full SKILL.md including YAML frontmatter.', isError: true };
     }
     const source = typeof args.source === "string" ? args.source.trim() : "";
@@ -808,7 +808,9 @@ export async function callTool(name: string, args: Json, context: ToolCallContex
         fromBotId: BOT_ID, fromThreadId: THREAD_ID,
         action: args.action,
         skill_name: skillName || undefined,
-        skill_md: skillMd,
+        ...(skillMd.trim() ? { skill_md: skillMd } : {}),
+        ...(Array.isArray(args.files) ? { files: args.files } : {}),
+        ...(Array.isArray(args.remove_files) ? { remove_files: args.remove_files } : {}),
         ...(Array.isArray(args.references) ? { references: args.references } : {}),
         gist: typeof args.gist === "string" ? args.gist : undefined,
         base_revision: typeof args.base_revision === "string" ? args.base_revision : undefined,

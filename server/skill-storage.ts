@@ -1,10 +1,8 @@
-// Learned-skill files on disk: SKILL.md plus at most MAX_SKILL_REFERENCES references/<topic>.md files,
-// published as one immutable reviewed revision and never read through a symlink.
 import { createHash, randomUUID } from "node:crypto";
 import { lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 
-import { writeFileAtomic } from "./atomic.ts";
+import { skillDirectorySha256, readSkillDirectoryFiles, writeSkillDirectoryFiles, type SkillFile } from "./skill-files.ts";
 
 export const STAGED_SKILL_FILE_MAX_BYTES = 32 * 1024;
 export const MAX_SKILL_REFERENCES = 8;
@@ -19,14 +17,14 @@ export function referencePathError(path: string): string {
 }
 
 /** One hash over the reference files (paths and bytes), or undefined when there are none; SKILL.md keeps its own sha256. */
-export function skillReferencesSha256(files: ReadonlyArray<{ path: string; content: string | Buffer }>): string | undefined {
+export function skillReferencesSha256(files: ReadonlyArray<{ path: string; content: string | Buffer; encoding?: "base64" }>): string | undefined {
   const references = files
     .filter((file) => file.path !== "SKILL.md")
     .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   if (!references.length) return undefined;
   const hash = createHash("sha256");
   for (const file of references) {
-    hash.update(`${file.path}\0${createHash("sha256").update(file.content).digest("hex")}\n`);
+    hash.update(`${file.path}\0${createHash("sha256").update(file.encoding ? Buffer.from(String(file.content), "base64") : file.content).digest("hex")}\n`);
   }
   return hash.digest("hex");
 }
@@ -95,9 +93,10 @@ export function readReferenceFiles(directory: string): Array<{ path: string; con
   return files;
 }
 
-export function learnedSkillDirectoryMatches(directory: string, sha256: string, referencesSha256?: string): boolean {
+export function learnedSkillDirectoryMatches(directory: string, sha256: string, referencesSha256?: string, directorySha256?: string): boolean {
   if (directoryEntryState(directory) !== "directory") return false;
   try {
+    if (directorySha256) return skillDirectorySha256(readSkillDirectoryFiles(directory)) === directorySha256;
     const entries = readdirSync(directory).sort();
     const expected = referencesSha256 ? ["SKILL.md", "references"] : ["SKILL.md"];
     if (entries.length !== expected.length || entries.some((entry, index) => entry !== expected[index])) return false;
@@ -130,11 +129,12 @@ function sameDirectoryIdentity(path: string, expected: { dev: number; ino: numbe
 export function publishReviewedRevision(
   dirs: { state: string; ensureSkillsRoot: () => string | null },
   stageId: string,
-  files: Array<{ path: string; content: string }>,
+  files: SkillFile[],
   sha256: string,
   referencesSha256: string | undefined,
 ): string {
   // No agent-writable path is opened until the complete directory is published as one rename.
+  const directorySha256 = skillDirectorySha256(files);
   const state = dirs.state;
   mkdirSync(state, { recursive: true, mode: 0o700 });
   if (directoryEntryState(state) !== "directory") {
@@ -148,7 +148,7 @@ export function publishReviewedRevision(
   if (preparedRootState === "missing") mkdirSync(preparedRoot, { mode: 0o700 });
   const revision = createHash("sha256").update(stageId).digest("hex");
   const prepared = join(preparedRoot, revision);
-  if (!learnedSkillDirectoryMatches(prepared, sha256, referencesSha256)) {
+  if (!learnedSkillDirectoryMatches(prepared, sha256, referencesSha256, directorySha256)) {
     if (entryExistsWithoutFollowing(prepared)) {
       if (directoryEntryState(prepared) !== "directory") {
         throw new Error("the protected reviewed revision is not a real directory");
@@ -158,12 +158,8 @@ export function publishReviewedRevision(
     const temporary = join(preparedRoot, `.prepare-${revision}-${randomUUID()}`);
     try {
       mkdirSync(temporary, { mode: 0o700 });
-      for (const file of files) {
-        const path = join(temporary, file.path);
-        mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-        writeFileAtomic(path, file.content, { mode: 0o600 });
-      }
-      if (!learnedSkillDirectoryMatches(temporary, sha256, referencesSha256)) {
+      writeSkillDirectoryFiles(temporary, files);
+      if (!learnedSkillDirectoryMatches(temporary, sha256, referencesSha256, directorySha256)) {
         throw new Error("the protected reviewed bytes do not match the approval card");
       }
       renameSync(temporary, prepared);
@@ -185,7 +181,7 @@ export function publishReviewedRevision(
   if (!revisionsIdentity) throw new Error("the skill revisions path could not be created safely");
 
   const target = join(revisions, revision);
-  if (learnedSkillDirectoryMatches(target, sha256, referencesSha256)) {
+  if (learnedSkillDirectoryMatches(target, sha256, referencesSha256, directorySha256)) {
     try {
       rmSync(prepared, { recursive: true, force: true });
     } catch {}
@@ -202,7 +198,7 @@ export function publishReviewedRevision(
   if (
     !sameDirectoryIdentity(root, rootIdentity) ||
     !sameDirectoryIdentity(revisions, revisionsIdentity) ||
-    !learnedSkillDirectoryMatches(target, sha256, referencesSha256)
+    !learnedSkillDirectoryMatches(target, sha256, referencesSha256, directorySha256)
   ) {
     throw new Error("the reviewed revision changed while it was being published");
   }

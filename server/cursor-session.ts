@@ -51,6 +51,7 @@ export interface CursorSession {
   signOut(): void;
   /** The full template as an export. Throws CursorFallback. */
   fetchTemplate(card: GrokTemplateCard): Promise<GrokExport>;
+  fetchRawTemplate(card: GrokTemplateCard): Promise<unknown>;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -260,7 +261,7 @@ export function createCursorSession(options: { dataDir: string; fetcher?: typeof
       lastError = "";
       forget();
     },
-    async fetchTemplate(card) {
+    async fetchRawTemplate(card) {
       if (!signedIn()) throw new CursorFallback(lastError || "Sign in with Cursor to import everything at once.");
       const ask = async () => {
         let response: Response;
@@ -310,9 +311,12 @@ export function createCursorSession(options: { dataDir: string; fetcher?: typeof
           throw new CursorFallback("The template download failed.");
         }
       }
-      try {
-        return grokExportFromRecipe(recipe, card);
-      } catch {
+      return recipe;
+    },
+    async fetchTemplate(card) {
+      try { return grokExportFromRecipe(await this.fetchRawTemplate(card), card); }
+      catch (error) {
+        if (error instanceof CursorFallback) throw error;
         throw new CursorFallback("Cursor answered in a way Maus does not understand yet.");
       }
     },

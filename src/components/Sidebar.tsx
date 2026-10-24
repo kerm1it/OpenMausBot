@@ -58,6 +58,8 @@ import { nextRename } from "@/lib/rename";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { MIN_QUERY, SearchResults } from "./SearchResults";
 import { TeamLibraryPanel } from "./TeamLibraryPanel";
+import { ExtensionHost } from "./ExtensionHost";
+import { openBotTemplateExport, openExtensionImport } from "@/lib/extension-events";
 import { SidebarNewChatPanel } from "./SidebarNewChatPanel";
 import { openCommandPalette } from "./CommandPalette";
 import { ShareTeamDialog } from "./ShareTeamDialog";
@@ -714,6 +716,7 @@ export function BotContextMenu({
         item(<Copy size={16} className="text-ink-secondary" />, t("sidebar.bot.duplicate"), () =>
           dispatch({ type: "duplicateBot", botId: bot.id }),
         ),
+        item(<Copy size={16} className="text-ink-secondary" />, t("extension.exportTitle"), () => openBotTemplateExport(bot.id)),
         divider("d2"),
         item(<ClipboardCopy size={16} className="text-ink-secondary" />, t("sidebar.copyConversationId"), () => {
           void copyText(bot.threadId);
@@ -1327,15 +1330,6 @@ export function Sidebar({ open, onClose, collapseToIcons = false }: {
   const plusMenuRef = useRef<HTMLDivElement>(null);
   usePopoverDismiss(attentionOpen, attentionMenuRef, () => setAttentionOpen(false));
   usePopoverDismiss(plusOpen, plusMenuRef, () => setPlusOpen(false));
-
-  useEffect(() => {
-    if (remoteClient) return;
-    return window.ogb?.onPackageInstall?.((url) => {
-      setTeamInstallUrl(url);
-      setTeamLibraryOpen(true);
-    });
-  }, [remoteClient]);
-
   useEffect(() => {
     if (!teamFeedback) return;
     const timer = window.setTimeout(() => setTeamFeedback(null), 5000);
@@ -1562,6 +1556,7 @@ export function Sidebar({ open, onClose, collapseToIcons = false }: {
             <Library size={16} className="text-ink-secondary" />
             {t("sidebar.teamLibrary")}
           </button>}
+          <button onClick={() => { setPlusOpen(false); openExtensionImport(); }} className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"><Library size={16} className="text-ink-secondary" />{t("extension.importTitle")}</button>
           {archivedBots.length > 0 && (
             <button
               onClick={() => {
@@ -2121,6 +2116,7 @@ export function Sidebar({ open, onClose, collapseToIcons = false }: {
           </div>,
           document.body,
         )}
+      <ExtensionHost disabled={remoteClient} onLegacyPackage={url => { setTeamInstallUrl(url); setTeamLibraryOpen(true); }} />
     </aside>
   );
 }

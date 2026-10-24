@@ -1,13 +1,15 @@
-// Per-bot skill copies move into the shared library; originals are archived write-once, and a manifest entry is dropped only after its archive and assignment are durable.
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { readSkillDirectoryFiles, skillDirectorySha256 } from "./skill-files.ts";
+import { skillDirectoryInUse } from "./skill-active-revisions.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import {
   installLibrarySkill,
   libraryArchiveDirectory,
   readSkillLibraryIndex,
+  readLibrarySkillDirectory,
   skillsLibraryRoot,
 } from "./skill-library.ts";
 import { listMigratableSkills, removeManifestEntry } from "./skills.ts";
@@ -29,7 +31,8 @@ function sha256Hex(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
-export function archiveSkillDirectory(source: string, archive: string, expectSha256: string): void {
+export function archiveSkillDirectory(source: string, archive: string, expectSha256: string, expectDirectorySha256?: string): void {
+  if (expectDirectorySha256 && skillDirectorySha256(readSkillDirectoryFiles(source)) !== expectDirectorySha256) throw new Error("The Skill directory changed before archiving");
   mkdirSync(dirname(archive), { recursive: true, mode: 0o700 });
   let destination = archive;
   if (existsSync(destination)) {
@@ -39,13 +42,14 @@ export function archiveSkillDirectory(source: string, archive: string, expectSha
     while (existsSync(destination)) destination = `${stem}.${suffix++}`;
   }
   try {
-    renameSync(source, destination);
+    if (skillDirectoryInUse(source)) cpSync(source, destination, { recursive: true, force: false, errorOnExist: true });
+    else renameSync(source, destination);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
     cpSync(source, destination, { recursive: true, force: false, errorOnExist: true });
   }
   const archived = readFileSync(join(destination, "SKILL.md"), "utf8");
-  if (sha256Hex(archived) !== expectSha256) {
+  if (sha256Hex(archived) !== expectSha256 || (expectDirectorySha256 && skillDirectorySha256(readSkillDirectoryFiles(destination)) !== expectDirectorySha256)) {
     throw new Error("the archived copy does not match the reviewed sha256");
   }
 }
@@ -54,17 +58,9 @@ export function migrateBotSkillsToLibrary(botId: string, root: string = skillsLi
   const outcomes: SkillMigrationOutcome[] = [];
   const assigned: string[] = [];
   for (const copy of listMigratableSkills(botId)) {
+    if (copy.source.startsWith("template:")) continue;
     if (!copy.intact || !copy.directory) {
       outcomes.push({ botId, name: copy.name, outcome: "skipped", detail: "stored SKILL.md is missing or changed after review" });
-      continue;
-    }
-    try {
-      if (readdirSync(copy.directory).some((name) => name !== "SKILL.md")) {
-        outcomes.push({ botId, name: copy.name, outcome: "skipped", detail: "skill has auxiliary files — keeping its complete private directory" });
-        continue;
-      }
-    } catch {
-      outcomes.push({ botId, name: copy.name, outcome: "skipped", detail: "could not inspect the private skill directory" });
       continue;
     }
     let instructions: string;
@@ -79,7 +75,8 @@ export function migrateBotSkillsToLibrary(botId: string, root: string = skillsLi
       continue;
     }
     const existing = readSkillLibraryIndex(root)[copy.name];
-    if (existing && existing.sha256 !== copy.sha256) {
+    const digest = skillDirectorySha256(readSkillDirectoryFiles(copy.directory));
+    if (existing && readLibrarySkillDirectory(copy.name, root)?.digest !== digest) {
       outcomes.push({ botId, name: copy.name, outcome: "skipped", detail: `the library already has a different "${copy.name}" — rename one of them` });
       continue;
     }
@@ -98,6 +95,7 @@ export function migrateBotSkillsToLibrary(botId: string, root: string = skillsLi
         name: copy.name,
         description: copy.description,
         instructions,
+        directory: copy.directory,
         source: copy.source,
         license: copy.license,
         compatibility: copy.compatibility,
@@ -125,7 +123,7 @@ export function migrateBotSkillsToLibrary(botId: string, root: string = skillsLi
       continue;
     }
     try {
-      archiveSkillDirectory(copy.directory, libraryArchiveDirectory(root, botId, copy.name), copy.sha256);
+      archiveSkillDirectory(copy.directory, libraryArchiveDirectory(root, botId, copy.name), copy.sha256, digest);
     } catch (error) {
       outcomes.push({ botId, name: copy.name, outcome: "skipped", detail: `archiving failed: ${error instanceof Error ? error.message : String(error)}` });
       continue;
