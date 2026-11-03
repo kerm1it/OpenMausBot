@@ -149,7 +149,7 @@ export class PluginLibrary {
     this.pending = result.catch(() => {});
     return result;
   }
-  async prepare(source: string, directory?: string): Promise<PreparedPlugin> {
+  async prepare(source: string, directory?: string, fetcher?: typeof fetch): Promise<PreparedPlugin> {
     const parsed = pluginSourceSchema.safeParse(source);
     if (!parsed.success) return fail(PLUGIN_SOURCE_ERROR);
     source = parsed.data;
@@ -162,7 +162,7 @@ export class PluginLibrary {
       if (directory) await copyPackage(directory, prepared);
       else {
         const content = join(stage, "content");
-        const from = await fetchExtensionSource(source, content);
+        const from = await fetchExtensionSource(source, content, fetcher);
         await copyPackage(from, prepared);
         rmSync(content, { recursive: true, force: true });
         rmSync(`${content}.tar`, { force: true });

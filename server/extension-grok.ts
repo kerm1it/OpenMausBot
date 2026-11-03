@@ -1,5 +1,7 @@
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import type { ExtensionPreparationProgress } from "../shared/extension-import.ts";
+import { parseDocument } from "yaml";
 import { botTemplateProfileSchema, botTemplateRoutineSchema } from "../shared/bot-template-format.ts";
 import { grokExportFromRecipe, parseGrokExport } from "../shared/grok-import.ts";
 import { isSkillName, parseSkillMd, yamlFrontmatterValue } from "../shared/skill-md.ts";
@@ -92,7 +94,27 @@ function encodeVarint(value: number): Buffer {
   out.push(value); return Buffer.from(out);
 }
 
-export async function prepareGrokRecipe(raw: unknown, root: string, source: string, fetcher: typeof fetch = fetch): Promise<PreparedBotTemplate> {
+function portableGrokSkill(content: string, name: string, description?: string): string {
+  const frontmatter = content.match(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+  if (!frontmatter) return content;
+  const document = parseDocument(frontmatter[1]!);
+  let fields: unknown;
+  try {
+    if (document.errors.length) throw document.errors[0];
+    fields = document.toJS({ maxAliasCount: 0 });
+  } catch { return extensionError(`Grok skill ${name}: invalid YAML frontmatter`); }
+  if (!record(fields)) extensionError(`Grok skill ${name}: frontmatter must be a YAML object`);
+  const parsed = parseSkillMd(content);
+  if (!("error" in parsed) && parsed.name === fields.name && parsed.description === fields.description) return content;
+  const portableName = typeof fields.name === "string" && isSkillName(fields.name) ? fields.name : name;
+  const portableDescription = text(fields.description, description) ?? name;
+  document.delete("name");
+  document.delete("description");
+  const extra = document.contents && document.toString({ lineWidth: 0 });
+  return `---\nname: ${portableName}\ndescription: ${yamlFrontmatterValue(portableDescription)}\n${extra && extra.trim() !== "{}" ? extra : ""}---\n${frontmatter[2]}`;
+}
+
+export async function prepareGrokRecipe(raw: unknown, root: string, source: string, fetcher: typeof fetch = fetch, onProgress?: (progress: ExtensionPreparationProgress) => void): Promise<PreparedBotTemplate> {
   if (!record(raw)) extensionError("The Grok recipe must be a JSON object");
   const recipe = record(raw.recipe) ? raw.recipe : raw;
   const legacy = recipe.format === "openmaus.grok/1" || recipe.format === "grokbot-bundle/v1" ? parseGrokExport(recipe) : grokExportFromRecipe(recipe);
@@ -102,6 +124,7 @@ export async function prepareGrokRecipe(raw: unknown, root: string, source: stri
   }, requirements: legacy.plugins.map(plugin => ({ kind: "app", name: plugin.name, description: plugin.note })) });
   const draft: PreparedBotTemplate = { root, source, profile, skills: [], memory: [], routines: [], pluginReferences: [], warnings: [] };
   const rawSkills = list(recipe.skills).length ? list(recipe.skills) : legacy.skills;
+  onProgress?.({ stage: "skills", completed: 0, total: rawSkills.length });
   for (const input of rawSkills) {
     if (!record(input)) continue;
     const name = slug(text(input.name, input.slug) ?? "skill");
@@ -125,10 +148,15 @@ export async function prepareGrokRecipe(raw: unknown, root: string, source: stri
         if (file.executable === true) chmodSync(target, 0o755);
       }
     }
-    const parsed = parseSkillMd(readFileSync(join(directory, "SKILL.md"), "utf8"));
+    const skillPath = join(directory, "SKILL.md");
+    const original = readFileSync(skillPath, "utf8");
+    const portable = portableGrokSkill(original, name, text(input.description));
+    const parsed = parseSkillMd(portable);
     if ("error" in parsed) extensionError(`Grok skill ${name}: ${parsed.error}`);
     if (draft.skills.some(value => value.name === parsed.name)) extensionError(`The recipe contains duplicate skill ${parsed.name}`);
+    if (portable !== original) writeFileSync(skillPath, portable);
     draft.skills.push({ name: parsed.name, description: parsed.description, directory, path: `skills/${name}/SKILL.md` });
+    onProgress?.({ stage: "skills", name: parsed.name, completed: draft.skills.length, total: rawSkills.length });
   }
   const memory = recipe.memories ?? recipe.memory;
   const memories = list(memory).flatMap(value => typeof value === "string" ? [value] : record(value) && value.kind !== "log" ? [text(value.content, value.text) ?? ""] : []).filter(Boolean);

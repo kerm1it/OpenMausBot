@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as tar from "tar";
-import { unzipSync } from "fflate";
+import { zipSync, strToU8, unzipSync } from "fflate";
 import { afterEach, expect, it } from "vitest";
 import { createExtensionHost } from "./extension-host.ts";
 import { exportBotTemplate } from "./extension-export.ts";
@@ -45,16 +45,12 @@ it("exporting with a new bot name keeps the portable profile and displayed name 
 });
 it("imports a Grok Skill from an ordinary GitHub Skill directory", async () => {
   const { root } = setup();
-  const { createHash } = await import("node:crypto");
   const { prepareGrokRecipe } = await import("./extension-grok.ts");
   const skill = "---\nname: report\ndescription: Report\n---\nRead the references.\n";
-  const sha = createHash("sha1").update(`blob ${Buffer.byteLength(skill)}\0`).update(skill).digest("hex");
+  const archive = zipSync({"repo-main/report/SKILL.md": strToU8(skill)});
   const fetcher: typeof fetch = async input => {
-    const url = String(input);
-    if (url.endsWith("/git/trees/main")) return Response.json({ tree: [{ path: "report", type: "tree", sha: "report-tree" }] });
-    if (url.endsWith("/git/trees/report-tree")) return Response.json({ tree: [{ path: "SKILL.md", type: "blob", mode: "100644", sha }] });
-    if (url.endsWith("/main/report/SKILL.md")) return new Response(skill);
-    throw new Error(`Unexpected request ${url}`);
+    if (String(input) !== "https://codeload.github.com/fixture/skills/zip/main") throw new Error(`Unexpected request ${input}`);
+    return new Response(archive);
   };
   const draft = await prepareGrokRecipe({ name: "Grok remote Skill", instructions: "Use report.", skills: [{ name: "report", sourceUrl: "https://github.com/fixture/skills/tree/main/report" }] }, root, "grok-bot", fetcher);
   expect(draft.skills.map(value => value.name)).toEqual(["report"]);

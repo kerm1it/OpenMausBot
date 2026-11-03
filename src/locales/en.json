@@ -6324,5 +6324,11 @@
   "extension.pluginState.installed": "Reuse the installed version",
   "extension.pluginState.install": "Will install into the shared library",
   "extension.pluginState.different": "A different version is already installed",
-  "extension.pluginState.unavailable": "Source could not be resolved"
+  "extension.pluginState.unavailable": "Source could not be resolved",
+  "extension.progress.template": "Downloading the bot template",
+  "extension.progress.skills": "Reading Skills ({completed}/{total}) {name}",
+  "extension.progress.plugin": "Preparing plugin: {name}",
+  "extension.progress.download": "Download progress",
+  "extension.progress.elapsed": "Elapsed: {seconds}s",
+  "extension.progress.retry": "Retrying download (attempt {attempt})"
 }

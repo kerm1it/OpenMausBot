@@ -27696,7 +27696,13 @@
       "extension.pluginState.different": "340c6d7a5af883db273cb6e86d627b94b58f2b71c7042ebdbdb6b7f863bf8506",
       "extension.pluginState.unavailable": "8919a375d29031eb610373af3d0b6debab4c01e856b51848c5916ef85046b226",
       "skills.library.importHint": "a4f0ecc467b44121d66bf04284694436015aa3f45cac24342c7a65b6c5ae6752",
-      "skills.library.importPlaceholder": "f0a00c2b38692a3f037546103649e2ae4e9d6208f37b278010df212c9867d0d0"
+      "skills.library.importPlaceholder": "f0a00c2b38692a3f037546103649e2ae4e9d6208f37b278010df212c9867d0d0",
+      "extension.progress.template": "d9641df205c605cece39edaedae898bc9a7b162c2ffcdfc98794f2d19f05335a",
+      "extension.progress.skills": "2c31010fb714babd802e1ae0f67a6b4c845b38bab21bc495d1c33db19d35506d",
+      "extension.progress.plugin": "050ef12c77e55c12350409f5cd105e52f8338a7fe1783fda6e62fac34d0e1780",
+      "extension.progress.download": "984b84c29bb8365875e901210c10874efefe9bb4e751e19c78be4f47b4125142",
+      "extension.progress.elapsed": "6369dc5f5f2bba26bc9f05894b3e7e7b37f4db37fe3bf81d95583100955dac01",
+      "extension.progress.retry": "3386ffb980b91422c64ed6292b3ace388d1dec3acbfbeb9381a3d420980f933e"
     },
     "zh-tw": {
       "whop.description": "1a07cf04ef17029448d3781415cbac16d54e66b821907a40d94e0e6349710e70",

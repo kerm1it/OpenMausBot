@@ -6,7 +6,13 @@ Native plugin installation requires an HTTP(S) source. Local archive selection i
 
 ## Manifest and resource roots
 
-OpenMausBot resources use the marketplace's `extension.json`, `schemaVersion: 1`. Entry points are paths relative to the extension root. There is no required `files` index. Download the complete target directory, including hidden directories and supporting Skill files. Do not download the entire marketplace repository to import one resource.
+OpenMausBot resources use the marketplace's `extension.json`, `schemaVersion: 1`. Entry points are paths relative to the extension root. There is no required `files` index. Import preserves the complete target directory, including hidden directories and supporting Skill files.
+
+GitHub directory sources download a repository ZIP snapshot directly from `codeload.github.com`, using the supplied branch, tag or commit, or `HEAD` when no ref is supplied. Only the selected directory is extracted. Network traffic includes the repository archive, with a 64 MiB download limit; unrelated directories are not installed. This path does not use the GitHub REST API. Grok marketplace IDs download their self-contained `recipe.json` or plugin metadata directly from `raw.githubusercontent.com`, then resolve any external implementation sources.
+
+Preparing a preview has a three-minute overall budget, and each plugin dependency has a 150-second budget. GitHub ZIP downloads use system `curl` when available, streaming received bytes into the progress response; systems without `curl` use fetch against the same direct URL. Curl ignores personal configuration, stops stalled transfers, and allows up to two minutes for an active archive download. Transient download failures are retried once within the overall budgets. An unavailable dependency is shown in the preview and requires explicit omission before creating the bot. Closing the dialog cancels its downloads and removes temporary preparation files.
+
+The desktop opts into newline-delimited JSON progress on the preparation endpoint. Events identify template download, Skill processing, the active plugin, received bytes and retry attempts, followed by the prepared preview or an error. Clients without the streaming Accept header retain the ordinary JSON response.
 
 `entrypoints.skills` identifies each `SKILL.md`; its parent directory is the Skill root. References, scripts, assets, empty files, nested paths and executable bits belong to that Skill. Import creates a bot-private copy without copying approval or modifying a same-named shared library item.
 
@@ -72,6 +78,8 @@ openmausbot://app/v1/import?type=plugin&source=openmausbot&url=<encoded-https-so
 Users do not enter a marketplace URL, branch or commit. The application resolves a market ID automatically. Explicit refs in manually supplied addresses or upstream metadata are honored; there is no mandatory commit-locking step. Preview and confirmation use the same downloaded snapshot. Receiving a link never executes code or enables routines.
 
 The legacy `openmausbot://install?url=...` remains supported. OpenMausBot does not register itself as the operating system's `grokbot://` handler; original Grok links can be pasted into the import dialog or wrapped in an OpenMausBot link.
+
+The Grok adapter converts human-readable Skill names to portable names and expands YAML multiline descriptions before local validation. It preserves Skill bodies, other frontmatter metadata and supporting files; already portable `SKILL.md` files remain unchanged.
 
 ## Native Skill directories
 

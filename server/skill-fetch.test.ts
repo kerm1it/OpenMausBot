@@ -1,3 +1,4 @@
+import { zipSync, type Zippable } from "fflate";
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { fetchSkillFromSource, parseSkillSource } from "./skill-fetch.ts";
@@ -35,6 +36,11 @@ function repository(files: Record<string, FixtureFile>) {
         if (folder === undefined) return new Response("missing", { status: 404 });
         return Response.json({ tree: listing(folder).map(entry => ({ ...entry, path: entry.name, type: entry.type === "dir" ? "tree" : "blob", mode: entry.type === "dir" ? "040000" : entry.mode })) });
       }
+    }
+    if (url.hostname === "codeload.github.com") {
+      const entries: Zippable = {};
+      for (const [path, file] of Object.entries(files)) entries[`repo-main/${path}`] = [Buffer.from(file.content), { os: 3, attrs: parseInt(file.mode ?? (file.executable ? "100755" : "100644"), 8) << 16 }];
+      return new Response(zipSync(entries));
     }
     if (url.hostname === "raw.githubusercontent.com") {
       const file = files[decodeURIComponent(url.pathname.slice("/a/b/main/".length))];
@@ -84,6 +90,7 @@ describe("complete GitHub Skill downloads", () => {
     expect("skills" in result && result.skills).toHaveLength(30);
     expect(fixture.peak()).toBeLessThanOrEqual(6);
     expect(vi.mocked(fixture.fetcher).mock.calls.length).toBeLessThanOrEqual(512);
+    expect(vi.mocked(fixture.fetcher).mock.calls.filter(([input]) => String(input).includes("codeload.github.com"))).toHaveLength(1);
   });
 
   it("discovers a skills.sh named skill by frontmatter and keeps its complete directory", async () => {
@@ -97,7 +104,7 @@ describe("complete GitHub Skill downloads", () => {
 
   it("rejects symlinks instead of copying their target into the Skill", async () => {
     const fixture = repository({ "SKILL.md": { content: text("linked") }, "data": { content: "/etc/passwd", mode: "120000" } });
-    expect(await fetchSkillFromSource("https://github.com/a/b/tree/main", fixture.fetcher)).toEqual({ error: expect.stringContaining("link, submodule or special file") });
+    expect(await fetchSkillFromSource("https://github.com/a/b/tree/main", fixture.fetcher)).toEqual({ error: expect.stringContaining("cannot contain links or special files") });
   });
 });
 
@@ -128,7 +135,7 @@ describe("Skill fetch boundaries", () => {
 
   it("refuses a redirected GitHub download that leaves the pinned hosts", async () => {
     const fixture = repository({ "SKILL.md": { content: text("redirect") } });
-    const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => String(input).includes("raw.githubusercontent.com")
+    const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit) => String(input).includes("codeload.github.com")
       ? new Response(null, { status: 302, headers: { location: "https://evil.example.com/skill" } }) : fixture.fetcher(input, init)) as typeof fetch;
     expect(await fetchSkillFromSource("https://raw.githubusercontent.com/a/b/main/SKILL.md", fetcher)).toEqual({ error: expect.stringContaining("must stay") });
     expect(vi.mocked(fetcher).mock.calls.some(([input]) => String(input).includes("evil.example.com"))).toBe(false);

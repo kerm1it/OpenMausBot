@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/state/store";
 import { t } from "@/lib/i18n";
+import { formatBytes } from "@/lib/memory";
 import { prepareExtension, prepareExtensionFile, discardExtension, importExtension } from "@/lib/extension-client";
 import type { ExtensionInput } from "@/lib/extension-events";
-import type { ExtensionFilePreview, ExtensionImportOptions, ExtensionImportPreview, ExtensionImportResult } from "../../shared/extension-import";
+import type { ExtensionFilePreview, ExtensionImportOptions, ExtensionImportPreview, ExtensionImportResult, ExtensionPreparationProgress } from "../../shared/extension-import";
 import { ExtensionDialogShell, extensionButtonClass, extensionFieldClass } from "./ExtensionDialogShell";
 
 function FileList({ files, previewId }: { files: ExtensionFilePreview[]; previewId: string }) {
@@ -27,6 +28,8 @@ export function ExtensionImportDialog({ initialInput, onClose, onImported }: {
   const [input, setInput] = useState(typeof initialInput === "string" ? initialInput : "");
   const [preview, setPreview] = useState<ExtensionImportPreview | null>(null);
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<ExtensionPreparationProgress>({ stage: "template" });
+  const [elapsed, setElapsed] = useState(0);
   const [committing, setCommitting] = useState(false);
   const [error, setError] = useState("");
   const [name, setName] = useState("");
@@ -41,20 +44,30 @@ export function ExtensionImportDialog({ initialInput, onClose, onImported }: {
   const request = useRef<AbortController | null>(null);
   const alive = useRef(true);
   const generation = useRef(0);
+  useEffect(() => {
+    if (!busy) return;
+    const started = Date.now();
+    const timer = window.setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => window.clearInterval(timer);
+  }, [busy]);
   useEffect(() => { alive.current = true; return () => { alive.current = false; generation.current++; request.current?.abort(); if (prepared.current) void discardExtension(prepared.current); }; }, []);
   const prepare = async (value: ExtensionInput | File) => {
     request.current?.abort();
     const current = ++generation.current;
-    setBusy(true); setError("");
+    setBusy(true); setError(""); setProgress({ stage: "template" }); setElapsed(0);
     const controller = new AbortController(); request.current = controller;
     try {
-      const result = value instanceof File ? await prepareExtensionFile(value, controller.signal) : await prepareExtension(value, controller.signal);
+      const updateProgress = (next: ExtensionPreparationProgress) => { if (alive.current && current === generation.current) setProgress(next); };
+      const result = value instanceof File ? await prepareExtensionFile(value, controller.signal, updateProgress) : await prepareExtension(value, controller.signal, updateProgress);
       if (!alive.current || current !== generation.current) { void discardExtension(result.id); return; }
       prepared.current = result.id;
       setMemory(false); setRoutines(false);
       setOmittedPlugins([]); setReusedPlugins([]); setOmittedSkills([]);
       setPreview(result); setName(result.name);
-    } catch (cause) { if (alive.current && current === generation.current) setError(cause instanceof Error ? cause.message : String(cause)); }
+    } catch (cause) {
+      if (alive.current && current === generation.current) setError(cause instanceof Error && (cause.name === "TimeoutError" || (cause as Error & { status?: number }).status === 504)
+        ? t("error.plain.timeout") : cause instanceof Error ? cause.message : String(cause));
+    }
     finally { if (alive.current && current === generation.current) setBusy(false); }
   };
   useEffect(() => { if (initialInput) void prepare(initialInput); }, [initialInput]);
@@ -79,6 +92,15 @@ export function ExtensionImportDialog({ initialInput, onClose, onImported }: {
       <textarea className={`${extensionFieldClass} min-h-28`} aria-label={t("extension.source")} value={input} onChange={event => setInput(event.target.value)} placeholder="https://… / openmausbot://… / grokbot://…" disabled={busy} />
       <div className="flex items-center gap-3"><button className={extensionButtonClass} disabled={busy || !input.trim()} onClick={() => void prepare(input)}>{busy ? t("extension.preparing") : t("extension.preview")}</button>
         <label className="cursor-pointer text-[13px] text-accent">{t("extension.chooseFile")}<input className="sr-only" type="file" accept=".zip,.json" disabled={busy} onChange={event => { const file = event.target.files?.[0]; if (file) void prepare(file); }} /></label></div>
+      {busy && <div role="status" aria-live="polite" className="space-y-2 rounded-lg bg-control p-3 text-[13px]">
+        <p>{t(`extension.progress.${progress.stage}`, { name: progress.name ?? "", completed: progress.completed ?? 0, total: progress.total ?? 0 })}</p>
+        <progress className="h-2 w-full accent-accent" aria-label={t("extension.progress.download")} value={progress.totalBytes ? progress.receivedBytes ?? 0 : undefined} max={progress.totalBytes} />
+        <div className="flex flex-wrap justify-between gap-2 text-xs text-ink-secondary">
+          <span>{progress.receivedBytes !== undefined ? `${formatBytes(progress.receivedBytes)}${progress.totalBytes ? ` / ${formatBytes(progress.totalBytes)}` : ""}` : t("extension.preparing")}</span>
+          <span>{t("extension.progress.elapsed", { seconds: elapsed })}</span>
+        </div>
+        {(progress.attempt ?? 0) > 1 && <p className="text-xs text-ink-secondary">{t("extension.progress.retry", { attempt: progress.attempt! })}</p>}
+      </div>}
     </div> : <div className="space-y-4 text-[13px]">
       <div><div className="break-all text-xs text-ink-secondary">{preview.source} · {preview.type}</div><h3 className="mt-1 text-lg font-semibold">{preview.name}</h3><p className="whitespace-pre-wrap text-ink-secondary">{preview.description}</p></div>
       {preview.warnings.map((warning, index) => <p key={index} className="rounded-lg bg-control p-3 text-ink-secondary">{warning}</p>)}

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import type { ExtensionImportOptions, ExtensionImportPreview, ExtensionImportResult } from "../shared/extension-import.ts";
+import type { ExtensionImportOptions, ExtensionImportPreview, ExtensionImportResult, ExtensionPreparationProgress } from "../shared/extension-import.ts";
 import type { PreparedBotTemplate } from "./extension-model.ts";
 import { botPreview, checkPluginExtension, filePreviews } from "./extension-prepare.ts";
 import { commitDependencies, prepareDependencies, installedPluginIdentity, type ExtensionPlugins, type PreparedDependency } from "./extension-dependencies.ts";
@@ -10,6 +10,8 @@ import { resolveExtension, resolveExtensionDirectory, type ResolveExtensionDeps 
 import { extensionError, extensionRoot, resourceDigest, resourcePath } from "./extension-source.ts";
 import { extractResourceArchive } from "./plugins.ts";
 import type { RequestAuth } from "./request-auth.ts";
+import { extensionFetch, EXTENSION_PREPARE_TIMEOUT_MS } from "./extension-fetch.ts";
+import { githubArchiveFetch } from "./github-archive-fetch.ts";
 
 interface Snapshot { stage: string; root: string; digest: string; expires: number; preview: ExtensionImportPreview; draft?: PreparedBotTemplate; dependencies: PreparedDependency[]; result?: ExtensionImportResult; pending?: Promise<ExtensionImportResult> }
 interface ExtensionHostDeps extends ResolveExtensionDeps {
@@ -21,6 +23,7 @@ const optionsSchema = z.object({ name: z.string().max(80).optional(), section: z
 
 export function createExtensionHost(deps: ExtensionHostDeps) {
   const snapshots = new Map<string, Snapshot>();
+  const preparing = new Set<AbortController>();
   const discard = (id: string) => {
     const snapshot = snapshots.get(id);
     if (!snapshot || snapshot.pending) return;
@@ -35,31 +38,40 @@ export function createExtensionHost(deps: ExtensionHostDeps) {
     if (!snapshot) extensionError("The import preview expired. Prepare the resource again.", 410);
     return snapshot;
   };
-  const prepare = async (input: unknown, archive?: Buffer): Promise<ExtensionImportPreview> => {
+  const prepare = async (input: unknown, archive?: Buffer, signal?: AbortSignal, onProgress?: (progress: ExtensionPreparationProgress) => void): Promise<ExtensionImportPreview> => {
     prune();
     if (snapshots.size >= 16) extensionError("Too many prepared imports. Close an existing preview.", 429);
     const id = randomUUID(), stage = join(deps.dataDir, "extension-imports", id);
+    const controller = new AbortController();
+    preparing.add(controller);
+    const deadline = AbortSignal.any([controller.signal, AbortSignal.timeout(EXTENSION_PREPARE_TIMEOUT_MS), ...signal ? [signal] : []]);
+    let progress: ExtensionPreparationProgress = { stage: "template" };
+    const report = (next: ExtensionPreparationProgress) => { progress = next; onProgress?.(next); };
+    const requestDeps = { ...deps, signal: deadline, onProgress: report, fetcher: extensionFetch(deps.fetcher ?? githubArchiveFetch, deadline, bytes => onProgress?.({ ...progress, ...bytes })) };
     mkdirSync(stage, { recursive: true });
     let dependencies: PreparedDependency[] = [];
     try {
+      report(progress);
       let resolved;
       if (archive) {
         await extractResourceArchive(archive, stage, `${stage}.tar`);
-        resolved = await resolveExtensionDirectory(extensionRoot(stage), undefined, undefined, "archive", deps);
+        resolved = await resolveExtensionDirectory(extensionRoot(stage), undefined, undefined, "archive", requestDeps);
         if (!("draft" in resolved)) extensionError("Local native plugin archives are not supported. Use an HTTP or HTTPS plugin source URL, or import Grok plugin metadata containing a remote source.");
-      } else resolved = await resolveExtension(input, stage, deps);
+      } else resolved = await resolveExtension(input, stage, requestDeps);
       let preview: ExtensionImportPreview, root: string;
       if ("draft" in resolved && resolved.draft) {
         const draft = resolved.draft;
         root = draft.root;
-        dependencies = await prepareDependencies(draft, stage, deps.plugins);
+        dependencies = await prepareDependencies(draft, stage, deps.plugins, requestDeps);
+        deadline.throwIfAborted();
         preview = botPreview(id, draft);
         preview.plugins = dependencies.map(value => value.preview);
         snapshots.set(id, { stage, root, digest: resourceDigest(root), expires: Date.now() + 30 * 60_000, preview, draft, dependencies });
       } else {
         if (!resolved.root || typeof resolved.source !== "string") extensionError("The plugin source could not be resolved");
         const expectedId = checkPluginExtension(resolved.root);
-        const prepared = await deps.plugins.prepare(resolved.source, resolved.root);
+        const prepared = await deps.plugins.prepare(resolved.source, resolved.root, requestDeps.fetcher);
+        if (deadline.aborted) { deps.plugins.discard(prepared); deadline.throwIfAborted(); }
         if (expectedId && expectedId !== prepared.id) { deps.plugins.discard(prepared); extensionError(`The native plugin ID does not match extension ${expectedId}`); }
         const current = deps.plugins.list().find(value => value.id === prepared.id);
         const same = current?.source === prepared.source && current.version === prepared.version && resourceDigest(current.path) === prepared.digest;
@@ -72,9 +84,10 @@ export function createExtensionHost(deps: ExtensionHostDeps) {
     } catch (error) {
       for (const dependency of dependencies) if (dependency.prepared) deps.plugins.discard(dependency.prepared);
       rmSync(stage, { recursive: true, force: true }); rmSync(`${stage}.tar`, { force: true });
+      if ((error as Error).name === "TimeoutError" || (deadline.aborted && deadline.reason?.name === "TimeoutError")) extensionError("Preparing the template timed out. Check the source connection and try again.", 504);
       if (error instanceof z.ZodError) extensionError(`Invalid extension contents: ${error.issues[0]?.message}`);
       throw error;
-    }
+    } finally { preparing.delete(controller); }
   };
   const importSnapshot = (id: string, rawOptions: unknown, auth: RequestAuth): Promise<ExtensionImportResult> => {
     const snapshot = get(id);
@@ -103,7 +116,7 @@ export function createExtensionHost(deps: ExtensionHostDeps) {
   };
   return { prepare, import: importSnapshot, discard,
     file(id: string, path: string) { const snapshot = get(id); if (snapshot.result) extensionError("This import has completed", 410); if (!snapshot.preview.files.some(file => file.path === path)) extensionError("Resource file was not found", 404); return readFileSync(resourcePath(snapshot.root, path)); },
-    close() { for (const id of snapshots.keys()) discard(id); },
+    close() { for (const controller of preparing) controller.abort(); for (const id of snapshots.keys()) discard(id); },
   };
 }
 export type ExtensionHost = ReturnType<typeof createExtensionHost>;

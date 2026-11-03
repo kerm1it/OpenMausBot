@@ -4,30 +4,33 @@ import type { ExtensionPluginPreview } from "../shared/extension-import.ts";
 import type { PreparedBotTemplate } from "./extension-model.ts";
 import type { createPluginService } from "./plugin-service.ts";
 import type { PreparedPlugin } from "./plugins.ts";
-import { resolveExtension } from "./extension-resolve.ts";
+import { resolveExtension, type ResolveExtensionDeps } from "./extension-resolve.ts";
 import { extensionError, resourceDigest } from "./extension-source.ts";
+import { extensionFetch, EXTENSION_DEPENDENCY_TIMEOUT_MS } from "./extension-fetch.ts";
 
 export type ExtensionPlugins = ReturnType<typeof createPluginService>;
 export interface PreparedDependency { preview: ExtensionPluginPreview; prepared?: PreparedPlugin; committed?: boolean; installedIdentity?: string }
 
 export const installedPluginIdentity = (plugin: ReturnType<ExtensionPlugins["list"]>[number]) => JSON.stringify([plugin.source, plugin.version, plugin.installedAt, resourceDigest(plugin.path)]);
 
-export async function prepareDependencies(draft: PreparedBotTemplate, stage: string, plugins: ExtensionPlugins): Promise<PreparedDependency[]> {
+export async function prepareDependencies(draft: PreparedBotTemplate, stage: string, plugins: ExtensionPlugins, deps: ResolveExtensionDeps = {}): Promise<PreparedDependency[]> {
   const out: PreparedDependency[] = [];
   for (const [index, ref] of draft.pluginReferences.entries()) {
+    deps.onProgress?.({ stage: "plugin", name: ref.name ?? ref.id, completed: index, total: draft.pluginReferences.length });
     let prepared: PreparedPlugin | undefined;
     try {
+      const fetcher = extensionFetch(deps.fetcher ?? fetch, AbortSignal.timeout(EXTENSION_DEPENDENCY_TIMEOUT_MS));
       const installed = plugins.list().find(plugin => plugin.id === ref.id);
       if (!ref.source && installed && ref.ecosystem === "grok-bot" && !/^\d+$/.test(ref.id)) {
         out.push({ installedIdentity: installedPluginIdentity(installed), preview: { id: installed.id, name: ref.name ?? installed.id, optional: ref.optional, source: installed.source, version: installed.version, installedVersion: installed.version, state: "installed" } });
         continue;
       }
-      if (ref.source) prepared = await plugins.prepare(ref.source);
+      if (ref.source) prepared = await plugins.prepare(ref.source, undefined, fetcher);
       else {
         const directory = join(stage, `dependency-${index}`);
         mkdirSync(directory, { recursive: true });
         try {
-          const resolved = await resolveExtension({ type: "plugin", source: ref.ecosystem, id: ref.id }, directory);
+          const resolved = await resolveExtension({ type: "plugin", source: ref.ecosystem, id: ref.id }, directory, { ...deps, fetcher });
           if (!("root" in resolved) || !resolved.root || typeof resolved.source !== "string") extensionError("Plugin dependency did not resolve to an implementation");
           prepared = await plugins.prepare(resolved.source, resolved.root);
         } finally { rmSync(directory, { recursive: true, force: true }); }
@@ -40,7 +43,7 @@ export async function prepareDependencies(draft: PreparedBotTemplate, stage: str
         source: prepared.source, version: prepared.version, ...(current ? { installedVersion: current.version } : {}), state: current ? same ? "installed" : "different" : "install" } });
     } catch (error) {
       if (prepared) plugins.discard(prepared);
-      out.push({ preview: { id: ref.id, name: ref.name ?? ref.id, optional: ref.optional, state: "unavailable", error: error instanceof Error ? error.message : String(error) } });
+      out.push({ preview: { id: ref.id, name: ref.name ?? ref.id, optional: ref.optional, state: "unavailable", error: (error as Error).name === "TimeoutError" ? "Plugin preparation timed out. Retry the preview or explicitly omit this plugin." : error instanceof Error ? error.message : String(error) } });
     }
   }
   return out;

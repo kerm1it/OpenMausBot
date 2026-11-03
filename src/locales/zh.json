@@ -3203,5 +3203,11 @@
   "extension.pluginState.different": "已安装其他版本",
   "extension.pluginState.unavailable": "无法获取来源",
   "skills.library.importHint": "粘贴 GitHub 或 skills.sh 目录链接以导入包含脚本和附件的完整 Skill，也可以粘贴 SKILL.md 文本。",
-  "skills.library.importPlaceholder": "https://github.com/owner/repo/tree/main/skills/my-skill\n\n或粘贴 SKILL.md 文本…"
+  "skills.library.importPlaceholder": "https://github.com/owner/repo/tree/main/skills/my-skill\n\n或粘贴 SKILL.md 文本…",
+  "extension.progress.template": "正在下载 Bot 模板",
+  "extension.progress.skills": "正在读取 Skill（{completed}/{total}）{name}",
+  "extension.progress.plugin": "正在准备插件：{name}",
+  "extension.progress.download": "下载进度",
+  "extension.progress.elapsed": "已用时 {seconds} 秒",
+  "extension.progress.retry": "正在重试下载（第 {attempt} 次）"
 }

@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { pluginSourceSchema } from "../shared/plugins.ts";
 import { extractResourceArchive, resourcePath } from "./resource-directory.ts";
+import { RESOURCE_REQUEST_TIMEOUT_MS } from "./extension-fetch.ts";
+import { githubArchiveFetch } from "./github-archive-fetch.ts";
 
 export const EXTENSION_MAX_BYTES = 64 * 1024 * 1024;
 export const EXTENSION_MAX_FILES = 10_000;
@@ -52,7 +54,7 @@ export function marketSource(source: "openmausbot" | "grok-bot", type: "bot" | "
 }
 
 export async function responseBytes(response: Response, max: number): Promise<Buffer> {
-  if (Number(response.headers.get("content-length") ?? 0) > max) extensionError("Resource exceeds the download budget", 413);
+  if (Number(response.headers.get("content-length") ?? 0) > max) { await response.body?.cancel(); extensionError("Resource exceeds the download budget", 413); }
   const chunks: Uint8Array[] = [];
   let size = 0;
   for await (const chunk of response.body ?? []) {
@@ -63,11 +65,22 @@ export async function responseBytes(response: Response, max: number): Promise<Bu
   return Buffer.concat(chunks);
 }
 
-export async function downloadResource(url: string, fetcher: typeof fetch = fetch, limit = EXTENSION_MAX_BYTES): Promise<Buffer> {
+export async function downloadResource(url: string, fetcher: typeof fetch = githubArchiveFetch, limit = EXTENSION_MAX_BYTES, timeoutMs = RESOURCE_REQUEST_TIMEOUT_MS): Promise<Buffer> {
+  for (let attempt = 0; ; attempt++) {
+    try { return await downloadResourceOnce(url, fetcher, limit, timeoutMs); }
+    catch (error) {
+      const retryable = error instanceof TypeError || (error as Error).name === "TimeoutError" || [502, 503, 504].includes((error as {status?:number}).status ?? 0);
+      if (attempt > 0 || !retryable) throw error;
+    }
+  }
+}
+
+async function downloadResourceOnce(url: string, fetcher: typeof fetch, limit: number, timeoutMs: number): Promise<Buffer> {
   let current = url;
+  const signal = AbortSignal.timeout(timeoutMs);
   for (let redirects = 0; redirects < 6; redirects++) {
     if (!pluginSourceSchema.safeParse(current).success) extensionError("Use an HTTP or HTTPS resource URL without embedded credentials");
-    const response = await fetcher(current, { redirect: "manual", signal: AbortSignal.timeout(60_000), headers: { "user-agent": "OpenMausBot-extension-import" } });
+    const response = await fetcher(current, { redirect: "manual", signal, headers: { "user-agent": "OpenMausBot-extension-import" } });
     if (response.status >= 300 && response.status < 400 && response.headers.has("location")) {
       await response.body?.cancel();
       const next = new URL(response.headers.get("location")!, current);
@@ -75,78 +88,34 @@ export async function downloadResource(url: string, fetcher: typeof fetch = fetc
       current = next.href;
       continue;
     }
-    if (!response.ok) extensionError(`Resource download failed (HTTP ${response.status})`, response.status === 404 ? 404 : 502);
-    return responseBytes(response, limit);
+    if (!response.ok) {
+      await response.body?.cancel();
+      extensionError(`Resource download failed (HTTP ${response.status})`, response.status);
+    }
+    return await responseBytes(response, limit);
   }
   return extensionError("Too many resource redirects");
 }
 
-interface GitEntry { path: string; type: "blob" | "tree" | "commit"; mode: string; sha: string; size?: number }
-interface GitTree { tree: GitEntry[]; truncated?: boolean }
-
-export async function downloadGithubDirectory(source: ExtensionSource, target: string, fetcher: typeof fetch = fetch): Promise<void> {
+export async function downloadGithubDirectory(source: ExtensionSource, target: string, fetcher: typeof fetch = githubArchiveFetch): Promise<void> {
   if (!/^[\w.-]+\/[\w.-]+$/.test(source.repository)) extensionError("Invalid GitHub repository");
   resourcePath(target, source.path || ".");
-  const api = `https://api.github.com/repos/${source.repository}`;
-  const getJson = async (url: string) => JSON.parse((await downloadResource(url, fetcher, 8 * 1024 * 1024)).toString("utf8"));
-  let ref = source.ref ?? (await getJson(api)).default_branch;
-  let directoryPath = source.path;
-  if (typeof ref !== "string" || !ref) extensionError("GitHub did not provide a default branch");
-  const readTree = async (sha: string, recursive = false): Promise<GitTree> => {
-    const tree = await getJson(`${api}/git/trees/${encodeURIComponent(sha)}${recursive ? "?recursive=1" : ""}`);
-    if (!Array.isArray(tree.tree)) extensionError("GitHub returned an invalid directory");
-    return tree;
-  };
-  let root: GitTree;
-  try { root = await readTree(ref); } catch (error) {
-    if ((error as {status?:number}).status !== 404 || !directoryPath) throw error;
-    const parts = directoryPath.split("/");
-    for (;;) {
-      const next = parts.shift();
-      if (!next) throw error;
-      ref += `/${next}`;
-      try { root = await readTree(ref); directoryPath = parts.join("/"); break; }
-      catch (candidateError) { if ((candidateError as {status?:number}).status !== 404) throw candidateError; }
+  let ref = source.ref ?? "HEAD";
+  let directoryPath = source.path.replace(/\/$/, "");
+  const remaining = directoryPath.split("/").filter(Boolean);
+  for (;;) {
+    let bytes: Buffer;
+    try {
+      const url = `https://codeload.github.com/${source.repository}/zip/${encodeURIComponent(ref)}`;
+      bytes = await downloadResource(url, fetcher, EXTENSION_MAX_BYTES, 120_000);
+    } catch (error) {
+      if ((error as {status?:number}).status !== 404 || !source.ref || !remaining.length) throw error;
+      ref += `/${remaining.shift()}`;
+      directoryPath = remaining.join("/");
+      continue;
     }
-  }
-  for (const part of directoryPath.split("/").filter(Boolean)) {
-    const entry = root.tree.find(item => item.path === part && item.type === "tree");
-    if (!entry) extensionError(`GitHub resource directory was not found: ${source.path}`, 404);
-    root = await readTree(entry.sha);
-  }
-  const entries: GitEntry[] = [];
-  const walk = async (tree: GitTree, prefix: string): Promise<void> => {
-    for (const entry of tree.tree) {
-      const path = prefix ? `${prefix}/${entry.path}` : entry.path;
-      resourcePath(target, path);
-      if (entry.type === "tree") await walk(await readTree(entry.sha), path);
-      else {
-        if (entry.type !== "blob" || !["100644", "100755"].includes(entry.mode)) extensionError(`Resource contains a link, submodule or special file: ${path}`);
-        entries.push({ ...entry, path });
-        if (entries.length > EXTENSION_MAX_FILES) extensionError("Resource exceeds the file-count limit", 413);
-      }
-    }
-  };
-  await walk(root, "");
-  if (!entries.length) extensionError("The resource directory is empty");
-  mkdirSync(target, { recursive: true });
-  let total = 0;
-  for (let offset = 0; offset < entries.length; offset += 6) {
-    const results = await Promise.allSettled(entries.slice(offset, offset + 6).map(async entry => {
-      const path = [directoryPath, entry.path].filter(Boolean).join("/");
-      const url = `https://raw.githubusercontent.com/${source.repository}/${encodeURIComponent(ref)}/${path.split("/").map(encodeURIComponent).join("/")}`;
-      const bytes = await downloadResource(url, fetcher);
-      total += bytes.length;
-      if (total > EXTENSION_MAX_BYTES) extensionError("Resource exceeds the directory-size limit", 413);
-      const blob = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
-      if (blob !== entry.sha) extensionError("The source changed during download. Prepare it again.", 409);
-      const file = resourcePath(target, entry.path);
-      mkdirSync(dirname(file), { recursive: true });
-      writeFileSync(file, bytes);
-      chmodSync(file, entry.mode === "100755" ? 0o755 : 0o644);
-    }));
-    const failed = results.find(result => result.status === "rejected");
-    if (failed?.status === "rejected") throw failed.reason;
+    try { await extractResourceArchive(bytes, target, `${target}.tar`, directoryPath); return; }
+    finally { rmSync(`${target}.tar`, { force: true }); }
   }
 }
 
@@ -181,7 +150,7 @@ export function extensionRoot(root: string): string {
   return extensionError("No extension manifest, recipe or native plugin found at the resource root");
 }
 
-export async function fetchExtensionSource(source: string | ExtensionSource, target: string, fetcher: typeof fetch = fetch): Promise<string> {
+export async function fetchExtensionSource(source: string | ExtensionSource, target: string, fetcher: typeof fetch = githubArchiveFetch): Promise<string> {
   const github = typeof source === "string" ? githubSource(source) : source;
   if (github) await downloadGithubDirectory(github, target, fetcher);
   else {

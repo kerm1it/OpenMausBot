@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { downloadGithubDirectory, githubSource } from "./extension-source.ts";
+import { githubArchiveFetch } from "./github-archive-fetch.ts";
 import { readSkillDirectoryFiles, type SkillFile } from "./skill-files.ts";
 import { z } from "zod";
 
@@ -13,15 +14,20 @@ class ImportLimitError extends Error {}
 function boundedImportFetch(fetcher: typeof fetch): typeof fetch {
   let requests = 0;
   let bytes = 0;
+  const archives = new Map<string, Buffer>();
   const signal = AbortSignal.timeout(60_000);
   return async (input, init) => {
     const url = new URL(String(input));
-    if (url.protocol !== "https:" || url.username || url.password || url.port || !["api.github.com", "raw.githubusercontent.com"].includes(url.hostname)) {
-      throw new Error("Skill downloads must stay on https://api.github.com or https://raw.githubusercontent.com");
+    if (url.protocol !== "https:" || url.username || url.password || url.port || !["api.github.com", "raw.githubusercontent.com", "codeload.github.com"].includes(url.hostname)) {
+      throw new Error("Skill downloads must stay on trusted GitHub download hosts");
     }
+    signal.throwIfAborted();
+    init?.signal?.throwIfAborted();
+    const cached = archives.get(url.href);
+    if (cached) return new Response(cached);
     if (++requests > 512) throw new ImportLimitError("Import request limit reached — paste a specific skill folder instead.");
     signal.throwIfAborted();
-    const response = await fetcher(input, { ...init, signal });
+    const response = await fetcher(input, { ...init, signal: init?.signal ? AbortSignal.any([signal, init.signal]) : signal });
     if (!response.ok) {
       await response.body?.cancel().catch(() => {});
       return response;
@@ -45,7 +51,9 @@ function boundedImportFetch(fetcher: typeof fetch): typeof fetch {
     } finally {
       await reader.cancel().catch(() => {});
     }
-    return new Response(Buffer.concat(chunks), { status: response.status, headers: response.headers });
+    const content = Buffer.concat(chunks);
+    if (url.hostname === "codeload.github.com") archives.set(url.href, content);
+    return new Response(content, { status: response.status, headers: response.headers });
   };
 }
 
@@ -233,7 +241,7 @@ export async function fetchSkillDir(target: Target, dir: string, fetcher: typeof
 
 export async function fetchSkillFromSource(
   input: string,
-  fetcher: typeof fetch = fetch,
+  fetcher: typeof fetch = githubArchiveFetch,
 ): Promise<{ skills: FetchedSkill[] } | { error: string }> {
   const parsed = parseSkillSource(input);
   if ("error" in parsed) return parsed;

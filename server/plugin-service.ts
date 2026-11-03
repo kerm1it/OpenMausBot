@@ -31,7 +31,7 @@ export function createPluginService(deps: {
   };
   return {
     list: () => library.list(),
-    prepare: (source: string, directory?: string) => library.prepare(source, directory),
+    prepare: (source: string, directory?: string, fetcher?: typeof fetch) => library.prepare(source, directory, fetcher),
     discard: (prepared: PreparedPlugin) => library.discard(prepared),
     commit: (prepared: PreparedPlugin, requireActive?: () => void) => library.commit(prepared, (plugin, replacing) => {
       if (replacing) requireIdle(plugin.id, requireActive);

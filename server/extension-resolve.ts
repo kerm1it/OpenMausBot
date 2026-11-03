@@ -1,16 +1,18 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ExtensionImportRequest } from "../shared/extension-import.ts";
+import type { ExtensionImportRequest, ExtensionPreparationProgress } from "../shared/extension-import.ts";
 import { extensionImportFromLink, isExtensionImportRequest } from "../shared/extension-link.mjs";
 import { defaultCursorSession } from "./cursor-session.ts";
 import { fetchGrokTemplateCard } from "./team-library.ts";
 import { fetchGrokPlugin, grokPluginSource, prepareGrokRecipe } from "./extension-grok.ts";
 import { checkPluginExtension, prepareOpenMausBot, readResourceJson } from "./extension-prepare.ts";
-import { extensionError, fetchExtensionSource, marketSource, resourcePath, type ExtensionSource } from "./extension-source.ts";
+import { downloadResource, extensionError, fetchExtensionSource, marketSource, resourcePath, type ExtensionSource } from "./extension-source.ts";
 
 export interface ResolveExtensionDeps {
   fetcher?: typeof fetch;
-  fetchGrokBot?: (id: string) => Promise<unknown>;
+  fetchGrokBot?: (id: string, signal?: AbortSignal) => Promise<unknown>;
+  signal?: AbortSignal;
+  onProgress?: (progress: ExtensionPreparationProgress) => void;
 }
 
 export function parseExtensionInput(input: unknown): ExtensionImportRequest | Record<string, unknown> {
@@ -34,19 +36,30 @@ export async function resolveExtension(input: unknown, stage: string, deps: Reso
       const source = grokPluginSource(raw);
       return { root: await fetchExtensionSource(source, stage, deps.fetcher), source, type: "plugin" as const };
     }
-    return { draft: await prepareGrokRecipe(request, stage, "grok-bot", deps.fetcher) };
+    return { draft: await prepareGrokRecipe(request, stage, "grok-bot", deps.fetcher, deps.onProgress) };
   }
   const typed = request as ExtensionImportRequest;
   let root: string;
   let source: string | ExtensionSource = typed.url ?? marketSource(typed.source!, typed.type!, typed.id!);
-  try { root = await fetchExtensionSource(source, stage, deps.fetcher); }
+  try {
+    if (typed.id && typed.source === "grok-bot") {
+      const directory = marketSource(typed.source, typed.type!, typed.id);
+      const file = typed.type === "bot" ? "recipe.json" : "plugin.json";
+      const url = `https://raw.githubusercontent.com/${directory.repository}/${directory.ref}/${directory.path}/${file}`;
+      const bytes = await downloadResource(url, deps.fetcher);
+      mkdirSync(stage, { recursive: true });
+      writeFileSync(join(stage, file), bytes);
+      root = stage;
+    } else root = await fetchExtensionSource(source, stage, deps.fetcher);
+  }
   catch (error) {
     if (!typed.id || typed.source !== "grok-bot" || (error as {status?:number}).status !== 404) throw error;
     if (typed.type === "bot") {
-      const recipe = deps.fetchGrokBot ? await deps.fetchGrokBot(typed.id) : await defaultCursorSession().fetchRawTemplate(await fetchGrokTemplateCard(`https://x.ai/bot/${typed.id}`));
+      const recipe = deps.fetchGrokBot ? await deps.fetchGrokBot(typed.id, deps.signal) : await defaultCursorSession().fetchRawTemplate(await fetchGrokTemplateCard(`https://x.ai/bot/${typed.id}`, deps.fetcher), deps.signal);
+      deps.signal?.throwIfAborted();
       mkdirSync(stage, { recursive: true });
       writeFileSync(join(stage, "recipe.json"), JSON.stringify(recipe));
-      return { draft: await prepareGrokRecipe(recipe, stage, "grok-bot", deps.fetcher) };
+      return { draft: await prepareGrokRecipe(recipe, stage, "grok-bot", deps.fetcher, deps.onProgress) };
     }
     const plugin = await fetchGrokPlugin(typed.id, deps.fetcher);
     source = grokPluginSource(plugin);
@@ -69,7 +82,7 @@ export async function resolveExtensionDirectory(root: string, source?: string, t
   if (existsSync(resourcePath(root, "recipe.json")) || existsSync(resourcePath(root, "template.json"))) {
     if (type === "plugin" || (source && source !== "grok-bot")) extensionError("The resource is a Grok bot recipe");
     const file = existsSync(resourcePath(root, "recipe.json")) ? "recipe.json" : "template.json";
-    return { draft: await prepareGrokRecipe(readResourceJson(root, file), root, "grok-bot", deps.fetcher) };
+    return { draft: await prepareGrokRecipe(readResourceJson(root, file), root, "grok-bot", deps.fetcher, deps.onProgress) };
   }
   if (source === "grok-bot" && existsSync(resourcePath(root, "plugin.json"))) {
     const metadata = readResourceJson(root, "plugin.json") as Record<string, unknown>;

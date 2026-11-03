@@ -67,6 +67,27 @@ it("keeps source failures visible and never calls import", async () => {
   expect(document.querySelector('[role="alert"]')?.textContent).toContain("Marketplace resource not found");
   expect(importPrepared).not.toHaveBeenCalled();
 });
+it("shows a readable timeout and allows retrying the source", async () => {
+  prepare.mockRejectedValueOnce(new DOMException("The operation was aborted due to timeout", "TimeoutError")).mockResolvedValueOnce(preview);
+  await act(async () => root.render(createElement(ExtensionImportDialog, { initialInput: "https://fixture.test/recipe.json", onClose: vi.fn(), onImported: vi.fn() })));
+  expect(document.querySelector('[role="alert"]')?.textContent).toBe("That took too long. Try again.");
+  await click("Preview");
+  expect(document.body.textContent).toContain(preview.name);
+  expect(document.querySelector('[role="alert"]')).toBeNull();
+});
+it("shows the active plugin, actual bytes and retry state while preparing", async () => {
+  prepare.mockImplementation((_input, _signal, progress) => {
+    progress({ stage: "plugin", name: "pstack", receivedBytes: 2048, totalBytes: 4096, attempt: 2 });
+    return new Promise(() => {});
+  });
+  await act(async () => root.render(createElement(ExtensionImportDialog, { initialInput: "https://fixture.test/recipe.json", onClose: vi.fn(), onImported: vi.fn() })));
+  const status = document.querySelector('[role="status"]')!;
+  expect(status.textContent).toContain("Preparing plugin: pstack");
+  expect(status.textContent).toContain("2 KB / 4 KB");
+  expect(status.textContent).toContain("Retrying download (attempt 2)");
+  expect(status.querySelector("progress")?.value).toBe(2048);
+  expect(status.querySelector("progress")?.max).toBe(4096);
+});
 it("discards abandoned snapshots and survives StrictMode effect replay", async () => {
   prepare.mockResolvedValue(preview);
   await act(async () => root.render(createElement(StrictMode, null, createElement(ExtensionImportDialog, { initialInput: "{}", onClose: vi.fn(), onImported: vi.fn() }))));

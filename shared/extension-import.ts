@@ -9,6 +9,23 @@ export interface ExtensionImportRequest {
   url?: string;
 }
 
+/** Progress belongs to one preparation request; download bytes reset for each resource or retry. */
+export interface ExtensionPreparationProgress {
+  stage: "template" | "skills" | "plugin";
+  name?: string;
+  completed?: number;
+  total?: number;
+  receivedBytes?: number;
+  totalBytes?: number;
+  attempt?: number;
+}
+
+/** Streaming preparation ends with either a prepared snapshot or an error. */
+export type ExtensionPreparationEvent =
+  | { type: "progress"; progress: ExtensionPreparationProgress }
+  | { type: "ready"; preview: ExtensionImportPreview }
+  | { type: "error"; message: string; status: number };
+
 export interface ExtensionFilePreview {
   path: string;
   size: number;

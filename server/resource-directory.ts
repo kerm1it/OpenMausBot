@@ -35,8 +35,19 @@ export async function copyResourceDirectory(source: string, target: string): Pro
   await walk(source, target);
 }
 
-export async function extractResourceArchive(bytes: Buffer, target: string, archive: string) {
+export async function extractResourceArchive(bytes: Buffer, target: string, archive: string, subdirectory?: string) {
   mkdirSync(target, { recursive: true });
+  if (subdirectory !== undefined) resourcePath(target, subdirectory);
+  const selected = (subdirectory ?? "").replace(/^\.\//, "").replace(/\/$/, "");
+  const selectedPath = (name: string): string | null => {
+    resourcePath(target, name);
+    if (subdirectory === undefined) return name;
+    const slash = name.indexOf("/");
+    if (slash < 0) return null;
+    const path = name.slice(slash + 1);
+    if (!selected) return path;
+    return path === selected || path === `${selected}/` ? "" : path.startsWith(`${selected}/`) ? path.slice(selected.length + 1) : null;
+  };
   let total = 0;
   let files = 0;
   if (bytes[0] === 0x50 && bytes[1] === 0x4b) {
@@ -53,36 +64,40 @@ export async function extractResourceArchive(bytes: Buffer, target: string, arch
       const extraLength = bytes.readUInt16LE(offset + 30);
       const commentLength = bytes.readUInt16LE(offset + 32);
       const name = bytes.subarray(offset + 46, offset + 46 + nameLength).toString("utf8");
-      resourcePath(target, name);
+      const path = selectedPath(name);
       const mode = bytes.readUInt32LE(offset + 38) >>> 16;
       const type = mode & 0o170000;
-      if (type && type !== 0o100000 && type !== 0o040000) fail("Plugin archives cannot contain links or special files");
+      if (path !== null && type && type !== 0o100000 && type !== 0o040000) fail("Plugin archives cannot contain links or special files");
       modes.set(name, mode);
       offset += 46 + nameLength + extraLength + commentLength;
     }
     const entries = unzipSync(bytes, { filter: entry => {
-      resourcePath(target, entry.name);
+      if (selectedPath(entry.name) === null) return false;
       if (++files > MAX_FILES || (total += entry.originalSize) > MAX_BYTES) fail("Plugin archive exceeds size or file-count limit");
       return true;
     } });
     for (const [name, data] of Object.entries(entries)) {
-      const path = resourcePath(target, name);
+      const path = resourcePath(target, selectedPath(name)!);
       if (name.endsWith("/")) mkdirSync(path, { recursive: true });
       else { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, data); chmodSync(path, 0o644 | ((modes.get(name) ?? 0) & 0o111)); }
     }
   } else {
-    const expanded = bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes, { maxOutputLength: MAX_BYTES }) : bytes;
+    const expanded = bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes, { maxOutputLength: subdirectory === undefined ? MAX_BYTES : 4 * MAX_BYTES }) : bytes;
     writeFileSync(archive, expanded);
     // Inspect the complete archive before extraction; neither links nor device entries are installed.
     let invalid: Error | undefined;
+    const included = new Set<string>();
     await tar.t({ file: archive, onReadEntry: entry => {
       try {
-        resourcePath(target, entry.path);
+        const path = selectedPath(entry.path);
+        if (path === null || !path) return;
         if (!["File", "Directory", "ExtendedHeader", "GlobalExtendedHeader"].includes(entry.type)) fail("Plugin archives cannot contain links or special files");
         if (++files > MAX_FILES || (total += entry.size) > MAX_BYTES) fail("Plugin archive exceeds size or file-count limit");
+        included.add(entry.path);
       } catch (error) { invalid ??= error as Error; }
     } });
     if (invalid) throw invalid;
-    await tar.x({ file: archive, cwd: target, strict: true });
+    await tar.x({ file: archive, cwd: target, strict: true, strip: subdirectory === undefined ? 0 : 1 + (selected ? selected.split("/").length : 0), filter: path => included.has(path) });
   }
+  if (subdirectory !== undefined && !files) throw Object.assign(new Error(`GitHub resource directory was not found: ${subdirectory}`), { status: 404 });
 }

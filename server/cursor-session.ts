@@ -51,7 +51,7 @@ export interface CursorSession {
   signOut(): void;
   /** The full template as an export. Throws CursorFallback. */
   fetchTemplate(card: GrokTemplateCard): Promise<GrokExport>;
-  fetchRawTemplate(card: GrokTemplateCard): Promise<unknown>;
+  fetchRawTemplate(card: GrokTemplateCard, signal?: AbortSignal): Promise<unknown>;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -180,7 +180,7 @@ export function createCursorSession(options: { dataDir: string; fetcher?: typeof
     if (url.origin !== CURSOR_API) throw new CursorFallback("Maus only talks to api2.cursor.sh.");
     const headers = new Headers(init.headers);
     if (withToken && token) headers.set("authorization", `Bearer ${token}`);
-    return fetcher()(url.toString(), { ...init, headers, redirect: "error", signal: AbortSignal.timeout(TIMEOUT_MS) });
+    return fetcher()(url.toString(), { ...init, headers, redirect: "error", signal: AbortSignal.any([AbortSignal.timeout(TIMEOUT_MS), ...init.signal ? [init.signal] : []]) });
   };
 
   const pollOnce = async () => {
@@ -224,11 +224,12 @@ export function createCursorSession(options: { dataDir: string; fetcher?: typeof
   };
 
   /** One refresh with the refresh token Cursor gave at sign-in, as Cursor's CLI does; true when a new token is saved. */
-  const renew = async (): Promise<boolean> => {
+  const renew = async (signal?: AbortSignal): Promise<boolean> => {
     if (!refresh) return false;
     try {
       const response = await cursorFetch("/oauth/token", {
         method: "POST",
+        signal,
         headers: { "content-type": "application/json", "x-cursor-client-type": "cli" },
         body: JSON.stringify({ grant_type: "refresh_token", client_id: CURSOR_CLI_CLIENT_ID, refresh_token: refresh }),
       }, false);
@@ -261,13 +262,15 @@ export function createCursorSession(options: { dataDir: string; fetcher?: typeof
       lastError = "";
       forget();
     },
-    async fetchRawTemplate(card) {
+    async fetchRawTemplate(card, signal) {
+      signal?.throwIfAborted();
       if (!signedIn()) throw new CursorFallback(lastError || "Sign in with Cursor to import everything at once.");
       const ask = async () => {
         let response: Response;
         try {
           response = await cursorFetch(IMPORT_DETAILS_PATH, {
             method: "POST",
+            signal,
             headers: { "content-type": "application/json", "connect-protocol-version": "1" },
             body: JSON.stringify({ shareId: card.shareId }),
           }, true);
@@ -283,7 +286,7 @@ export function createCursorSession(options: { dataDir: string; fetcher?: typeof
         return { response, text, details, refused };
       };
       let { response, text, details, refused } = await ask();
-      if (refused && (await renew())) ({ response, text, details, refused } = await ask());
+      if (refused && (await renew(signal))) ({ response, text, details, refused } = await ask());
       if (refused) {
         const reason = cursorReason(details, text);
         log(`cursor: template details refused (HTTP ${response.status}${reason ? `: ${reason}` : ""})`);
@@ -303,7 +306,7 @@ export function createCursorSession(options: { dataDir: string; fetcher?: typeof
         if (!url) throw new CursorFallback("Cursor answered in a way Maus does not understand yet.");
         try {
           // A signed download address: no token, no cookies, no redirects.
-          const download = await fetcher()(url.toString(), { method: "GET", redirect: "error", signal: AbortSignal.timeout(TIMEOUT_MS) });
+          const download = await fetcher()(url.toString(), { method: "GET", redirect: "error", signal: AbortSignal.any([AbortSignal.timeout(TIMEOUT_MS), ...signal ? [signal] : []]) });
           if (!download.ok) throw new CursorFallback(`The template download failed (HTTP ${download.status}).`);
           recipe = parseJson(await readCapped(download));
         } catch (error) {
