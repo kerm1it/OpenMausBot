@@ -2,10 +2,10 @@ import { z } from "zod";
 
 import type { SkillsLibrarySkillWire } from "../../shared/wire.ts";
 import type { AppConfig } from "../config.ts";
-import { importedSkillListings, setImportedSkillEnabled } from "../imported-skills.ts";
+import { setImportedSkillEnabled } from "../imported-skills.ts";
 import { botSkillTemplateSchema } from "../new-bot-defaults.ts";
 import { fetchSkillFromSource } from "../skill-fetch.ts";
-import { installLibrarySkill, listLibrarySkills, readLibrarySkillFile, readLibrarySkillRevision, readLegacyLibrarySkillDirectoryForReview, readLibrarySkillDirectory, readSkillLibraryIndex, setLibrarySkillReviewState, skillsLibraryEnabled } from "../skill-library.ts";
+import { installLibrarySkill, listLibrarySkills, readLibrarySkillFile, readLibrarySkillRevision, readLegacyLibrarySkillDirectoryForReview, readLibrarySkillDirectory, readSkillLibraryIndex, setLibrarySkillReviewState, setLibrarySkillEveryBot, skillsLibraryEnabled } from "../skill-library.ts";
 import {
   getStagedSkillWrite, readStagedSkillFiles, installSkill, readLegacySkillDirectoryForReview, readSkillDirectory, listBotSkillsWithOrigin, listStagedSkillWrites, parseSkillMd, removeSkill, scanSkillText, setSkillEnabled,
   type SkillListing, type StagedSkillWrite,
@@ -18,14 +18,14 @@ import { PASS, type RouteHandler } from "./table.ts";
 export interface BotSkillsRouteDeps {
   store: Store;
   cfg: AppConfig;
-  listBotSkills(bot: BotRecord): SkillListing[];
+  listBotSkills(bot: BotRecord, threadId?: string): SkillListing[];
   readBotSkillFile(bot: BotRecord, name: string): string | null;
   stagedSkillListing(staged: StagedSkillWrite): Omit<StagedSkillWrite, "files" | "baseSha256" | "baseAppliedStageId">;
 }
 
 export function createBotSkillsRoutes(deps: BotSkillsRouteDeps): RouteHandler {
   const { store, cfg, listBotSkills, readBotSkillFile, stagedSkillListing } = deps;
-  return async ({ req, res, path, method, json, readBody }) => {
+  return async ({ req, res, url, path, method, json, readBody }) => {
     let m: RegExpMatchArray | null = null;
     const fileMatch = path.match(/^\/api\/(?:bots\/([\w-]+)\/(skills|staged-skills)\/([\w-]+)|skills-library\/([a-z0-9-]+))\/files$/);
     if (fileMatch && method === "GET") {
@@ -64,18 +64,23 @@ export function createBotSkillsRoutes(deps: BotSkillsRouteDeps): RouteHandler {
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/skills$/);
     if (m && method === "GET") {
-      if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
+      const bot = store.bot(m[1]);
+      if (!bot) return json(res, 404, { error: "no such bot" });
+      // The thread names a folder on disk: only one of this bot's own threads may pick it.
+      const asked = url.searchParams.get("threadId");
+      const threadId = asked && store.taskByThread(bot.id, asked) ? asked : bot.threadId;
       if (skillsLibraryEnabled(cfg)) {
         const { skills, library } = listBotSkillsWithOrigin(m[1]!, store.bot(m[1])!.assignedSkills);
+        const names = new Set(skills.map((skill) => skill.name));
         return json(res, 200, {
-          skills: [...skills, ...importedSkillListings(m[1]!, new Set(skills.map((skill) => skill.name)))],
+          skills: [...skills, ...listBotSkills(bot, threadId).filter((skill) => !names.has(skill.name))],
           library,
           assignedSkills: store.bot(m[1])!.assignedSkills,
           staged: listStagedSkillWrites(m[1]).map(stagedSkillListing),
         });
       }
       return json(res, 200, {
-        skills: listBotSkills(store.bot(m[1])!),
+        skills: listBotSkills(bot, threadId),
         staged: listStagedSkillWrites(m[1]).map(stagedSkillListing),
       });
     }
@@ -132,6 +137,7 @@ export function createBotSkillsRoutes(deps: BotSkillsRouteDeps): RouteHandler {
           description: listing.description,
           source: listing.source,
           enabled: listing.enabled,
+          everyBot: index[listing.name]?.everyBot === true,
           tags: listing.tags ?? [],
           version: index[listing.name]?.package?.release ?? null,
           importedAt: listing.importedAt,
@@ -139,7 +145,7 @@ export function createBotSkillsRoutes(deps: BotSkillsRouteDeps): RouteHandler {
           ...(listing.compatibility ? { compatibility: listing.compatibility } : {}),
           warnings: listing.warnings,
           assignedBots: store.bots
-            .filter((bot) => bot.assignedSkills?.includes(listing.name))
+            .filter((bot) => index[listing.name]?.everyBot === true || bot.assignedSkills?.includes(listing.name))
             .map((bot) => ({ id: bot.id, name: bot.name })),
         }))
         .sort((a, b) => a.name.localeCompare(b.name));
@@ -189,11 +195,14 @@ export function createBotSkillsRoutes(deps: BotSkillsRouteDeps): RouteHandler {
     }
     if (m && method === "PATCH") {
       if (!skillsLibraryEnabled(cfg)) return json(res, 404, { error: "skills library is not enabled" });
-      const parsed = z.object({ enabled: z.boolean(), directorySha256: z.string().regex(/^[a-f0-9]{64}$/).optional() }).safeParse(await readBody(req));
-      if (!parsed.success) return json(res, 400, { error: "enabled must be true or false" });
+      const parsed = z.object({ enabled: z.boolean().optional(), everyBot: z.boolean().optional(), directorySha256: z.string().regex(/^[a-f0-9]{64}$/).optional() })
+        .refine(body => (body.enabled !== undefined) !== (body.everyBot !== undefined)).safeParse(await readBody(req));
+      if (!parsed.success) return json(res, 400, { error: "enabled or everyBot must be true or false" });
       const directory = readLibrarySkillDirectory(m[1]!) ?? readLegacyLibrarySkillDirectoryForReview(m[1]!);
       if (parsed.data.enabled && parsed.data.directorySha256 && directory?.digest !== parsed.data.directorySha256) return json(res, 409, { error: "Skill changed after review; review it again" });
-      const result = setLibrarySkillReviewState(m[1]!, parsed.data.enabled ? "approved" : "disabled", undefined, parsed.data.directorySha256);
+      const result = parsed.data.enabled !== undefined
+        ? setLibrarySkillReviewState(m[1]!, parsed.data.enabled ? "approved" : "disabled", undefined, parsed.data.directorySha256)
+        : setLibrarySkillEveryBot(m[1]!, parsed.data.everyBot!);
       if ("error" in result) return json(res, 404, { error: result.error });
       return json(res, 200, { skill: result });
     }

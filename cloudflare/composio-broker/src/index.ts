@@ -10,6 +10,7 @@ import {
   json,
   JSON_HEADERS,
   listConnectedAccounts,
+  readBoundedBody,
   sha256,
   upstreamError,
   type ConnectedAccountResponse,
@@ -187,7 +188,9 @@ async function createSession(env: Env, userId: string, authConfigs: AuthConfigMa
     }),
   });
   if (!response.ok) throw new Error(await upstreamError(response, `Session creation failed (${response.status})`));
-  return parseSession(sessionWireSchema.parse(await response.json()));
+  const session = parseSession(sessionWireSchema.parse(await response.json()));
+  if (session.userId && session.userId !== userId) throw new Error("Composio created a Session for another user");
+  return { ...session, userId };
 }
 
 /** The project's own (not Composio-managed) auth configs: newest enabled one
@@ -278,10 +281,11 @@ function forgetSession(sessionId: string) {
   verifiedSessions.delete(sessionId);
 }
 
-function verifiedSession(sessionId: string | null) {
+function verifiedSession(installation: InstallationRow) {
+  const sessionId = installation.session_id;
   if (!sessionId) return undefined;
   const entry = verifiedSessions.get(sessionId);
-  if (entry && Date.now() - entry.verifiedAt < VERIFIED_SESSION_TTL_MS) return entry.session;
+  if (entry && entry.session.userId === actingUser(installation) && Date.now() - entry.verifiedAt < VERIFIED_SESSION_TTL_MS) return entry.session;
   verifiedSessions.delete(sessionId);
   return undefined;
 }
@@ -313,24 +317,42 @@ async function ensureSession(installation: InstallationRow, env: Env, ctx: Execu
   return verifySession(installation, env, ctx);
 }
 
+async function currentInstallation(env: Env, id: string) {
+  const current = await env.DB.prepare("SELECT * FROM installations WHERE id = ?").bind(id).first<InstallationRow>();
+  if (!current || current.disabled_at !== null) throw json({ error: "unauthorized" }, 401);
+  return current;
+}
+
 async function verifySession(installation: InstallationRow, env: Env, ctx: ExecutionContext) {
   const authConfigs = await projectAuthConfigs(env);
-  const user = actingUser(installation);
-  let session = installation.session_id ? await getSession(env, installation.session_id) : null;
-  if (session && sessionReady(session, authConfigs) && (!session.userId || session.userId === user)) {
-    touchLastSeen(installation, env, ctx);
-  } else {
-    // Connected accounts are attached to this stable Composio user ID, so a
-    // Session recreated for it keeps every grant.
-    session = await createSession(env, user, authConfigs);
-    multiAccountUpgradeAttempted.add(session.sessionId);
-    authConfigUpgradeAttempted.add(authConfigsKey(session.sessionId, authConfigs));
-    await env.DB.prepare("UPDATE installations SET session_id = ?, last_seen_at = ? WHERE id = ?")
-      .bind(session.sessionId, Date.now(), installation.id)
-      .run();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const user = actingUser(installation);
+    let session = installation.session_id ? await getSession(env, installation.session_id) : null;
+    if (session && sessionReady(session, authConfigs) && session.userId === user) {
+      const current = await currentInstallation(env, installation.id);
+      if (actingUser(current) !== user) {
+        Object.assign(installation, current);
+        continue;
+      }
+      touchLastSeen(installation, env, ctx);
+    } else {
+      session = await createSession(env, user, authConfigs);
+      multiAccountUpgradeAttempted.add(session.sessionId);
+      authConfigUpgradeAttempted.add(authConfigsKey(session.sessionId, authConfigs));
+      const userColumn = installation.shared_user_id === undefined ? "composio_user_id" : "COALESCE(shared_user_id, composio_user_id)";
+      const saved = await env.DB.prepare(
+        `UPDATE installations SET session_id = ?, last_seen_at = ? WHERE id = ? AND ${userColumn} = ? AND disabled_at IS NULL`,
+      ).bind(session.sessionId, Date.now(), installation.id, user).run();
+      if (!saved.meta.changes) {
+        Object.assign(installation, await currentInstallation(env, installation.id));
+        continue;
+      }
+      installation.session_id = session.sessionId;
+    }
+    rememberSession(session);
+    return session;
   }
-  rememberSession(session);
-  return session;
+  throw json({ error: "Connected apps changed. Try again." }, 503);
 }
 
 async function authenticate(request: Request, env: Env) {
@@ -358,12 +380,11 @@ async function register(request: Request, env: Env) {
 }
 
 async function proxyMcp(request: Request, installation: InstallationRow, env: Env, ctx: ExecutionContext) {
-  const declared = Number(request.headers.get("content-length") ?? "0");
-  if (declared > MAX_MCP_BODY) return json({ error: "MCP request is too large" }, 413);
-  const body = await request.arrayBuffer();
-  if (body.byteLength > MAX_MCP_BODY) return json({ error: "MCP request is too large" }, 413);
+  const body = await readBoundedBody(request, MAX_MCP_BODY);
+  if (!body) return json({ error: "MCP request is too large" }, 413);
   await limitSessionRequests(installation, env);
-  const reused = verifiedSession(installation.session_id);
+  Object.assign(installation, await currentInstallation(env, installation.id));
+  const reused = verifiedSession(installation);
   if (reused) touchLastSeen(installation, env, ctx);
   let session = reused ?? await verifySession(installation, env, ctx);
   const incomingMcpSession = request.headers.get("mcp-session-id");
@@ -640,14 +661,11 @@ async function disconnectAccount(
 
 async function requestAlias(request: Request) {
   if (!request.body) return undefined;
-  const declared = Number(request.headers.get("content-length") ?? "0");
-  if (declared > 2048) throw new Response(JSON.stringify({ error: "request body is too large" }), { status: 413, headers: JSON_HEADERS });
+  const bytes = await readBoundedBody(request, 2048);
+  if (!bytes) throw new Response(JSON.stringify({ error: "request body is too large" }), { status: 413, headers: JSON_HEADERS });
   let body: z.infer<typeof aliasRequestSchema>;
   try {
-    const raw = await request.text();
-    if (new TextEncoder().encode(raw).byteLength > 2048) {
-      throw new Response(JSON.stringify({ error: "request body is too large" }), { status: 413, headers: JSON_HEADERS });
-    }
+    const raw = new TextDecoder().decode(bytes);
     // Some Fetch implementations expose a zero-length POST as a non-null
     // ReadableStream. First-account authorization intentionally has no alias,
     // so accept that wire representation exactly like a missing body.

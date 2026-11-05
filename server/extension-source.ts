@@ -57,11 +57,16 @@ export async function responseBytes(response: Response, max: number): Promise<Bu
   if (Number(response.headers.get("content-length") ?? 0) > max) { await response.body?.cancel(); extensionError("Resource exceeds the download budget", 413); }
   const chunks: Uint8Array[] = [];
   let size = 0;
-  for await (const chunk of response.body ?? []) {
-    size += chunk.length;
-    if (size > max) { await response.body?.cancel().catch(() => {}); extensionError("Resource exceeds the download budget", 413); }
-    chunks.push(chunk);
-  }
+  const reader = response.body?.getReader();
+  try {
+    while (reader) {
+      const { value: chunk, done } = await reader.read();
+      if (done) break;
+      size += chunk.length;
+      if (size > max) { await reader.cancel().catch(() => {}); extensionError("Resource exceeds the download budget", 413); }
+      chunks.push(chunk);
+    }
+  } finally { reader?.releaseLock(); }
   return Buffer.concat(chunks);
 }
 

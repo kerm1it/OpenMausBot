@@ -2,12 +2,16 @@ import { AppWindow, Crosshair } from "lucide-react";
 import type { Message } from "@/state/store";
 import { t } from "@/lib/i18n";
 import { AppMessage } from "./app/AppMessage";
+import { BugReportNote } from "./BugReportNote";
+import { GoalRunRow } from "./GoalRunCard";
 import { HelperKeySuggestion } from "./HelperKeySuggestion";
 import { MessageBoundary } from "./MessageBoundary";
 import { WidgetMessage } from "./widget/WidgetMessage";
 
 export function richRowKind(message: Message): Message["kind"] {
-  if (message.setupSuggestion) return "widget";
+  // MausBot's follow-up is text the model reads, drawn under its intro's card row (OptionsCardRow).
+  if (message.helperFollowup) return "options";
+  if (message.setupSuggestion || (message.kind === "goal.run" && message.goalRun)) return "widget";
   if (message.kind === "widget" && !message.widget) return "text";
   if (message.kind === "app" && !message.app) return "text";
   return message.kind;
@@ -18,14 +22,18 @@ export function RichMessageRow({ botId, botName, threadId, message }: { botId: s
     <MessageBoundary fallbackText={message.text ?? ""}>
       {message.setupSuggestion
         ? <HelperKeySuggestion threadId={threadId} message={message} />
-        : message.kind === "app"
-          ? <AppMessage botId={botId} botName={botName} threadId={threadId} message={message} />
-          : <WidgetMessage botId={botId} threadId={threadId} message={message} />}
+        : message.kind === "goal.run"
+          ? <GoalRunRow botId={botId} threadId={threadId} message={message} />
+          : message.kind === "app"
+            ? <AppMessage botId={botId} botName={botName} threadId={threadId} message={message} />
+            : <WidgetMessage botId={botId} threadId={threadId} message={message} />}
     </MessageBoundary>
   );
 }
 
 export function UserLineNote({ message }: { message: Message }) {
+  // A @devs message: its report's status ("Got it, we're looking", then "Fixed in 0.1.x").
+  if (message.bugReport) return <BugReportNote report={message.bugReport} />;
   if (message.pointed?.length) {
     const label = t("chat.preview.pointedAt", { parts: message.pointed.map((part) => part.label).join(", ") });
     return (
@@ -44,6 +52,7 @@ export function UserLineNote({ message }: { message: Message }) {
       </span>
     );
   }
+  if (message.via === "api") return <span data-via-bot-api className="mt-1 text-[11px] text-ink-tertiary" title={t("chat.viaBotApi")}>{t("chat.viaBotApi")}</span>;
   if (message.via !== "call") return null;
   return <span className="mt-1 text-[11px] text-ink-tertiary" title={t("chat.viaCall")}>{t("chat.viaCall")}</span>;
 }

@@ -13,6 +13,17 @@ export function releaseTaskSkillLinks(threadId: string): void {
   for (const key of pinned.keys()) if (key.endsWith(`:${threadId}`)) pinned.delete(key);
 }
 
+import { join } from "node:path";
+
+import { IMPORTED_SKILLS_DIR, readImportedSkills } from "./imported-skills.ts";
+import type { HarnessSkillLinks } from "./lending-memory.ts";
+import { ownSkillLinks } from "./skills.ts";
+
+/** Every link this file's two syncs may put in a bot's folders. */
+export function harnessSkillLinks(botId: string): HarnessSkillLinks {
+  return { own: ownSkillLinks(botId), imported: new Map(Object.keys(readImportedSkills()).map((name) => [name, join(IMPORTED_SKILLS_DIR, name)])) };
+}
+
 export function syncTaskSkillLinks(
   botId: string,
   threadId: string,

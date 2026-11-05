@@ -14,11 +14,11 @@ export type AppSettingsSection =
   | "computer"
   | "logins"
   | "usage"
-  | "people"
+  | "people" | "botAccess"
   | "activity"
   | "backups"
   | "workspaces"
-  | "skills" | "import";
+  | "skills" | "import" | "updates";
 
 export type BotSettingsSection =
   | "overview"
@@ -27,7 +27,7 @@ export type BotSettingsSection =
   | "soul"
   | "skills"
   | "plugins"
-  | "memory"
+  | "memory" | "library"
   | "routines"
   | "access"
   | "model"

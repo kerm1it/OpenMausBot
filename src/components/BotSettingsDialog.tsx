@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, Search, X } from "lucide-react";
 
-import { useStore, type Bot } from "@/state/store";
+import { useStore, type Bot, type BotSettingsSection } from "@/state/store";
 import { cn } from "@/lib/cn";
 import { useCaptionChrome } from "./DesktopCapabilities";
 import { BOT_SECTIONS } from "./bot-settings/sections";
@@ -25,8 +25,15 @@ import { VisibilitySection } from "./bot-settings/VisibilitySection";
 import { t } from "@/lib/i18n";
 import { useAdvancedMode } from "@/lib/interface-mode";
 import { BotPanel } from "./bot-panel/PanelShell";
+import { LibraryTab } from "./bot-panel/LibraryTab";
+import type { SimplePageId } from "./bot-panel/page-registry";
+import { BOT_PANEL_ID, sidePanelCls } from "./bot-panel/side-panel";
 import { HistoryRollbackDialog, useBotHistory, useBotOverview } from "./bot-settings/useBotOverview";
 import { useOwnerOrAdmin } from "@/lib/use-owner-or-admin";
+import { ShareBotButton, useTeamName } from "./bot-access/ShareBotButton";
+
+/** Where the Library's memory, skills and folder rows lead in Advanced settings. */
+const LIBRARY_LINKS: Partial<Record<SimplePageId, BotSettingsSection>> = { memory: "memory", skills: "skills", folder: "access" };
 
 const sectionLabel = (entry: (typeof BOT_SECTIONS)[number]) => (entry.labelKey ? t(entry.labelKey) : entry.label);
 
@@ -43,7 +50,7 @@ export function BotSettingsDialog({ bot, overlay = false }: {
   const section = state.botSettingsSection;
   const derived = useBotSettingsDerived(bot);
   const dialogRef = useRef<HTMLElement | null>(null);
-  const { padClass, dragProps } = useCaptionChrome();
+  const { dragProps } = useCaptionChrome();
   const [query, setQuery] = useState("");
   const collapsed = !state.botSettingsExpandAccordion;
   const q = query.trim().toLowerCase();
@@ -52,9 +59,10 @@ export function BotSettingsDialog({ bot, overlay = false }: {
   const linkedSection = !collapsed && !state.botSettingsExpandRemembered ? section : null;
   const slackUrl = useSlackManagementUrl(bot.id);
   const ownerOrAdmin = useOwnerOrAdmin();
+  const teamName = useTeamName();
   const sections = BOT_SECTIONS
     .filter((entry) => entry.id !== "slack" || slackUrl !== null)
-    .filter((entry) => entry.id !== "visibility" || (!window.ogb && ownerOrAdmin === true));
+    .filter((entry) => entry.id !== "visibility" || (!window.ogb && ownerOrAdmin === true && !teamName));
   const visibleSections = sections.filter((entry) => sectionMatches(entry, q));
 
   const { overview, overviewError, prompt, promptError } = useBotOverview(bot, {
@@ -131,6 +139,8 @@ export function BotSettingsDialog({ bot, overlay = false }: {
         return <NativePluginsSettings key={bot.id} bot={bot} patch={derived.patch} />;
       case "memory":
         return <MemorySection bot={bot} active={!collapsed && section === "memory"} onToggle={(enabled) => derived.patch({ memoryEnabled: enabled })} />;
+      case "library":
+        return <LibraryTab bot={bot} onOpen={(page) => dispatch({ type: "toggleSettings", open: true, section: LIBRARY_LINKS[page] ?? "overview" })} />;
       case "routines":
         return <RoutinesSection bot={bot} routines={derived.botRoutines} runs={state.routineRuns} />;
       case "access":
@@ -166,37 +176,35 @@ export function BotSettingsDialog({ bot, overlay = false }: {
     <>
       <aside
         ref={dialogRef}
+        id={simpleView ? BOT_PANEL_ID : undefined}
         role="dialog"
         aria-labelledby="bot-settings-title"
         tabIndex={-1}
-        className={cn(
-          "animate-sheet-in md:animate-panel-in absolute inset-0 z-40 flex h-full min-w-0 flex-col border-l border-hairline/40 bg-panel outline-none focus-visible:outline-none",
-          overlay
-            ? "md:inset-auto md:right-0 md:top-0 md:bottom-0 md:w-[min(420px,42vw)] md:shadow-2xl"
-            : "md:static md:z-auto md:w-[min(420px,42vw)] md:shrink-0",
-        )}
+        className={sidePanelCls(overlay, simpleView)}
       >
         {simpleView ? (
           <BotPanel
             bot={bot}
             derived={derived}
-            headerClassName={padClass}
             linkedSection={linkedSection}
             onClose={() => dispatch({ type: "toggleSettings", open: false })}
           />
         ) : <>
-        <div {...dragProps} className={cn("flex shrink-0 items-center justify-between px-4 py-3", padClass)}>
+        <div {...dragProps} className="flex shrink-0 items-center justify-between px-4 py-3">
           <span id="bot-settings-title" className="truncate text-[15px] font-semibold text-ink">
             {bot.name}
           </span>
-          <button
-            type="button"
-            onClick={() => dispatch({ type: "toggleSettings", open: false })}
-            aria-label="Close settings"
-            className="rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
-          >
-            <X size={18} className="pointer-events-none" />
-          </button>
+          <span className="flex shrink-0 items-center gap-1">
+            <ShareBotButton bot={bot} className="rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink" />
+            <button
+              type="button"
+              onClick={() => dispatch({ type: "toggleSettings", open: false })}
+              aria-label="Close settings"
+              className="rounded-md p-1 text-ink-secondary hover:bg-control hover:text-ink"
+            >
+              <X size={18} className="pointer-events-none" />
+            </button>
+          </span>
         </div>
 
         <div className="mx-4 mb-2 flex shrink-0 items-center gap-2 rounded-lg border border-transparent bg-control/70 px-2.5 py-2 focus-within:border-focus">
@@ -221,7 +229,7 @@ export function BotSettingsDialog({ bot, overlay = false }: {
 
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
           {visibleSections.length === 0 && (
-            <div className="px-4 py-4 text-[12.5px] leading-relaxed text-ink-secondary">
+            <div className="px-4 py-4 text-[13px] leading-relaxed text-ink-secondary">
               {t("botSettings.searchNone", { query: query.trim() })}
             </div>
           )}

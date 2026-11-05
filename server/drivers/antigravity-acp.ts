@@ -10,9 +10,12 @@ import { killCliTree, spawnCli } from "../procs.ts";
 import type { ModelCatalog } from "../contracts.ts";
 import type { ChildProcess } from "node:child_process";
 import type { AntigravityRuntime } from "./antigravity-runtime.ts";
+import { acpVariantOption, surveyModelVariants } from "./acp/config-options.ts";
+import { StderrTail, exitDetail } from "./acp/exit-report.ts";
 import {
   VERIFICATION_TEMP_KEY,
   antigravityTempDir,
+  folderBytes,
   setAntigravityTempEnvironment,
   sweepAntigravityTemp,
 } from "./antigravity-temp.ts";
@@ -22,6 +25,12 @@ export const ANTIGRAVITY_AUTH_PREFIX = "Open the following link to authenticate 
 const AUTH_TIMEOUT_MS = 5 * 60_000;
 // Google's packaged server can take tens of seconds to cold-start, especially on Windows.
 const STARTUP_TIMEOUT_MS = 90_000;
+// The Windows runtime is silent while it unpacks ~1 GB into TEMP, which antivirus scanning can stretch past one window:
+// startup gets another window while that folder grows, up to this cap.
+const STARTUP_CAP_MS = 5 * 60_000;
+const UNPACK_COUNT_BUDGET_MS = 5_000;
+// A new session names thinking levels only for its current model, so discovery switches through the rest (~1.5 s each).
+const VARIANT_SURVEY_MS = 15_000;
 const MAX_PROTOCOL_LINE_BYTES = 16 * 1024 * 1024;
 // Past the 16 KiB ceiling parseAntigravityAuthorizationUrl accepts, so no partial link is dropped.
 const MAX_DIAGNOSTIC_LINE_CHARS = 64 * 1024;
@@ -115,6 +124,11 @@ export async function removeAntigravityProfile(instanceId: string, baseDir = DAT
     });
 }
 
+/** Signing out forgets only this account's stored Google sign-in; its profile stays for the next sign-in. */
+export async function removeAntigravitySignIn(instanceId: string, baseDir = DATA_DIR): Promise<void> {
+  await rm(join(antigravityProfileDirectory(instanceId, baseDir), "antigravity-acp", "acp_token.json"), { force: true, maxRetries: 4, retryDelay: 250 });
+}
+
 /** An isolated Google profile per instance; foreign Google credentials are stripped so the account
  * and billing never change silently. */
 export async function prepareAntigravityProfile(input: {
@@ -203,9 +217,12 @@ export class AntigravityAcpClient {
   private startupOutputBytes = 0;
   private startupDiagnosticBytes = 0;
   private nativeStartupHint?: string;
+  /** What it printed since it last answered, masked (sign-in links are taken out before), for the exit message. */
+  private readonly stderrTail = new StderrTail();
   private closed = false;
   private stopping?: Promise<boolean>;
   private readonly onAuthorizationUrl?: (url: string) => void;
+  private readonly tempDirectory?: string;
   /** On Windows a running executable pins its file and directory: do not rename or delete before this settles. */
   readonly exited: Promise<void>;
 
@@ -216,6 +233,7 @@ export class AntigravityAcpClient {
     onAuthorizationUrl?: (url: string) => void,
   ) {
     this.onAuthorizationUrl = onAuthorizationUrl;
+    this.tempDirectory = profile.tempDirectory;
     this.child = spawnCli(
       runtime.executablePath,
       process.platform === "linux" ? ["--uid="] : [],
@@ -224,16 +242,16 @@ export class AntigravityAcpClient {
     );
     this.child.stdout!.setEncoding("utf8");
     this.child.stdout!.on("data", (chunk: string) => this.consume(chunk));
-    // Never surface raw stderr: it can contain authorization codes.
+    // Never surface raw stderr: it can contain authorization codes. Only masked last lines reach the exit message.
     this.child.stderr!.setEncoding("utf8");
     this.child.stderr!.on("data", (chunk: string) => this.consumeDiagnostics(chunk));
     this.child.once("error", (error) => this.failAll(error));
     this.exited = new Promise((resolve) => {
       this.child.once("close", (code, signal) => {
-        this.noteStartupDiagnostic(this.diagnosticBuffer);
+        if (authorizationUrlFromLine(this.diagnosticBuffer) === null) this.noteDiagnostic(this.diagnosticBuffer);
         this.diagnosticBuffer = "";
         if (!this.closed) this.failAll(new Error(
-          `Antigravity ACP exited ${code ?? signal ?? "unexpectedly"}.${this.nativeStartupHint ? ` ${this.nativeStartupHint}` : ""}`,
+          `Antigravity ACP exited ${code ?? signal ?? "unexpectedly"}${exitDetail(code, signal, this.stderrTail.text)}.${this.nativeStartupHint ? ` ${this.nativeStartupHint}` : ""}`,
         ));
         resolve();
       });
@@ -290,8 +308,13 @@ export class AntigravityAcpClient {
     const { lines, rest } = takeLines(this.diagnosticBuffer + chunk);
     this.diagnosticBuffer = rest.length > MAX_DIAGNOSTIC_LINE_CHARS ? "" : rest;
     for (const line of lines) {
-      if (!this.announceAuthorizationUrl(line)) this.noteStartupDiagnostic(line);
+      if (!this.announceAuthorizationUrl(line)) this.noteDiagnostic(line);
     }
+  }
+
+  private noteDiagnostic(line: string) {
+    this.noteStartupDiagnostic(line);
+    this.stderrTail.note(line);
   }
 
   private noteStartupDiagnostic(line: string) {
@@ -306,37 +329,72 @@ export class AntigravityAcpClient {
     this.pending.clear();
   }
 
-  request(method: string, params: unknown, timeoutMs = 30_000): Promise<any> {
+  /** When `timeoutMs` passes, `expired` decides: a number waits that many milliseconds more, an Error fails the request. */
+  request(
+    method: string,
+    params: unknown,
+    timeoutMs = 30_000,
+    expired: () => Promise<number | Error> = async () => new Error(`${method} timed out.`),
+  ): Promise<any> {
     if (this.closed) return Promise.reject(new Error("Antigravity ACP is closed."));
     const id = this.nextId++;
     return new Promise((resolveRequest, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        if (method === "initialize") {
-          this.noteStartupDiagnostic(this.diagnosticBuffer);
-          reject(new Error(
-            `Antigravity initialization timed out after ${Math.ceil(timeoutMs / 1_000)} seconds (${process.platform}-${process.arch}). ` +
-            "The executable was found, but did not finish starting. " +
-            (this.nativeStartupHint ? `${this.nativeStartupHint} ` : "") +
-            `Startup output: ${this.startupOutputBytes} bytes; diagnostic output: ${this.startupDiagnosticBytes} bytes. ` +
-            "Retry setup. If it still fails, share this error and your OpenMausBot version; do not paste Google sign-in links or tokens.",
-          ));
-        } else reject(new Error(`${method} timed out.`));
-      }, timeoutMs);
-      timer.unref?.();
-      this.pending.set(id, { resolve: resolveRequest, reject, timer });
+      const arm = (milliseconds: number) => {
+        const timer = setTimeout(async () => {
+          const outcome = await expired();
+          const pending = this.pending.get(id);
+          if (!pending) return;
+          if (typeof outcome === "number") {
+            pending.timer = arm(outcome);
+            return;
+          }
+          this.pending.delete(id);
+          reject(outcome);
+        }, milliseconds);
+        timer.unref?.();
+        return timer;
+      };
+      this.pending.set(id, { resolve: resolveRequest, reject, timer: arm(timeoutMs) });
       this.child.stdin!.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
     });
   }
 
-  async initialize(timeoutMs = STARTUP_TIMEOUT_MS): Promise<any> {
+  /** `complete` is false when the count ran out of time: `bytes` is then only a lower bound. */
+  private async unpackedBytes(): Promise<{ bytes: number; complete: boolean }> {
+    if (!this.tempDirectory) return { bytes: 0, complete: true };
+    return folderBytes(this.tempDirectory, Date.now() + UNPACK_COUNT_BUDGET_MS);
+  }
+
+  async initialize(windowMs = STARTUP_TIMEOUT_MS, deadline = Date.now() + STARTUP_CAP_MS): Promise<any> {
+    const started = Date.now();
+    const counting = this.unpackedBytes();
+    let unpacked: number | undefined;
+    const expired = async (): Promise<number | Error> => {
+      const before = (await counting).bytes;
+      const count = await this.unpackedBytes();
+      const now = count.bytes;
+      const progressing = !count.complete || now > (unpacked ?? before);
+      if (count.complete) unpacked = now;
+      const left = deadline - Date.now();
+      if (progressing && left > 0) return Math.min(windowMs, left);
+      this.noteStartupDiagnostic(this.diagnosticBuffer);
+      return new Error(
+        `Antigravity initialization timed out after ${Math.ceil((Date.now() - started) / 1_000)} seconds (${process.platform}-${process.arch}). ` +
+        "The executable was found, but did not finish starting. " +
+        (this.nativeStartupHint ? `${this.nativeStartupHint} ` : "") +
+        `Startup output: ${this.startupOutputBytes} bytes; diagnostic output: ${this.startupDiagnosticBytes} bytes. ` +
+        (this.tempDirectory ? `Unpacked into temp: ${Math.round(Math.max(0, now - before) / 1_000_000)} MB. ` : "") +
+        "Retry setup. If it still fails, share this error and your OpenMausBot version; do not paste Google sign-in links or tokens.",
+      );
+    };
     const initialized = await this.request("initialize", {
       protocolVersion: 1,
       clientInfo: { name: "openmausbot", version: "0.0.0" },
       clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
-    }, timeoutMs);
+    }, Math.min(windowMs, Math.max(0, deadline - Date.now())), expired);
     this.initializationComplete = true;
     this.nativeStartupHint = undefined;
+    this.stderrTail.clear();
     return initialized;
   }
 
@@ -484,7 +542,13 @@ export function catalogFromAntigravityConfigOptions(
   const options = modelOptions(model?.options);
   if (!options.length) return null;
   const current = typeof model?.currentValue === "string" ? model.currentValue : "";
-  return { default: options.some((option) => option.id === fallbackDefault) ? fallbackDefault : current || options[0]!.id, options };
+  const defaultModel = options.some((option) => option.id === fallbackDefault) ? fallbackDefault : current || options[0]!.id;
+  const selectedModel = current || defaultModel;
+  const variants = acpVariantOption({ configOptions })?.options;
+  return {
+    default: defaultModel,
+    options: options.map((option) => option.id === selectedModel && variants?.length ? { ...option, variants } : option),
+  };
 }
 
 export async function probeAntigravityModels(input: {
@@ -494,15 +558,15 @@ export async function probeAntigravityModels(input: {
   fallbackDefault: string;
   timeoutMs?: number;
 }): Promise<ModelCatalog> {
-  const deadline = Date.now() + (input.timeoutMs ?? STARTUP_TIMEOUT_MS);
+  const deadline = Date.now() + (input.timeoutMs ?? STARTUP_CAP_MS);
   const remaining = () => {
     const milliseconds = deadline - Date.now();
     if (milliseconds <= 0) throw new Error("Antigravity model discovery timed out.");
-    return milliseconds;
+    return Math.min(milliseconds, STARTUP_TIMEOUT_MS);
   };
   const client = new AntigravityAcpClient(input.runtime, input.profile, input.cwd ?? input.profile.directory);
   try {
-    await client.initialize(remaining());
+    await client.initialize(remaining(), deadline);
     await client.request("authenticate", { methodId: "oauth-personal" }, remaining());
     const session = await client.request(
       "session/new",
@@ -511,7 +575,16 @@ export async function probeAntigravityModels(input: {
     );
     const catalog = catalogFromAntigravityConfigOptions(session?.configOptions, input.fallbackDefault);
     if (!catalog) throw new Error("Antigravity did not return a model catalog for this Google account.");
-    return catalog;
+    const budget = Math.min(VARIANT_SURVEY_MS, deadline - Date.now());
+    if (budget <= 0) return catalog;
+    const surveyed = await surveyModelVariants((method, params) => client.request(method, params, budget), session, budget);
+    return {
+      ...catalog,
+      options: catalog.options.map((option) => {
+        const variants = surveyed.get(option.id);
+        return !option.variants?.length && variants?.length ? { ...option, variants } : option;
+      }),
+    };
   } finally {
     client.close();
   }
@@ -612,6 +685,11 @@ interface AuthFlow {
 
 export class AntigravityAuthController {
   private flow: AuthFlow | null = null;
+  private readonly onSignedIn: () => void;
+
+  constructor(onSignedIn: () => void = () => {}) {
+    this.onSignedIn = onSignedIn;
+  }
 
   async start(runtime: AntigravityRuntime, profile: AntigravityProfile): Promise<AntigravityAuthStart> {
     this.cancel();
@@ -642,6 +720,7 @@ export class AntigravityAuthController {
       });
       if (outcome.kind === "done") {
         client.close();
+        this.onSignedIn();
         return { phase: "succeeded", flowId: null, authorizationUrl: null, expiresAt: null };
       }
       const flow: AuthFlow = {
@@ -652,10 +731,10 @@ export class AntigravityAuthController {
         expiresAt: Date.now() + AUTH_TIMEOUT_MS,
       };
       this.flow = flow;
-      void authenticated.finally(() => {
+      void authenticated.then(() => this.onSignedIn(), () => {}).finally(() => {
         if (this.flow === flow) this.flow = null;
         client.close();
-      }).catch(() => {});
+      });
       return {
         phase: "waiting",
         flowId: flow.id,

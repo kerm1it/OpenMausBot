@@ -9,6 +9,8 @@ vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => false }));
 
 const { BotEditorStore, initialState } = await import("@/state/store");
 const { PermissionsSection } = await import("./PermissionsSection");
+const { setTeamPeople } = await import("@/state/team-people");
+const { t } = await import("@/lib/i18n");
 type Derived = Parameters<typeof PermissionsSection>[0]["derived"];
 
 const base: Bot = {
@@ -20,7 +22,7 @@ const dispatch = vi.fn();
 let host: HTMLDivElement;
 let root: Root;
 
-function render(bot: Bot, trustedModesAvailable = false) {
+function render(bot: Bot, trustedModesAvailable = false, others: Bot[] = []) {
   const derived = {
     patch: (patch: object) => dispatch({ type: "updateBot", botId: bot.id, patch }),
     engine: { instanceId: "claude", driverKind: "claudeAgent", displayName: "Claude" },
@@ -28,7 +30,7 @@ function render(bot: Bot, trustedModesAvailable = false) {
     sectionName: "General", currentChief: undefined,
   } as unknown as Derived;
   flushSync(() => root.render(createElement(BotEditorStore, {
-    value: { state: { ...initialState, bots: [bot] }, dispatch,
+    value: { state: { ...initialState, bots: [bot, ...others] }, dispatch,
       flushBotPatches: async () => null, refreshInstances: async () => {}, refreshModels: async () => {} },
     children: createElement(PermissionsSection, { bot, derived }),
   })));
@@ -84,6 +86,21 @@ describe("Full access in bot settings", () => {
   });
 });
 
+describe("on a team", () => {
+  const chief: Bot = { ...base, chiefOfStaff: true, managedSections: ["Sales"] };
+  afterEach(() => setTeamPeople(null));
+
+  it("offers no Chief of Staff card and no departments to be in charge of; off a team both stay", () => {
+    render(chief);
+    expect(host.textContent).toContain(t("permissions.chief.title"));
+    expect(host.textContent).toContain(t("botAccess.teams.title"));
+    setTeamPeople({ people: [], me: null, admin: true, needsYou: [] });
+    render(chief);
+    expect(host.textContent).not.toContain(t("permissions.chief.title"));
+    expect(host.textContent).not.toContain(t("botAccess.teams.title"));
+  });
+});
+
 describe("PermissionsSection parts", () => {
   it("leaves Chief of Staff and peer checks out of a page that asks only for approvals", () => {
     const derived = {
@@ -102,5 +119,29 @@ describe("PermissionsSection parts", () => {
     render(base);
     expect(host.textContent).toContain("Chief of Staff");
     expect(host.textContent).toContain("Ask me before contacting other bots");
+  });
+});
+
+describe("who a bot talks to", () => {
+  const quill: Bot = { ...base, id: "quill", name: "Quill", threadId: "quill-main", tasks: [] };
+  const button = () => [...host.querySelectorAll("button")].find((candidate) => candidate.textContent === "Let it talk to every bot");
+
+  it("says nothing more for a bot that talks to every bot, the default", () => {
+    render(base, false, [quill]);
+    expect(host.textContent).not.toContain("Set up to talk only to");
+    expect(button()).toBeUndefined();
+  });
+
+  it("names the bots a peers list keeps it to, and lets a person open it to every bot in one click", () => {
+    render({ ...base, peers: ["quill", "deleted-bot"] }, false, [quill]);
+    expect(host.textContent).toContain("Set up to talk only to Quill.");
+    flushSync(() => button()!.click());
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith({ type: "updateBot", botId: "pepper", patch: { peers: null, acknowledgePeerScope: true } });
+  });
+
+  it("says so when the list leaves it no one to talk to", () => {
+    render({ ...base, peers: [] }, false, [quill]);
+    expect(host.textContent).toContain("Set up not to talk to other bots.");
+    expect(button()).toBeDefined();
   });
 });

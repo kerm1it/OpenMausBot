@@ -140,7 +140,7 @@ export function cloudNoticeKind(view: CloudPlanView, account: CloudAccountState 
 }
 
 
-export const CLOUD_SOURCES = ["app_card", "app_howto", "app_menu", "app_settings", "app_routines", "app_pages", "update_popup", "app_onboarding"] as const;
+export const CLOUD_SOURCES = ["app_card", "app_howto", "app_menu", "app_settings", "app_routines", "app_pages", "app_whats_new_pro", "app_whats_new_team", "app_onboarding"] as const;
 export type CloudSource = (typeof CLOUD_SOURCES)[number];
 
 export function offerPlanLabel(plan: CloudOfferPlan): string {
@@ -194,12 +194,16 @@ export function planCardRows(a: CloudPlanAllowances): CloudPlanCardRow[] {
     ...(a.snapshotDays ? [{ key: "backups" as const, text: t("cloudBuy.row.backups", { days: a.snapshotDays }) }] : []),
   ];
 }
+/** What a plan's free trial costs and then what it comes to: "Free for 3 days, then $49/month + tax". */
+export function trialTerms(days: number, price: string): string {
+  return days === 1 ? t("cloudBuy.card.trial.one", { price }) : t("cloudBuy.card.trial.many", { days, price });
+}
 function planCard(plan: CloudOfferPlan, recommended: string, current: string | null): CloudPlanCard {
   const name = offerPlanLabel(plan), price = usd(plan.amount / 100), mine = plan.tier === current;
   return { tier: plan.tier, name, price, popular: plan.tier === recommended, current: mine,
-    promise: Object.hasOwn(PROMISE, plan.tier) ? t(PROMISE[plan.tier]!) : null,
+    promise: Object.hasOwn(PROMISE, plan.tier) ? t(PROMISE[plan.tier]!) : plan.allowances?.seats ? t("cloudBuy.promise.team", { seats: plan.allowances.seats }) : null,
     action: mine ? null : plan.trialDays ? t("cloudIntro.start") : t("cloudBuy.card.get", { plan: name }),
-    terms: mine ? null : plan.trialDays ? t("cloudBuy.card.trial", { days: plan.trialDays, price }) : t("cloudBuy.card.paid", { price }),
+    terms: mine ? null : plan.trialDays ? trialTerms(plan.trialDays, price) : t("cloudBuy.card.paid", { price }),
     rows: plan.allowances ? planCardRows(plan.allowances) : [] };
 }
 /** The plans on sale as cards, in the Admin's order. `current` is the person's own tier; `own` is that plan when it is not
@@ -211,6 +215,15 @@ export function planCards(offer: CloudOffer, { current = null, own = null }: { c
     plans.splice(at === -1 ? plans.length : at, 0, own);
   }
   return plans.map(plan => planCard(plan, offer.recommended, current));
+}
+
+const WEIGHED: ReadonlySet<CloudPlanCardRow["key"]> = new Set(["hours", "storage", "voice"]);
+/** What each card shows itself: the numbers a person weighs up, and whether it sleeps when the plans differ there. The
+ * rest of its rows are its details, for Compare plans. */
+export function cardRows(cards: readonly CloudPlanCard[]): Array<{ shown: CloudPlanCardRow[]; details: CloudPlanCardRow[] }> {
+  const power = new Set(cards.flatMap(card => card.rows.filter(row => row.key === "power").map(row => row.text)));
+  const shown = (row: CloudPlanCardRow) => WEIGHED.has(row.key) || (row.key === "power" && power.size > 1);
+  return cards.map(card => ({ shown: card.rows.filter(shown), details: card.rows.filter(row => !shown(row)) }));
 }
 
 const DAY_MS = 86_400_000;
@@ -230,18 +243,6 @@ export function trialTimeline(offer: CloudOffer, now: number): Array<{ when: str
   return [today, ...reminder, { when: shortDate(charge), text: t("cloudBuy.timeline.firstPayment") }];
 }
 
-/** The welcome's Cloud beat: the Admin's offer in one line (trial days and the lowest price, the credit, money-back) and
- * its one action, Start free trial, or See plans without a trial. No number is the app's own. */
-export function cloudBeatTerms(offer: CloudOffer): { trial: boolean; line: string; action: string } {
-  const days = offerTrialDays(offer);
-  const priced = days ? offer.plans.filter(plan => plan.trialDays) : offer.plans;
-  const price = usd(Math.min(...priced.map(plan => plan.amount)) / 100);
-  const line = [days ? t("onboarding.cloud.trial", { days, price }) : t("onboarding.cloud.price", { price }),
-    days && offer.creditUsd ? t("onboarding.cloud.credit", { credit: usd(offer.creditUsd) }) : null,
-    offer.refundDays ? t("onboarding.cloud.moneyBack", { days: offer.refundDays }) : null].filter(Boolean).join(" ");
-  return { trial: Boolean(days), line, action: days ? t("cloudIntro.start") : t("onboarding.cloud.seePlans") };
-}
-
 /** The plan picked before signing in costs and starts the same for this account (its session's own offer); otherwise
  * Choose shows the account's terms before any checkout, so "$0.00 today" is never said of a paid one. */
 export function sameTerms(shown: CloudOffer | null | undefined, mine: CloudOffer | null | undefined, tier: string): boolean {
@@ -259,7 +260,7 @@ export function cloudIntroView(offer: CloudOffer | null | undefined): { badge: s
   if (!offer || !days) return null;
   const cheapest = Math.min(...offer.plans.filter(plan => plan.trialDays).map(plan => plan.amount));
   return {
-    badge: t("cloudIntro.badge", { days }),
+    badge: days === 1 ? t("cloudIntro.badge.one") : t("cloudIntro.badge.many", { days }),
     points: [t("cloudIntro.routines"), t("cloudIntro.phone"), offer.creditUsd ? t("cloudIntro.credit", { credit: usd(offer.creditUsd) }) : t("cloudIntro.included")],
     price: t("cloudIntro.price", { price: usd(cheapest / 100) }),
     moneyBack: moneyBackLine(offer),

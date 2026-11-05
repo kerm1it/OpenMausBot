@@ -136,6 +136,7 @@ mac:
     NSSpeechRecognitionUsageDescription: OpenMausBot transcribes your voice on-device to type messages for you.
     NSAccessibilityUsageDescription: OpenMausBot uses Accessibility when you let a bot control this Mac.
     NSScreenCaptureUsageDescription: OpenMausBot uses Screen Recording so bots can see this Mac before acting.
+    NSDownloadsFolderUsageDescription: OpenMausBot looks in Downloads for the file your Grok Bot saved when you move it here.
   # Notarization runs manually after the build (notarytool + staple),
   # mirroring the BlueyLite ship_release.sh flow.
   notarize: false
@@ -146,6 +147,17 @@ dmg:
   # the arm64 one when both arches build (this section overrides both the
   # top-level and mac-level artifactName, so it must carry the arch itself)
   artifactName: OpenMausBot-${version}-${arch}.dmg
+  # x/y are icon centres in points. electron-builder 26.15.3 sizes the window
+  # from build/background.png and ignores dmg.window whenever a background is set.
+  iconSize: 112
+  iconTextSize: 13
+  contents:
+    - x: 180
+      y: 206
+    - x: 540
+      y: 206
+      type: link
+      path: /Applications
 
 win:
   target:

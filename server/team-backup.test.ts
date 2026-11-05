@@ -18,13 +18,13 @@ function fixture() {
   const store = new Store(selection);
   const routines = new RoutineManager({
     botState: (id) => store.bot(id) ? "ready" : "missing",
-    goalState: (id, botId) => store.group(id)?.memberIds.includes(botId) ? "ready" : "missing",
+    goalState: (id, botId) => store.group(id ?? "")?.memberIds.includes(botId) ? "ready" : "missing",
     createTask: (id, title) => store.createTask(id, title),
     startTurn: async () => { throw new Error("Import must never run a bot"); },
   });
   const chief = store.createBot({ name: "Mira", section: "Engineering", description: "Full instructions\n".repeat(400) }, { seedMessages: false });
   store.setSoul(chief.id, "  Cite sources.\nRespect the user's current request. 🐭\n");
-  const scout = store.createBot({ name: "Scout", section: "Engineering", mascotBody: "circle" }, { seedMessages: false });
+  const scout = store.createBot({ name: "Scout", section: "Engineering", mascotBody: "circle", mascotFaceColor: "black" }, { seedMessages: false });
   const otherChief = store.createBot({ name: "Ava", section: "Operations" }, { seedMessages: false });
   const archived = store.createBot({ name: "Archived" }, { seedMessages: false });
   store.patchBot(archived.id, { hidden: true });
@@ -189,6 +189,7 @@ describe("additive portable team backups", () => {
     expect(store.bot(otherChief.id)?.chiefOfStaff).toBe(true);
     expect(store.bot(archived.id)?.hidden).toBe(true);
     expect(importedScout.mascotBody).toBe(scout.mascotBody);
+    expect(importedScout.mascotFaceColor).toBe("black");
     expect(result.groups[0]).toMatchObject({ name: "Project room 2", section: "Engineering 2", memberIds: [importedChief.id, importedScout.id], defaultResponder: { kind: "member", botId: importedChief.id } });
     expect(result.groups[0].tasks?.map((task) => [task.title, task.createdAt])).toEqual(group.tasks?.map((task) => [task.title, task.createdAt]));
     const roomMessage = store.messagesFor(result.groups[0].threadId)[0];
@@ -235,6 +236,17 @@ describe("additive portable team backups", () => {
     const tampered = JSON.parse(JSON.stringify(backup)) as { bots: { key: string; connectorTools: unknown }[] };
     tampered.bots[0].connectorTools = { gmail: { tools: [] } };
     expect(() => parseTeamBackup(tampered)).toThrow();
+  });
+
+  it("keeps a conversation that work from outside reached marked through backup and restore", () => {
+    const { store, routines, chief } = fixture();
+    const reached = store.createTask(chief.id, "Event chat", false)!.threadId;
+    store.patchTask(chief.id, reached, { outside: true });
+    const backup = createTeamBackup(store, routines.listRoutines(), "Marked");
+    const result = importTeamBackup(store, routines, JSON.parse(JSON.stringify(backup)), selection());
+    const restored = result.bots.find((bot) => bot.name === "Mira 2")!.tasks!;
+    expect(restored.find((task) => task.title === "Event chat")!.outside).toBe(true);
+    expect(restored.find((task) => task.title === "First conversation")).not.toHaveProperty("outside");
   });
 
   it("keeps first-message title markers armed-once through backup and restore", () => {

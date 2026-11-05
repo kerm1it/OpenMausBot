@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { activityStepLabel, formatProgressSize, liveActivityLabel, liveActivityPhrases, phraseAt, phraseHoldMs, turnNowPhrases } from "./live-activity";
+import { friendlyNowPhrases } from "./friendly-activity";
 import type { Message } from "@/state/store";
 
 const activity = (name: string, extra: Partial<NonNullable<Message["tool"]>> = {}): Message => ({
@@ -127,6 +128,14 @@ describe("phraseAt", () => {
 });
 
 describe("turnNowPhrases: what the status line says is happening now", () => {
+  it("says what the server just said about the turn, in its first sentence, until the engine reports", () => {
+    const waiting = activity("notice: Waiting for memory on this Cloud. Running now: 1. Ahead of this one: 0.", { ok: true });
+    expect(turnNowPhrases(null, waiting)?.phrases).toEqual(["Waiting for memory on this Cloud."]);
+    expect(friendlyNowPhrases(null, waiting).phrases).toEqual(["Waiting for memory on this Cloud."]);
+    expect(turnNowPhrases(null, activity("notice: 在等待。运行中：1。", { ok: true }))?.phrases).toEqual(["在等待。"]);
+    expect(turnNowPhrases({ activity: "thinking" }, waiting)?.phrases[0]).toBe("Thinking");
+  });
+
   it("names the file being written and how much, from the engine's own report", () => {
     expect(turnNowPhrases({ activity: "write", itemId: "w", file: "index.html", bytes: 14 * 1024 + 9 })).toMatchObject({ phrases: ["Writing index.html"], size: "14 KB" });
     expect(turnNowPhrases({ activity: "edit", file: "app.ts", bytes: 3 * 1024 * 1024 + 300_000 })).toMatchObject({ phrases: ["Editing app.ts"], size: "3.2 MB" });
@@ -148,6 +157,20 @@ describe("turnNowPhrases: what the status line says is happening now", () => {
     expect(turnNowPhrases(null, activity("make_invoice"))).toBeNull();
     expect(turnNowPhrases({ activity: "tool", tool: "make_invoice" })).toBeNull();
     expect(turnNowPhrases(null)).toBeNull();
+  });
+
+  it("names the command, the search and the page the server read from the call, with the whole command for the hover", () => {
+    const command = turnNowPhrases({ activity: "command", itemId: "c", target: "scrape.py", detail: "cd ~/acme && python3 scrape.py --pages 40" });
+    expect(command).toEqual({ phase: "step:command:scrape.py", phrases: ["Running scrape.py"], hover: "cd ~/acme && python3 scrape.py --pages 40" });
+    expect(turnNowPhrases({ activity: "web", target: "Acme construction leads" })?.phrases).toEqual(["Searching the web for “Acme construction leads”"]);
+    expect(turnNowPhrases({ activity: "fetch", target: "linkedin.com" })?.phrases).toEqual(["Reading linkedin.com"]);
+  });
+
+  it("names a running chip by the step stored with it, before the server's English narration", () => {
+    const chip = activity("Bash", { spoken: "running a command", step: { activity: "command", target: "pnpm test", detail: "cd web && pnpm test" } });
+    expect(turnNowPhrases(null, chip)).toMatchObject({ phrases: ["Running pnpm test"], hover: "cd web && pnpm test" });
+    expect(activityStepLabel({ name: "Write", step: { activity: "write", target: "report.md" } })).toBe("Writing report.md");
+    expect(turnNowPhrases(null, activity("Bash", { ok: true, step: { activity: "command", target: "pnpm test" } }))).toBeNull();
   });
 
   it("shows no size under a kilobyte", () => {

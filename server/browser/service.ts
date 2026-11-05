@@ -24,6 +24,7 @@ import { browserRoot, profileDir, profileHash, profileKind, removeProfile, works
 import { BROWSER_CONTROL_REFUSAL, ProfileControl, type TakeResult } from "./control.ts";
 import { executeTool, personUrl, toolFailure, type ToolContext } from "./dispatch.ts";
 import { HealthShown, pageHealthLine } from "./health.ts";
+import type { HoldLimits } from "./hold.ts";
 import { errorResult, shapeResult, textResult, withParts, type ToolResult } from "./shape.ts";
 import { TabRegistry, type Tab } from "./tabs.ts";
 import { parseToolCall, RESTART_TOOL, TOOL_LIST } from "./tools.ts";
@@ -57,6 +58,8 @@ export interface BrowserServiceOptions {
   laneWaitMs?: number;
   takeoverMs?: number;
   capacityWaitMs?: number;
+  /** How long a person's hold lasts without a hand-back; the standard limits when unset. */
+  holdLimits?: HoldLimits;
   log?: (line: string) => void;
 }
 
@@ -79,7 +82,11 @@ export class ProfileState {
   readonly shown = new WeakMap<Tab, HealthShown>();
   run: Running | null = null;
   starting: Promise<Running> | null = null;
+  /** The Chrome the pending start is opening; a stop waits for it. */
+  opening: Promise<Running> | null = null;
   stopping: Promise<void> | null = null;
+  /** Bumped by every stop: a start begun before it closes what it opened. */
+  epoch = 0;
   lastUsed = Date.now();
   calls = 0;
   reopened: Reopened = null;
@@ -169,16 +176,32 @@ export class BrowserService {
   running(profile: ProfileState): Promise<Running> {
     if (profile.run && !profile.run.closing && profile.run.browser.connected) return Promise.resolve(profile.run);
     if (profile.starting) return profile.starting;
+    const epoch = profile.epoch;
     const starting = (async () => {
       for (let stopping = profile.stopping; stopping; stopping = profile.stopping) await stopping;
-      return this.#start(profile);
+      return this.#start(profile, epoch);
     })().finally(() => { if (profile.starting === starting) profile.starting = null; });
     profile.starting = starting;
     return starting;
   }
 
-  async #start(profile: ProfileState): Promise<Running> {
+  async #start(profile: ProfileState, epoch: number): Promise<Running> {
     await this.#capacity(profile);
+    this.#stillWanted(profile, epoch);
+    const opening = this.#open(profile, epoch);
+    profile.opening = opening;
+    try {
+      return await opening;
+    } finally {
+      if (profile.opening === opening) profile.opening = null;
+    }
+  }
+
+  #stillWanted(profile: ProfileState, epoch: number): void {
+    if (profile.epoch !== epoch || this.#profiles.get(profile.key) !== profile) throw new Error("The browser was closed while it was starting.");
+  }
+
+  async #open(profile: ProfileState, epoch: number): Promise<Running> {
     const fresh = profile.fresh;
     profile.fresh = false;
     mkdirSync(profile.downloadDir, { recursive: true, mode: 0o700 });
@@ -215,9 +238,11 @@ export class BrowserService {
     }));
     if (browser.downloads) run.offs.push(browser.downloads.onChange((download) => profile.hub.downloaded(download)));
     try {
+      this.#stillWanted(profile, epoch);
       await browser.waitForPage(() => true, 15_000);
       for (const page of browser.pages()) await page.ready.then(() => adopt(page, "restored"), () => undefined);
       if (fresh) await this.#onlyBlankTab(profile, browser);
+      this.#stillWanted(profile, epoch);
     } catch (error) {
       run.closing = true;
       for (const off of run.offs) off();
@@ -257,7 +282,9 @@ export class BrowserService {
   /** Graceful: Chrome's own quit, so its next start reopens the tabs and keeps session cookies. */
   async #stop(profile: ProfileState, reopened: Reopened, { erase = false }: { erase?: boolean } = {}): Promise<void> {
     if (profile.stopping) return profile.stopping;
+    profile.epoch++;
     const run = profile.run;
+    const opening = profile.opening;
     const stopping = (async () => {
       profile.control.closing = true;
       profile.control.changed();
@@ -268,6 +295,7 @@ export class BrowserService {
           profile.hub.stopped(reopened?.kind === "idle" ? "asleep" : "closed");
           await run.opened.close().catch(() => undefined);
         }
+        await opening?.catch(() => undefined);
       } finally {
         if (profile.run === run) profile.run = null;
         profile.tabs.clear();
@@ -597,6 +625,12 @@ export class BrowserService {
     return this.#bySession(session)?.control.owner ?? null;
   }
 
+  /** A bot call or a person's hold is under way in this session's browser. */
+  working(session: string): boolean {
+    const profile = this.#bySession(session);
+    return Boolean(profile && (profile.calls > 0 || profile.control.owner !== null || profile.control.agents > 0 || this.#lanes.held(profile.key)));
+  }
+
   /** Whether the page's open picker was offered to `owner`'s view as `chooserId`: an upload for any other is refused unread. */
   fileChooserOffered(session: string, owner: string, chooserId: string): boolean {
     return this.#bySession(session)?.hub.fileChooserOffered(owner, chooserId) ?? false;
@@ -613,10 +647,6 @@ export class BrowserService {
     return download?.state === "completed" && download.path ? download : undefined;
   }
 
-  canControl(session: string, owner: string): boolean {
-    return this.#bySession(session)?.control.canControl(owner) ?? false;
-  }
-
   interrupted(session: string): boolean {
     return this.#bySession(session)?.control.uncertain === true;
   }
@@ -627,12 +657,7 @@ export class BrowserService {
 
   /** Done on a sign-in card, from any window or device: whoever holds this browser hands it back. */
   async handBack(session: string): Promise<void> {
-    const profile = this.#bySession(session);
-    const owner = profile?.control.owner;
-    if (!profile || !owner) return;
-    const viewer = [...profile.hub.viewers].find((candidate) => candidate.id === owner);
-    await profile.control.release(owner, () => viewer?.releaseInput() ?? Promise.resolve(true));
-    profile.hub.broadcastControl();
+    await this.#bySession(session)?.hub.handBack();
   }
 
   /** A person's restart: every tab closes and the browser comes back on one blank tab. */
@@ -654,6 +679,7 @@ export class BrowserService {
   #hubHost(profile: ProfileState) {
     return {
       control: profile.control,
+      ...(this.#options.holdLimits ? { holdLimits: this.#options.holdLimits } : {}),
       browser: () => (profile.run && !profile.run.closing ? profile.run.browser : null),
       active: () => profile.active(),
       tabs: () => profile.tabs.list(),

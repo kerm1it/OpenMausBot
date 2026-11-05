@@ -4,7 +4,8 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import type { ModelCatalog } from "../contracts.ts";
+import type { ModelCatalog, ProviderInstance } from "../contracts.ts";
+import { isContextName, pickedName, servedModel, serveWithWindow } from "./ollama-context.ts";
 
 export interface LocalHost {
   id: string;
@@ -27,7 +28,7 @@ export const LOCAL_HOSTS: LocalHost[] = [
 export const INJECT_SEP = "::";
 
 const HOST_BY_ID = new Map(LOCAL_HOSTS.map((host) => [host.id, host]));
-const MODEL_ID = /^[\w][\w./:+-]*$/;
+const MODEL_ID = /^[\w][\w./:+@-]*$/;
 
 export interface InjectedModel {
   id: string;
@@ -49,8 +50,10 @@ export function contextWindowsFromPs(extra: unknown): Map<string, number> {
     const id = typeof row.model === "string" ? row.model : typeof row.name === "string" ? row.name : null;
     const ctx = typeof row.context_length === "number" && Number.isFinite(row.context_length) && row.context_length > 0 ? row.context_length : null;
     if (id && ctx) {
+      const picked = pickedName(id);
       out.set(id, ctx);
-      const baseId = id.split(":")[0]!;
+      out.set(picked, ctx);
+      const baseId = picked.split(":")[0]!;
       const current = out.get(baseId);
       out.set(baseId, current === undefined ? ctx : Math.min(current, ctx));
     }
@@ -62,14 +65,42 @@ export function encodeInjectId(host: string, model: string): string {
   return `${host}${INJECT_SEP}${model}`;
 }
 
+const isOllamaHost = (host: string) => host === "ollama" || host === "local_ollama";
+const hostOrigin = (host: LocalHost) => host.baseUrl.replace(/\/v1\/?$/, "");
+
 export function decodeInjectId(id: string | null | undefined): { host: string; model: string } | null {
   if (!id) return null;
   const sep = id.indexOf(INJECT_SEP);
   if (sep <= 0) return null;
   const host = id.slice(0, sep);
   const model = id.slice(sep + INJECT_SEP.length);
-  if (!HOST_BY_ID.has(host) || !MODEL_ID.test(model)) return null;
-  return { host, model };
+  const known = HOST_BY_ID.get(host);
+  if (!known || !MODEL_ID.test(model)) return null;
+  // Every engine reads the model it sends from here, so all of them use the name that carries the window.
+  return { host, model: (isOllamaHost(host) ? servedModel(hostOrigin(known), model)?.model : undefined) ?? model };
+}
+
+/** The window a local pick will run with, once its turn has decided it. */
+export function injectedContextWindow(id: string | null | undefined): number | undefined {
+  const sep = id?.indexOf(INJECT_SEP) ?? -1;
+  if (sep <= 0) return undefined;
+  const known = HOST_BY_ID.get(id!.slice(0, sep));
+  return known && isOllamaHost(known.id) ? servedModel(hostOrigin(known), id!.slice(sep + INJECT_SEP.length))?.window : undefined;
+}
+
+/** Before a turn on an Ollama pick, settle the name that carries its window. */
+export function withLocalContext(instance: ProviderInstance): ProviderInstance {
+  const adapter = instance.adapter;
+  (instance as { adapter: ProviderInstance["adapter"] }).adapter = {
+    ...adapter,
+    sendTurn: async (input) => {
+      const sep = input.model?.indexOf(INJECT_SEP) ?? -1;
+      const host = sep > 0 ? HOST_BY_ID.get(input.model!.slice(0, sep)) : undefined;
+      if (host && isOllamaHost(host.id)) await serveWithWindow(hostOrigin(host), input.model!.slice(sep + INJECT_SEP.length));
+      return adapter.sendTurn(input);
+    },
+  };
+  return instance;
 }
 
 export function localHost(id: string): LocalHost | undefined {
@@ -186,7 +217,8 @@ function idsFromModelsPayload(payload: unknown): string[] {
     const id = (record as { id?: unknown; name?: unknown }).id ?? (record as { name?: unknown }).name;
     if (typeof id !== "string" || !MODEL_ID.test(id)) return [];
     const low = id.toLowerCase();
-    if (low.includes("embed") || low.includes("bge-") || low.includes("nomic")) return [];
+    // Our own names for a model's window are that model, not another one to pick.
+    if (low.includes("embed") || low.includes("bge-") || low.includes("nomic") || isContextName(id)) return [];
     return [id];
   });
 }
@@ -217,7 +249,8 @@ async function timedJson(
 export function loadedIdsFromPayloads(_host: LocalHost, catalog: unknown, extra: unknown): Set<string> {
   const loaded = new Set<string>();
   const catalogIds = new Set(idsFromModelsPayload(catalog));
-  const add = (id: string) => {
+  const add = (raw: string) => {
+    const id = pickedName(raw);
     const base = id.split(":")[0]!;
     if (catalogIds.size && !catalogIds.has(id) && !catalogIds.has(base)) return;
     if (!MODEL_ID.test(id)) return;
@@ -286,6 +319,45 @@ function loadedProbeUrl(host: LocalHost): string | null {
   return null;
 }
 
+function finiteContext(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/** LM Studio 0.4 lists downloaded models at GET /api/v1/models; the chat id is `key`. */
+export function lmStudioV1Catalog(
+  payload: unknown,
+): { ids: string[]; loaded: Set<string>; windows: Map<string, number> } | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const models = (payload as { models?: unknown }).models;
+  if (!Array.isArray(models)) return null;
+  const ids: string[] = [];
+  const loaded = new Set<string>();
+  const windows = new Map<string, number>();
+  for (const row of models) {
+    if (!row || typeof row !== "object") continue;
+    const item = row as { type?: unknown; key?: unknown; loaded_instances?: unknown; max_context_length?: unknown };
+    if (item.type !== "llm" || typeof item.key !== "string" || !MODEL_ID.test(item.key)) continue;
+    const instances = Array.isArray(item.loaded_instances) ? item.loaded_instances : [];
+    let contextWindow: number | undefined;
+    for (const instance of instances) {
+      if (!instance || typeof instance !== "object") continue;
+      const config = (instance as { config?: unknown }).config;
+      const length = config && typeof config === "object"
+        ? finiteContext((config as { context_length?: unknown }).context_length)
+        : null;
+      if (length !== null) contextWindow = contextWindow === undefined ? length : Math.min(contextWindow, length);
+    }
+    if (contextWindow === undefined) {
+      const max = finiteContext(item.max_context_length);
+      if (max !== null) contextWindow = max;
+    }
+    ids.push(item.key);
+    if (instances.length > 0) loaded.add(item.key);
+    if (contextWindow !== undefined) windows.set(item.key, contextWindow);
+  }
+  return { ids, loaded, windows };
+}
+
 export async function probeLocalInjects(
   env: Record<string, string | undefined> = process.env,
   fetchImpl: typeof fetch = fetch,
@@ -302,10 +374,14 @@ export async function probeLocalInjects(
     hosts.map(async (host) => {
       const catalogUrl = `${host.baseUrl.replace(/\/$/, "")}/models`;
       const extraUrl = loadedProbeUrl(host);
-      const [catalog, extra] = await Promise.all([
+      const v1Url = host.id === "lmstudio" ? `${anthropicBaseUrl(host)}/api/v1/models` : null;
+      const [catalog, extra, nativePayload] = await Promise.all([
         timedJson(catalogUrl, env, host, fetchImpl),
         extraUrl ? timedJson(extraUrl, env, host, fetchImpl) : Promise.resolve(null),
+        v1Url ? timedJson(v1Url, env, host, fetchImpl) : Promise.resolve(null),
       ]);
+      const native = host.id === "lmstudio" ? lmStudioV1Catalog(nativePayload) : null;
+      if (native) return { host, ids: native.ids, loaded: native.loaded, windows: native.windows };
       const catalogIds = catalog ? idsFromModelsPayload(catalog) : [];
       const extraIds = extra ? idsFromModelsPayload(extra) : [];
       const loaded = loadedIdsFromPayloads(host, catalog ?? extra, extra);
@@ -338,6 +414,8 @@ export async function mergeLocalInject(
   const vitest = env.VITEST ?? process.env.VITEST;
   const probe = env.OPENMAUSBOT_PROBE_LOCAL_INJECT ?? process.env.OPENMAUSBOT_PROBE_LOCAL_INJECT;
   if (vitest === "true" && probe !== "1") return catalog;
+  // An engine's own config lists whatever it was last told to run, which may be a name that carries a window.
+  catalog = { ...catalog, options: catalog.options.filter((option) => !isContextName(option.id)) };
   const extras = await probeLocalInjects(env, fetchImpl);
   if (!extras.length) return catalog;
   const liveApiIds = new Set(extras.map((extra) => extra.model));
@@ -391,5 +469,7 @@ export function applyClaudeInject(
   env.ANTHROPIC_AUTH_TOKEN = key;
   env.ANTHROPIC_API_KEY = key;
   env.ANTHROPIC_MODEL = inject.model;
+  const window = injectedContextWindow(modelId);
+  if (window) env.CLAUDE_CODE_MAX_CONTEXT_TOKENS = String(window);
   return { model: inject.model, injected: true };
 }

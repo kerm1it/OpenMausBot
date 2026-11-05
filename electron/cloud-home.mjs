@@ -13,7 +13,7 @@ const ADMIN_STATES = Object.freeze({
 const CODE = /^[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}$/;
 const MAX_GRANT_MS = 10 * 60_000;
 
-function homeOrigin(value) {
+export function homeOrigin(value) {
   if (typeof value !== "string" || value.length > 300) return null;
   try {
     const url = new URL(value);
@@ -126,6 +126,24 @@ export function parseCloudUsage(input) {
   return { tier: input.tier, resetsAt: input.resetsAt, ...(moment(input.trialEndsAt) ? { trialEndsAt: input.trialEndsAt } : {}), meters: unique, upgrades };
 }
 
+const ROOM_ID = /^[A-Za-z0-9-]{1,64}$/;
+const whole = (value, max) => Number.isSafeInteger(value) && value >= 0 && value <= max;
+/** The session's `cloud.room` (contract v1, additive): the Cloud this account pays for is short on room. Display only: the
+ * plan it names is moved to through the usual upgrade, which main allows only for a plan `usage` lists. */
+export function parseCloudRoom(input) {
+  if (!record(input) || typeof input.id !== "string" || !ROOM_ID.test(input.id) || !record(input.cause)) return null;
+  const { cause } = input;
+  const memory = cause.kind === "memory" && whole(cause.waits, 1e6) && whole(cause.waitMinutes, 1e6) && whole(cause.stopped, 1e6);
+  const disk = cause.kind === "disk" && amount(cause.usedGb) && whole(cause.capGb, 1e5) && cause.capGb > 0;
+  if (!memory && !disk) return null;
+  const plan = input.plan, sizes = record(plan) && ["memoryMb", "fromMemoryMb", "diskGb", "fromDiskGb"].every(key => whole(plan[key], 1e7));
+  const offered = sizes && PLAN_TIERS.includes(plan.tier) && Number.isSafeInteger(plan.amount) && plan.amount >= 1 && plan.amount <= 10_000_000
+    ? { tier: plan.tier, amount: plan.amount, memoryMb: plan.memoryMb, fromMemoryMb: plan.fromMemoryMb, diskGb: plan.diskGb, fromDiskGb: plan.fromDiskGb } : null;
+  if (!offered && input.tip !== true) return null;
+  return { id: input.id, cause: memory ? { kind: "memory", waits: cause.waits, waitMinutes: cause.waitMinutes, stopped: cause.stopped }
+    : { kind: "disk", usedGb: cause.usedGb, capGb: cause.capGb }, ...(offered ? { plan: offered } : { tip: true }) };
+}
+
 const days = (value, max) => Number.isSafeInteger(value) && value >= 1 && value <= max ? value : null;
 const count = value => Number.isSafeInteger(value) && value >= 0 && value <= 1_000_000_000;
 // oxlint-disable-next-line no-control-regex
@@ -134,7 +152,8 @@ function planAllowances(input) {
   if (!record(input) || !["cpus", "memoryMb", "diskGb", "maxDiskGb", "computers", "computerHours", "voiceCharacters"].every(key => count(input[key]))) return null;
   return { cpus: input.cpus, ...(["shared", "performance"].includes(input.cpuKind) ? { cpuKind: input.cpuKind } : {}), memoryMb: input.memoryMb, diskGb: input.diskGb, maxDiskGb: Math.max(input.maxDiskGb, input.diskGb),
     computers: input.computers, computerHours: input.computerHours, voiceCharacters: input.voiceCharacters, ...(input.sleeps === true ? { sleeps: true } : {}),
-    ...(count(input.swapMb) && input.swapMb > 0 ? { swapMb: input.swapMb } : {}), ...(days(input.snapshotDays, 365) ? { snapshotDays: input.snapshotDays } : {}) };
+    ...(count(input.swapMb) && input.swapMb > 0 ? { swapMb: input.swapMb } : {}), ...(days(input.snapshotDays, 365) ? { snapshotDays: input.snapshotDays } : {}),
+    ...(days(input.seats, 1_000) ? { seats: input.seats } : {}) };
 }
 /** Monthly price before tax in US cents; a plan without one is not sold here. */
 function offerPlan(input) {

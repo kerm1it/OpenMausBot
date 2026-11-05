@@ -17,8 +17,12 @@ export interface ConfirmDialogProps {
   icon?: ReactNode;
   onCancel: () => void;
   onConfirm: () => void;
+  /** A gentler way to the same end, offered beside the confirm button ("Archive instead"). */
+  alternative?: { label: string; onClick: () => void };
   pending?: boolean;
   returnFocusRef?: RefObject<HTMLElement | null>;
+  /** Where it sits among open dialogs, when another one above the usual layer asked it. */
+  layer?: string;
 }
 
 /**
@@ -74,7 +78,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-6"
+      className={`fixed inset-0 ${props.layer ?? "z-50"} flex items-center justify-center bg-black/55 p-6`}
       onMouseDown={(event) => event.target === event.currentTarget && onCancel()}
     >
       <ConfirmDialogCard ref={dialogRef} cancelRef={cancelRef} {...props} />
@@ -94,6 +98,7 @@ export function ConfirmDialogCard({
   icon,
   onCancel,
   onConfirm,
+  alternative,
   pending = false,
 }: ConfirmDialogProps & {
   ref?: React.Ref<HTMLDivElement>;
@@ -137,6 +142,8 @@ export function ConfirmDialogCard({
         >
           {cancelLabel}
         </button>
+        {alternative && <button type="button" data-confirm-alternative onClick={alternative.onClick} disabled={pending}
+          className="rounded-xl bg-accent px-4 py-2 text-[13px] font-medium text-white hover:brightness-110">{alternative.label}</button>}
         <button
           type="button"
           onClick={onConfirm}

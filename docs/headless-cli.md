@@ -135,11 +135,13 @@ and `wait` keep asking for the same job until their time runs out; a refusal
 (an expired token) ends them with exit 5 at once.
 
 Stopping a job (`interrupt --tree`, `--on-input stop`, `--on-timeout stop`)
-presses Stop in its conversation, then in each teammate's own conversation
-that still holds part of it: a turn still running, waiting on its own
-teammates, parked on an answer, or about to run again. Work that never
-started is dropped by the first Stop, and its teammate's conversation is left
-alone.
+presses Stop in its conversation, which ends everything it handed out:
+teammates mid-turn, what they handed on, and work that never started. If a
+teammate's own conversation still holds part of it after that (a turn still
+running, waiting on its own teammates, parked on an answer, or about to run
+again), Stop is pressed there too. `stopped` (`teammates` for `interrupt
+--tree`) lists each teammate task that was at work and ended; work that never
+started is dropped without being listed.
 
 The waiting is done by the server: each request is held until the job
 changes, so a long wait costs one request at a time, not a poll loop. The
@@ -196,7 +198,7 @@ openmausbot engine list
 ```
 
 KIND is `claude`, `openai`, `openrouter`, `openai-compatible` (needs
-`--base-url`), `xai`, `groq`, `mistral` or `cerebras`. The key comes from an
+`--base-url`), `xai`, `groq`, `greenference`, `mistral` or `cerebras`. The key comes from an
 environment variable (`--key-env`) or a file (`--key-file`), is written once
 through the same setting the Settings screen uses, and is never printed or
 read back. An engine that already has a key is left alone unless `--rotate`,
@@ -255,7 +257,7 @@ is the confirmation.
 version: 1                                  # required
 engines:                                    # optional; needs full access
   claude: { key: SECRET, baseUrl: URL | SECRET, everyClaudeBot: true, install: false }
-  openai | openrouter | xai | groq | mistral | cerebras: { key: SECRET }
+  openai | openrouter | xai | groq | greenference | mistral | cerebras: { key: SECRET }
   openaiCompatible: { key: SECRET, baseUrl: URL | SECRET }
   # SECRET is { env: NAME } or { file: PATH }. A key written in the file is refused.
 defaults: BOT FIELDS                        # every bot gets these unless it sets its own
@@ -270,7 +272,7 @@ bots:                                       # at least one
     title: Launch rehearsal lead
     description: TEXT
     chief: true                             # Chief of Staff of its team (one per team); false removes it
-    manages: [Support]                      # other teams this Chief may hand work to
+    manages: [Support]                      # other teams this Chief is also in charge of (every bot reaches every bot anyway)
     soul: TEXT | { file: PATH }             # standing instructions, at most 24,000 bytes
     model: claude/claude-sonnet-5-5         # INSTANCE/MODEL; openmausbot models lists them
     effort: none | low | medium | high | xhigh | max

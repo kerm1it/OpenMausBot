@@ -13,6 +13,7 @@ import { MAX_SSE_EVENT_BYTES } from "../src/wire.ts";
 import { createConnectedDeviceTracker } from "../src/connected-devices.ts";
 import type { CompanionEndpoint } from "../src/endpoints.ts";
 import { removeTempDir, waitForExit } from "../../server/testing/cleanup.ts";
+import { workerPort } from "../../server/testing/worker-port.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..", "..");
@@ -29,7 +30,7 @@ const freePorts = async (span = 1): Promise<number> => {
     });
 
   for (let attempt = 0; attempt < 40; attempt++) {
-    const candidate = 20_000 + Math.floor(Math.random() * 9_000);
+    const candidate = workerPort(20_000, 9_000);
     const held: Server[] = [];
     let free = true;
     for (let i = 0; i < span; i++) {
@@ -317,6 +318,35 @@ describe("the sidecar in front of an unmodified harness", () => {
       const refreshed = await device("GET", "/api/bots");
       expect(refreshed.body.bots.find((candidate: { id: string }) => candidate.id === bot.id)).toEqual(bot);
     }
+  });
+
+  it("refuses a new bot's protected settings from a paired device without making the bot", async () => {
+    const ids = async () => ((await device("GET", "/api/bots")).body.bots as Array<{ id: string }>).map((bot) => bot.id);
+    const before = await ids();
+    const settings: Array<[string, unknown]> = [
+      ["approvalMode", "full"], ["approvalMode", "ask"], ["alwaysAllow", ["Bash(*)"]], ["chiefOfStaff", true], ["computer", "local"],
+      ["cwd", "/"], ["peers", []], ["approvePeerComms", false], ["mcpServers", ["github"]], ["browserProfile", "guest"],
+      ["toolScope", { allow: ["native:*"] }], ["composio", true], ["browser", true],
+    ];
+    const fields: Array<[string, unknown]> = [
+      ["section", "Ops"], ["preset", "chief-of-staff"], ["visibility", { audience: "members" }], ["reportsTo", "someone@example.test"], ["unexpected", true],
+    ];
+    for (const [field, body] of [
+      ...settings.map(([field, value]) => [field, { name: "From the phone", settings: { [field]: value } }] as const),
+      ...fields.map(([field, value]) => [field, { name: "From the phone", [field]: value }] as const),
+    ]) {
+      const refused = await device("POST", "/api/bots", { body });
+      expect(refused.status, JSON.stringify(body)).toBe(403);
+      expect(refused.body.error).toContain(field);
+      expect(refused.body.error).toContain("host computer");
+    }
+    expect(await ids()).toEqual(before);
+
+    const made = await device("POST", "/api/bots", {
+      body: { name: "From the phone", settings: { soul: "Plans trips.", color: "teal", mascotBody: "star" } },
+    });
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+    expect(made.body.bot).toMatchObject({ name: "From the phone", color: "teal", mascotBody: "star" });
   });
 
   it("saves the avatar panel's reset and shape choices from a paired device", async () => {

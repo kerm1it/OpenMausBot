@@ -1,3 +1,4 @@
+import { canManage, canReach } from "./peer-roster.ts";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -18,7 +19,7 @@ const intros = (store: Store, bot: BotRecord) => (bot.tasks ?? []).flatMap((task
 const boot = (store: Store) => ensureDefaultBot(store, { dataDir: DATA_DIR });
 /** Who the daily brief comes from, as the server picks it. */
 const briefChief = (store: Store) => createBrief({ store, dataDir: DATA_DIR, hosted: false, watching: () => true, mainThread: (id) => store.bot(id)?.threadId,
-  threadBusy: () => false, notify: () => {}, runs: () => [], needsYou: () => [], engineName: () => "Claude", hostTimeZone: () => "UTC", session: () => null,
+  threadBusy: () => false, notify: () => {}, runs: () => [], needsYou: () => [], engineName: () => "Claude", hostTimeZone: () => "UTC", language: () => undefined, session: () => null,
   address: () => undefined, failRun: () => {}, keep: () => {}, items: () => null }).chief();
 /** A new install from before MausBot was marked: its first bot was MausBot in silver, made its Chief. */
 function seededBefore(store: Store): BotRecord {
@@ -43,6 +44,16 @@ describe("MausBot, every person's helper", () => {
     const maus = placeMausBots(again)[0]!;
     expect(maus).toMatchObject({ name: "MausBot", color: "chrome", chiefOfStaff: true, defaultBot: {} });
     expect(intros(again, maus)).toHaveLength(1);
+  });
+
+  it("leaves a Team Cloud member's MausBot uncrowned: it reaches no bot everyone sees, so a crown would promise work it can't hand on", () => {
+    const store = new Store(selection);
+    store.seedIfEmpty({ defaultBot: false });
+    const own = ensureDefaultBot(store, { dataDir: DATA_DIR, person: "ada@acme.test", team: "Acme" })!;
+    expect(own.chiefOfStaff).toBeFalsy();
+    const fox = store.createBot({ name: "Fox", reportsTo: "ada@acme.test" } as never);
+    expect(canReach(own, fox)).toBe(false);
+    expect(canManage(own, fox)).toBe(false);
   });
 
   it("gives an existing install without one a MausBot once on update, beside its Chief, which stays exactly as it was", () => {
@@ -97,7 +108,7 @@ describe("MausBot, every person's helper", () => {
     const maus = boot(store)!;
     expect(store.bot(maus.id)?.chiefOfStaff).toBe(true);
     expect(briefChief(store)?.id).toBe(maus.id);
-    expect(intros(store, maus)[0]?.text).toContain("As your Chief of Staff, I also keep an eye on your day");
+    expect(intros(store, maus)[0]?.text).toContain("Hey! I'm MausBot. I'm new here. I'm here to be your Chief of Staff. I can manage your other bots.");
   });
 
   it("makes an adopted MausBot the Chief when its place has none left", () => {
@@ -110,13 +121,16 @@ describe("MausBot, every person's helper", () => {
     expect(briefChief(store)?.id).toBe(seeded.id);
   });
 
-  it("leaves a place's own Chief as the Chief and the one the brief comes from", () => {
+  it("leaves a place's own Chief as the Chief, and the brief comes from MausBot, which says so", () => {
     const store = new Store(selection);
     const chief = store.createBot({ name: "Clive" });
     store.setChiefOfStaff(chief.id);
     const maus = boot(store)!;
     expect(store.bot(maus.id)?.chiefOfStaff).toBeFalsy();
-    expect(briefChief(store)?.id).toBe(chief.id);
+    expect(briefChief(store)?.id).toBe(maus.id);
+    expect(intros(store, maus)[0]?.text).toContain("your helper for everything here");
+    expect(intros(store, maus)[0]?.text).toContain("keep an eye on your day");
+    expect(intros(store, maus)[0]?.text).not.toContain("Chief of Staff");
   });
 
   it("keeps a MausBot Chief hidden from the sidebar working as the Chief", () => {
@@ -218,6 +232,7 @@ describe("MausBot, every person's helper", () => {
     expect(bea).toMatchObject({ defaultBot: { person: "bea@example.com" }, visibility: { people: ["bea@example.com"] } });
     expect(ada.chiefOfStaff).toBeFalsy();
     expect(intros(store, ada)[0]?.text).toContain("On Acme, I'm here for you and look after your own bots.");
+    expect(intros(store, ada)[0]?.text).not.toContain("keep an eye on your day");
     expect(store.bots).toHaveLength(3);
   });
 

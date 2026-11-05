@@ -4,6 +4,7 @@
 import readline from "node:readline";
 import { NATIVE_PLUGIN_TOOLS } from "../shared/plugin-tools.ts";
 import { callPluginTool } from "./mcp-plugin-tools.ts";
+import { isRecord, projectMessage } from "./mcp-message-projection.ts";
 
 import { validateBaseUrl } from "./mcp-url.ts";
 export { validateBaseUrl } from "./mcp-url.ts";
@@ -256,7 +257,7 @@ export const TOOLS: McpToolDefinition[] = [
         channel_id: { type: "string", description: "The ID of the channel." },
         task_id: { type: "string", description: "Optional expected active task/thread ID." },
         text: { type: "string", description: "The message content to post." },
-        send_id: SEND_ID_SCHEMA,
+        send_id: SEND_ID_SCHEMA, mentions: { type: "array", items: { type: "string" }, maxItems: 20, description: "When an @name in text is shared by several bots in the channel: the ids of the ones you mean." },
       },
       required: ["channel_id", "text"],
       additionalProperties: false,
@@ -459,9 +460,6 @@ function parsePositiveLimit(raw: unknown, fallback = 30, maximum = 200): number 
   return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, maximum) : fallback;
 }
 
-function isRecord(value: unknown): value is Record<string, any> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function valueHasType(value: unknown, type: string): boolean {
   if (type === "null") return value === null;
@@ -628,77 +626,6 @@ function projectChannel(channel: Record<string, any>) {
   };
 }
 
-function projectMessage(message: Record<string, any>) {
-  const card = isRecord(message.card)
-    ? {
-        title: message.card.title,
-        subtitle: message.card.subtitle,
-        options: message.card.options,
-        answered: message.card.answered,
-        dismissed: message.card.dismissed,
-        expired: message.card.expired,
-      }
-    : undefined;
-  const tool = isRecord(message.tool)
-    ? { name: message.tool.name, ok: message.tool.ok, spoken: message.tool.spoken, setup: message.tool.setup,
-        ...(message.tool.terminal === true ? { terminal: true } : {}),
-      }
-    : undefined;
-  const connector = isRecord(message.connector)
-    ? {
-        slug: message.connector.slug,
-        label: message.connector.label,
-        description: message.connector.description,
-        status: message.connector.status,
-        dismissed: message.connector.dismissed,
-        resumed: message.connector.resumed,
-      }
-    : undefined;
-  const secret = isRecord(message.secret)
-    ? {
-        target: message.secret.target,
-        label: message.secret.label,
-        description: message.secret.description,
-        placeholder: message.secret.placeholder,
-        helpUrl: message.secret.helpUrl,
-        provided: message.secret.provided,
-        dismissed: message.secret.dismissed,
-        superseded: message.secret.superseded,
-        resumed: message.secret.resumed,
-      }
-    : undefined;
-  const signIn = isRecord(message.signIn)
-    ? {
-        site: message.signIn.site,
-        url: message.signIn.url,
-        place: message.signIn.place,
-        reason: message.signIn.reason,
-        done: message.signIn.done,
-        cancelled: message.signIn.cancelled,
-        superseded: message.signIn.superseded,
-        resumed: message.signIn.resumed,
-      }
-    : undefined;
-  return {
-    id: message.id,
-    at: message.at,
-    role: message.role,
-    kind: message.kind,
-    text: message.text,
-    from: message.from,
-    replyToId: message.replyToId,
-    reactions: message.reactions,
-    steered: message.steered,
-    queued: message.queued,
-    ...(tool ? { tool } : {}),
-    ...(card ? { card } : {}),
-    ...(connector ? { connector } : {}),
-    ...(secret ? { secret } : {}),
-    ...(signIn ? { signIn } : {}), ...(message.widget ? { widget: message.widget } : {}), ...(message.app ? { app: message.app } : {}), ...(message.fromApp ? { fromApp: message.fromApp } : {}),
-    ...(message.kind === "screen" ? { hasImage: Boolean(message.hasImage || message.png) } : {}),
-  };
-}
-
 async function fleet(fetcher: (path: string, options?: RequestInit) => Promise<any>) {
   return fetcher("/api/bots?messages=0");
 }
@@ -714,7 +641,7 @@ function messageNeedsInput(message: Record<string, any>): boolean {
     !message.connector.resumed &&
     message.connector.status !== "connected";
   const secret = isRecord(message.secret) && !message.secret.provided && !message.secret.dismissed && !message.secret.superseded;
-  const signIn = isRecord(message.signIn) && !message.signIn.done && !message.signIn.cancelled && !message.signIn.superseded;
+  const signIn = isRecord(message.signIn) && !message.signIn.done && !message.signIn.cancelled && !message.signIn.superseded && !message.signIn.answeredInChat;
   return Boolean(card || connector || secret || signIn);
 }
 
@@ -999,7 +926,7 @@ export async function handleToolCall(
       }
       const receipt = await fetcher(`/api/groups/${encodeURIComponent(channelId)}/messages`, {
         method: "POST",
-        body: JSON.stringify({ text, threadId: taskId, ...sendIdArg(args) }),
+        body: JSON.stringify({ text, threadId: taskId, ...sendIdArg(args), ...(args.mentions !== undefined ? { mentions: stringArrayArg(args, "mentions") } : {}) }),
       });
       return { success: true, channelId, taskId, ...sendReceipt(receipt) };
     }

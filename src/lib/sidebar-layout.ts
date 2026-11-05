@@ -1,5 +1,5 @@
 import type { GroupGoalRunCardData } from "../../shared/group-goal-run";
-import type { ConnectorCardData } from "../../shared/wire";
+import type { ConnectorCardData } from "../../shared/connector-card";
 import type { DefaultBotFields } from "../../shared/default-bot";
 import { hiddenFromSidebar } from "./default-bot";
 
@@ -15,7 +15,7 @@ const USER_SECTION_PREFIX = "section:";
 
 export type SidebarSectionId = string;
 export type SectionDropPlace = "before" | "after";
-export type SidebarDensityMode = "comfortable" | "compact" | "icons";
+export type SidebarDensityMode = "comfortable" | "icons";
 
 const GOAL_RUN_PREVIEW_LABEL = {
   working: "Working",
@@ -111,7 +111,9 @@ export function partitionSidebarBots<T extends SidebarBot>(
 ) {
   const universalPins = options?.universalPins === true;
   const visible = bots.filter((bot) => !bot.hidden && !hiddenFromSidebar(bot, options?.viewerEmail) && bot.id !== options?.welcoming);
-  const pinnedBots = visible.filter((bot) => Boolean(bot.pinned) && (universalPins || !bot.chiefOfStaff));
+  // The pin flag is the server's, the same on every client. Only the main Chief keeps its own top slot when pins are
+  // not universal (a device's layout choice); a pinned Chief of a group is listed with the other pinned bots.
+  const pinnedBots = visible.filter((bot) => Boolean(bot.pinned) && (universalPins || !bot.chiefOfStaff || Boolean(bot.section)));
   const pinnedIds = new Set(pinnedBots.map((bot) => bot.id));
   const unsectionedChief = visible.find((bot) => bot.chiefOfStaff && !bot.section && !pinnedIds.has(bot.id)) ?? null;
   const sectionChiefs = visible.filter((bot) => bot.chiefOfStaff && Boolean(bot.section) && !pinnedIds.has(bot.id));
@@ -122,6 +124,26 @@ export function partitionSidebarBots<T extends SidebarBot>(
     (bot) => !bot.chiefOfStaff && !bot.section && !pinnedIds.has(bot.id),
   );
   return { unsectionedChief, pinnedBots, sectionChiefs, sectionedBots, unsectionedBots };
+}
+
+export function withPrimaryTile<T extends SidebarBot>(parts: ReturnType<typeof partitionSidebarBots<T>>, defaultBotId: string | undefined) {
+  const primary = parts.unsectionedChief
+    ?? parts.pinnedBots.find((bot) => bot.chiefOfStaff && !bot.section)
+    ?? [...parts.pinnedBots, ...parts.unsectionedBots].find((bot) => bot.id === defaultBotId)
+    ?? null;
+  if (!primary) return { ...parts, primary };
+  const others = (bots: T[]) => bots.filter((bot) => bot.id !== primary.id);
+  return { ...parts, primary, unsectionedChief: null, pinnedBots: others(parts.pinnedBots), unsectionedBots: others(parts.unsectionedBots) };
+}
+
+/** Bots that are working or waiting on the person move to the top of their own list (pinned, main, each department),
+ * keeping the person's order among them; the rest follow in that same order. Only how the list is shown changes. */
+export function activeBotsFirst<T>(parts: { pinnedBots: T[]; sectionedBots: T[]; unsectionedBots: T[] }, active: (bot: T) => boolean) {
+  const first = (bots: T[]) => {
+    const flags = bots.map(active);
+    return [...bots.filter((_, index) => flags[index]), ...bots.filter((_, index) => !flags[index])];
+  };
+  return { pinnedBots: first(parts.pinnedBots), sectionedBots: first(parts.sectionedBots), unsectionedBots: first(parts.unsectionedBots) };
 }
 
 export function partitionSidebarGroups<T extends SidebarGroup>(groups: T[]) {
@@ -162,19 +184,17 @@ export function orderedSidebarSections(
   return result;
 }
 
-export const SIMPLE_FIXED_SECTION_IDS: readonly SidebarSectionId[] = [PINNED_SECTION_ID, BOTS_SECTION_ID];
+export const SIMPLE_FIRST_SECTION_IDS: readonly SidebarSectionId[] = [PINNED_SECTION_ID, BOTS_SECTION_ID, CHANNELS_SECTION_ID, BOT_CHATS_SECTION_ID];
 
 export function simpleSidebarSections(ids: SidebarSectionId[]): SidebarSectionId[] {
   return [
-    ...SIMPLE_FIXED_SECTION_IDS.filter((id) => ids.includes(id)),
-    ...ids.filter((id) => !SIMPLE_FIXED_SECTION_IDS.includes(id)),
+    ...SIMPLE_FIRST_SECTION_IDS.filter((id) => ids.includes(id)),
+    ...ids.filter((id) => !SIMPLE_FIRST_SECTION_IDS.includes(id)),
   ];
 }
 
-export function keepFixedSectionSlots(fullOrder: SidebarSectionId[], simpleOrder: SidebarSectionId[]): SidebarSectionId[] {
-  const moved = simpleOrder.filter((id) => !SIMPLE_FIXED_SECTION_IDS.includes(id));
-  let next = 0;
-  return fullOrder.map((id) => (SIMPLE_FIXED_SECTION_IDS.includes(id) ? id : moved[next++] ?? id));
+export function simpleOrderedSections(ordered: SidebarSectionId[], simpleSaved: SidebarSectionId[]): SidebarSectionId[] {
+  return orderedSidebarSections(simpleSidebarSections(ordered), simpleSaved);
 }
 
 export function moveSection(
