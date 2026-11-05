@@ -168,7 +168,7 @@ window itself.
 ## Two screens, then the chat (Oct 27 2026)
 
 ```sh
-pnpm exec vitest run src/lib/onboarding.test.ts src/lib/welcome-draft.test.ts src/lib/default-bot.test.ts src/lib/corner-popup.test.ts src/components/onboarding src/components/HelperIntro.test.ts src/components/AppNotices.test.ts src/components/MausBotWelcome.gate.test.ts
+pnpm exec vitest run src/lib/onboarding.test.ts src/lib/welcome-draft.test.ts src/lib/default-bot.test.ts src/lib/corner-popup.test.ts src/components/onboarding src/components/HelperIntro.test.ts src/components/MausBotWelcome.gate.test.ts
 ```
 
 - `src/components/onboarding/WelcomeFlow.test.ts` renders the flow in
@@ -187,8 +187,8 @@ pnpm exec vitest run src/lib/onboarding.test.ts src/lib/welcome-draft.test.ts sr
 - `src/components/HelperIntro.test.ts` covers MausBot's first messages: the
   three bubbles, the look around, chips for only what is missing, and the
   staged arrival.
-- `src/lib/corner-popup.test.ts` and `src/components/AppNotices.test.ts` keep
-  every corner notice out of the first conversation until a reply;
+- `src/lib/corner-popup.test.ts` checks that corner-popup eligibility waits
+  for the first reply;
   `src/components/onboarding/FirstConversationTour.test.ts` keeps its
   spotlights off; `src/components/MausBotWelcome.gate.test.ts` keeps MausBot's
   first-launch card for older installs only.

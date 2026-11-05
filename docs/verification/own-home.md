@@ -1,5 +1,10 @@
 # A server of the person's own as their bots' home
 
+The desktop does not offer automatic migration or promotional move cards in
+this fork. `node --test electron/desktop-services.node-test.mjs` checks the
+removed entry points. The module-level fixtures below cover retained migration
+contracts. Self-hosted connections use [server connection checks](desktop-server-connection.md).
+
 What it covers: **Make <server> my home** on a server's circle, the one-time move
 of this computer's bots to that server, and this computer then working for it by
 itself; and that none of it happens for a server other people sign in to.
@@ -51,7 +56,7 @@ has no such service, so the move's check still passes.
 ## Bots in two places, noticed
 
 ```sh
-pnpm exec vitest run server/two-places.e2e.test.ts src/components/AppNotices.test.ts src/lib/notices.test.ts
+pnpm exec vitest run server/two-places.e2e.test.ts src/lib/notices.test.ts
 node --test electron/two-places.node-test.mjs
 ```
 
@@ -67,9 +72,7 @@ The node tests cover the rest: a bot counts as the move would carry it, My Cloud
 comes first and only while the person keeps this computer's bots here, nothing
 is suggested while a move is under way, after this computer's bots were deleted,
 or for a place that couldn't say, and each place is read again at most every ten
-minutes unless the places changed. `src/components/AppNotices.test.ts` shows the
-card once on this computer's page before any promotion, never during the welcome
-or the tour, and never on a Cloud's or a server's page, which never get the bridge.
+minutes unless the places changed. The desktop does not mount this suggestion card.
 
 ## Bots that say where another bot lives
 

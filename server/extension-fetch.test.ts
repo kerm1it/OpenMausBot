@@ -1,5 +1,6 @@
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
 import { zipSync, strToU8 } from "fflate";
 import { createExtensionHost } from "./extension-host.ts";
@@ -11,7 +12,7 @@ import { EXTENSION_DEPENDENCY_TIMEOUT_MS } from "./extension-fetch.ts";
 const roots: string[] = [];
 afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 function setup(fetcher: typeof fetch) {
-  const root = mkdtempSync("/tmp/omb-extension-timeout-"); roots.push(root);
+  const root = mkdtempSync(join(tmpdir(), "omb-extension-timeout-")); roots.push(root);
   const plugins = createPluginService({ library: new PluginLibrary(join(root, "plugins")), store: { removePluginReferences: () => [] }, inUse: () => false, getDefaults: () => undefined, saveDefaults: () => {} });
   const host = createExtensionHost({ dataDir: root, plugins, fetcher, createBot: async () => ({ botId: "created" }) });
   return { root, plugins, host };

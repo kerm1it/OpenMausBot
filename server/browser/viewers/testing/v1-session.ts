@@ -65,7 +65,7 @@ export async function runV1Session(driver: LiveDriver, origin: string, { settleM
   let viewerId = "";
   sse.on("event", (event: { type: string; data: Record<string, unknown> }) => {
     if (event.type === "ready") viewerId = String(event.data.viewerId);
-    if (event.type === "frame" && viewerId) void driver.action(viewerId, { type: "ack", seq: event.data.seq }).catch(() => undefined);
+    if (event.type === "frame" && viewerId) queueMicrotask(() => { void driver.action(viewerId, { type: "ack", seq: event.data.seq }).catch(() => undefined); });
   });
   const records: StepRecord[] = [];
   let mark = 0;

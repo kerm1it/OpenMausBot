@@ -1,9 +1,10 @@
-# Optional personal OMB Cloud account
+# Hosted Cloud compatibility reference
 
-Personal Cloud is independent of Settings → Organization, the hosted Companion
-account, local profile fields, providers, bots and chat history. Fresh startup
-without a saved Cloud credential makes no Cloud request and opens no browser.
-Cloud authentication is optional; its failure never blocks free local use.
+The desktop in this fork does not initialize the hosted Cloud client or expose
+its account, checkout or enrollment bridges. Verify those boundaries with
+`node --test electron/desktop-services.node-test.mjs`.
+
+The protocol and client checks below document retained compatibility modules.
 
 ## Contract and boundaries
 
@@ -61,7 +62,7 @@ Device polling completes browser approval automatically. The existing
 ## Automated fixtures
 
 ```sh
-node --test electron/cloud-account.node-test.mjs electron/cloud-account-ipc.node-test.mjs electron/organization-reopen.node-test.mjs
+node --test electron/cloud-account.node-test.mjs electron/desktop-services.node-test.mjs
 pnpm exec vitest run src/components/CloudAccountSettings.test.ts src/components/SettingsModal.appearance.test.ts src/components/OrganizationSettings.test.ts
 pnpm exec tsc --noEmit
 pnpm check:electron

@@ -1,5 +1,10 @@
 # Optional desktop organization connection
 
+Desktop enrollment is disabled in this fork. The absence of its renderer and
+main-process entry points is checked by
+`node --test electron/desktop-services.node-test.mjs`. The fixtures below cover
+retained client and component contracts in isolation.
+
 Run the actual renderer and production desktop preload/client in a disposable
 Electron window:
 
@@ -191,12 +196,8 @@ engine account or paid model call was used.
   signed-out CLI's custom models, and a bot whose selected thread still runs)
   are never counted; bots with elevated permissions on another engine are
   listed for their own model chip instead. Disconnecting dispatches nothing.
-- `node --test electron/managed-desktop.node-test.mjs
-  electron/organization-reopen.node-test.mjs`: **Open the sign-in page again**
-  reopens only the pending attempt's validated `/enroll?code=` page, makes no
-  portal request, ignores any renderer argument at the preload, IPC and client
-  layers, answers only the local main window's main frame, and does nothing
-  after approval, cancellation or expiry.
+- `node --test electron/managed-desktop.node-test.mjs` checks the retained
+  client authentication, enrollment state and disconnect behavior.
 - Mutation checks (each failed its test, then was restored): no enrolled
   branch; no policy filter; enrolled rules applied without an enrolment;
   returning a refused saved default; Company before a working personal engine;

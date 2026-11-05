@@ -1,5 +1,9 @@
 # Organization library: the desktop channel
 
+The desktop's managed organization-library connection is disabled in this
+fork. `node --test electron/desktop-services.node-test.mjs` checks the removed
+entry points. The remaining checks exercise retained library modules in isolation.
+
 What it covers: Electron main's half of the organization library
 ([../desktop-library.md](../desktop-library.md)): the capability, the session
 pointer, the catalog and release downloads, their checks and cache,
@@ -65,15 +69,6 @@ It checks:
   refused; the session keeps its own 512 KiB cap.
 - **Pruning:** a release file the catalog stopped naming stays for 7 days.
 
-`pnpm test:electron` also runs `company-backup-main.node-test.mjs`. It
-evaluates the real `ensureManagedDesktop()` from `main.mjs` with a recording
-`createOrgLibrary` and checks what the library is given: `<data
-dir>/org-library`, its own `company-library.bin` record, downloads through the
-client's `fetchLibraryBytes`, the relay to the current local runtime, and the
-client's `library` option. The three calls outside that function
-(`runtimeReady()` when the server is ready, `receive()` in the runtime's
-message handler, `close()` on quit) are checked in the source text only, as
-`server-supervisor.node-test.mjs` does for recovery windows; no test runs them.
 
 Workspace and company backups leave out `org-library/catalog.json` and
 `org-library/blobs/` and keep the runtime's `state.json` and `presets.json`:
@@ -109,13 +104,6 @@ Removing only the check before the record is saved is not caught: the check
 before the catalog is applied still stops it, and the sign-out's own
 `store.write(null)` runs after. It stays as a guard in depth.
 
-In `main.mjs`, each of these was broken and `node --test
-electron/company-backup-main.node-test.mjs` failed: no `runtimeReady()` on
-server ready, no `receive()` of runtime messages, no `close()` on quit, the
-client not given the library, the record sharing `company-connection.bin`, the
-relay sent to another process, and downloads not going through the client. In
-`server/workspace-backup.ts`, a walker without the Organization library rule,
-and a rule that also drops `state.json`, each failed the two backup tests above.
 
 ## Not covered here
 
