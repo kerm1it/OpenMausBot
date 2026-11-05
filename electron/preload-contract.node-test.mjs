@@ -23,17 +23,16 @@ const listed = (name) => {
   const match = new RegExp(`const ${name} = (?:new Set\\()?\\[([^\\]]*)\\]`).exec(source);
   return match ? [...match[1].matchAll(/"([^"]+)"/g)].map((found) => found[1]) : [];
 };
-const KEEP = `A Cloud or server page on ${contract.releases.join(" or ")} still calls it once this desktop updates ahead of that Cloud. `
-  + "Keep it, as a stub if need be, for two releases after the last page that calls it; only then take it out of electron/bridge-contract.json.";
+const KEEP = "The desktop bridge must preserve the supported self-hosted page contract.";
 
-test("the bridge keeps every function a page of the last two releases calls", () => {
+test("the bridge preserves every supported function", () => {
   for (const path of contract.paths) {
     const value = path.split(".").reduce((at, key) => at?.[key], exposed.api);
     assert.notEqual(value, undefined, `window.ogb.${path} is gone. ${KEEP}`);
   }
 });
 
-test("a Cloud or server page keeps the bridge keys it had, and the home page its own", () => {
+test("remote pages retain the supported safe subset", () => {
   const remote = new Set(listed("REMOTE_SAFE")), home = new Set([...remote, ...listed("HOME_PAGE")]);
   for (const key of contract.remoteSafe) assert.ok(remote.has(key), `${key} left REMOTE_SAFE. ${KEEP}`);
   for (const key of contract.homePage) assert.ok(home.has(key), `${key} left the home page's bridge. ${KEEP}`);

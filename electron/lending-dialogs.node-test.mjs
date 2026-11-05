@@ -119,7 +119,7 @@ function mainSharing({ response }) {
     sharingController: () => ({ identity: async () => ({ id: "info" }), save: async (env, grant, info) => { saved.push([env.id, grant, info]); } }),
   });
   vm.runInContext(mainSection("const lendingDialogs = createLendingDialogs(", 'ipcMain.handle("sharing:revoke"')
-    + mainSection('ipcMain.handle("sharing:save"', "const cloudSync = installCloudFiles("), context);
+    + mainSection('ipcMain.handle("sharing:save"', 'ipcMain.handle("dialog:confirm"'), context);
   return { handlers, saved, calls };
 }
 

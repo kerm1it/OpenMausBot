@@ -18,7 +18,7 @@ vi.mock("@/state/store", async (importOriginal) => {
     dispatch: fixture.dispatch,
   }) };
 });
-vi.mock("@/lib/analytics", () => ({ track: fixture.track }));
+
 vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => false }));
 vi.mock("./CallView", () => ({ CallButton: () => null }));
 
@@ -106,7 +106,7 @@ describe("Japanese IME in the real composer", () => {
     expect(fixture.dispatch).toHaveBeenCalledWith(expect.objectContaining({
       type: "send", botId: bot.id, text: "@調査担当",
     }));
-    expect(fixture.track.mock.calls).toEqual([["message_sent", { driver: "claude", queued: false }]]);
+    expect(fixture.track).not.toHaveBeenCalled();
   });
 
   it("keeps ordinary slash selection and Shift+Enter working", () => {

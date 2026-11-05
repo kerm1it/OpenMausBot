@@ -11,7 +11,7 @@ vi.mock("./DesktopCapabilities", () => ({
   useDesktopCapabilities: () => ({ capabilities: { dictation: { available: false } } }),
   useCaptionChrome: () => ({}),
 }));
-vi.mock("@/lib/analytics", () => ({ track: vi.fn() }));
+
 
 const { Transcript } = await import("./GroupView");
 

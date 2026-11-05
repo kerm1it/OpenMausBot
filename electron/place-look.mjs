@@ -77,7 +77,7 @@ export function pageLook(look) {
  * rail, which changes the colour of any place it lists with a colour to show (`workspaces:recolor`, its circle's id and
  * a swatch): `owns(event)` its page asks, `places()` railPlaces' list now, `saved(id)` that place (This computer's too).
  */
-export function installPlaceLook({ ipcMain, guard, place, session, setColor, save, rail = null }) {
+export function installPlaceLook({ ipcMain, guard, place, session = () => ({}), setColor, save, rail = null }) {
   const look = () => placeLook(place(), session());
   /** `entry`'s place (none: a server of theirs only the Admin lists) takes `swatch`; `now()` is its look at each step. */
   const recolor = async (entry, now, swatch) => {
@@ -86,6 +86,7 @@ export function installPlaceLook({ ipcMain, guard, place, session, setColor, sav
     if (!current) throw new Error("This place has no color to change.");
     if (!current.change) return { outcome: "refused", look: pageLook(current) };
     if (current.change === "admin") {
+      if (!setColor) return { outcome: "refused", look: pageLook(current) };
       const result = await setColor(current.cloudId, swatch);
       if (result?.outcome !== "saved") return { outcome: result?.outcome === "refused" || result?.outcome === "unsupported" ? result.outcome : "failed", look: pageLook(now()) };
     }

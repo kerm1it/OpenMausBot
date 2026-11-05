@@ -487,7 +487,6 @@ const PENDING: Readonly<Record<string, ReadonlyArray<readonly [file: string, sni
     ["server/profile-requests.ts", "Set up  … ?"],
     ["server/profile-requests.ts", "Whose profile: @ …"],
     ["server/read-and-draft.ts", "Refused (reads and drafts only):  …"],
-    ["server/skill-request-card.ts", "It keeps  …  reference file …  the bot reads when needed."],
     ["server/skill-request-card.ts", "Enable skill \" … \"?"],
     ["server/skill-request-card.ts", "Update skill \" … \"?"],
     ["server/skill-request-card.ts", "… \n\nAdds one line to the prompt index; the body is read only when used"],

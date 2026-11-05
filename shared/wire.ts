@@ -1,6 +1,8 @@
 /** The client-visible wire model for tasks, bots, messages and rooms. A field
  * here is one the server emits in every response and SSE frame that carries
  * the shape. */
+import type { RoomQueueEntry } from "./room-queue.ts";
+export type { RoomQueueEntry } from "./room-queue.ts";
 import type { DataBroadcast } from "./data-surface.ts";
 import type { ApprovalMode } from "./approval-mode.ts";
 import type { ToolScope } from "./tool-scope.ts";
@@ -903,17 +905,6 @@ export interface WireGroup {
   queue?: RoomQueueEntry[];
 }
 
-export interface RoomQueueEntry {
-  botId: string;
-  threadId: string;
-  state: "running" | "queued";
-  /** 1-based place in that thread's line; `of` counts the whole line. */
-  position: number;
-  of: number;
-  /** Who a queued member waits on: the member running now, else the one speaking (or the one ahead). */
-  waitingForBotId?: string;
-  assignmentId?: string;
-}
 
 /** One member's hold in a room: when the person stopped it, and whether the
  * room has already said so (the held line is written once per hold). */

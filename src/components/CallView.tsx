@@ -22,7 +22,7 @@ import { navigateThreadMenu } from "./BotProjects";
 import { LiveKeyNeeded } from "./LiveKeyNeeded";
 import { liveLineHeldElsewhere } from "./LiveCallBar";
 import { isRoutineApproval, isSkillApproval, pendingApprovals, spokenApprovalPrompt } from "./PendingApproval";
-import { callStarted } from "@/lib/product-events";
+
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { callCapabilityHelp, type CallCapabilityHelp } from "@/lib/call-capability";
 import { onCallStartRequest } from "@/lib/call-start-request";
@@ -41,7 +41,6 @@ export type CallButtonPlacement = "header" | "composer" | "panel";
  * call mode. */
 /** `inverse` (phone composer): a round ink-coloured button with an app-coloured glyph: white on Midnight, dark on Meadow. */
 export function CallButton({ bot, placement = "header", fill, ink, inverse }: { bot: Bot; placement?: CallButtonPlacement; fill?: string; ink?: string; inverse?: boolean }) {
-  const { state } = useStore();
   return (
     <CallTargetButton
       placement={placement}
@@ -55,7 +54,6 @@ export function CallButton({ bot, placement = "header", fill, ink, inverse }: { 
       setupBotId={bot.id}
       requireExplicitVoices={false}
       liveCapable
-      onStart={(mode) => callStarted(state.instances, bot.modelSelection?.instanceId, mode)}
     />
   );
 }
@@ -85,7 +83,7 @@ export function CallTargetButton({
   setupBotId?: string;
   requireExplicitVoices: boolean;
   liveCapable?: boolean;
-  onStart: (mode: CallMode) => void;
+  onStart?: (mode: CallMode) => void;
 }) {
   const { state, dispatch } = useStore();
   const showThreads = useShowThreads();
@@ -177,7 +175,7 @@ export function CallTargetButton({
     setHelpOpen(false);
     setMenuOpen(false);
     if (next === "live" && liveThreadId !== undefined) {
-      onStart("live");
+      onStart?.("live");
       void startLiveCall({ botId: targetId, threadId: liveThreadId });
       return;
     }
@@ -185,7 +183,7 @@ export function CallTargetButton({
       setHelpOpen(true);
       return;
     }
-    onStart("turns");
+    onStart?.("turns");
     startCall(targetId);
   };
 

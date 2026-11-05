@@ -67,7 +67,7 @@ export function remoteClipboardWriteAllowed(permission, requestingUrlOrOrigin, a
 }
 
 /**
- * @param {{ rendererOrigin: () => string, mainContents: () => unknown, cloudHomeOrigin: () => string | null,
+ * @param {{ rendererOrigin: () => string, mainContents: () => unknown, cloudHomeOrigin?: () => string | null,
  *   cloudHomeRestoring?: () => Promise<unknown> | null, activeRemoteOrigin?: () => string | null,
  *   activeRemoteMicrophone?: () => boolean, askRemoteMicrophone?: (origin: string) => Promise<unknown> | null,
  *   homeOrigin?: () => string | null }} context
@@ -75,7 +75,7 @@ export function remoteClipboardWriteAllowed(permission, requestingUrlOrOrigin, a
  *   once the person's bots moved there (home-window.mjs), whose page alone may show notifications besides this
  *   computer's and the active remote server's.
  */
-export function appPermissionHandlers({ rendererOrigin, mainContents, cloudHomeOrigin, cloudHomeRestoring = () => null, activeRemoteOrigin = () => null,
+export function appPermissionHandlers({ rendererOrigin, mainContents, cloudHomeOrigin = () => null, cloudHomeRestoring = () => null, activeRemoteOrigin = () => null,
   activeRemoteMicrophone = () => false, askRemoteMicrophone = () => null, homeOrigin = () => null }) {
   // Notifications for the main window's main frame on `origin`: My Cloud as home, or the remote server the person
   // switched to (Settings → Notifications there has no browser site settings to fall back on).

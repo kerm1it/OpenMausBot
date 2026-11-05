@@ -34,6 +34,13 @@ if (process.versions.electron && process.argv.includes(fixtureFlag)) {
   });
   ipcMain.handle("sharing:revoke", () => { shared = { ...shared, enabled: false, connected: false }; return shared; });
   ipcMain.handle("update:get-state", () => ({ status: "idle" }));
+  ipcMain.on("desktop-language:read", event => { event.returnValue = "en"; });
+  ipcMain.handle("rail:offer", () => ({ available: false, hidden: false }));
+  ipcMain.handle("rail:draws-frame", () => true);
+  ipcMain.handle("workspaces:look", () => null);
+  ipcMain.handle("window:state", () => ({ maximized: false }));
+  ipcMain.handle("call:active", () => {});
+  ipcMain.handle("desktop-profile:system-name", () => "Fixture person");
   ipcMain.handle("companion:state", () => ({ running: false, enabled: false, devices: [], bind: null, publicUrl: null }));
   ipcMain.handle("desktop:capabilities", () => createRequire(import.meta.url)("../electron/capabilities.cjs").desktopCapabilities({ platform: process.platform }));
   const chooseWorkspace = (id) => { calls.push({ kind: "switch", id }); saved = withActive(saved, id); };
@@ -44,6 +51,7 @@ if (process.versions.electron && process.argv.includes(fixtureFlag)) {
     if (forgetConfirmed) saved = withoutEnvironment(saved, id);
   });
   ipcMain.handle("workspaces:state", () => workspaceSummary(saved));
+  ipcMain.handle("workspaces:places", () => ({ places: [], add: { cloud: false, organization: false, address: false, link: false } }));
   ipcMain.handle("workspaces:menu", (event) => {
     const menu = Menu.buildFromTemplate(workspaceMenuTemplate(saved, {
       onSwitch: chooseWorkspace,
@@ -90,7 +98,7 @@ if (process.versions.electron && process.argv.includes(fixtureFlag)) {
       return win;
     };
     const win = await open(true);
-    const evaluate = (code) => win.webContents.executeJavaScript(code);
+    const evaluate = (code) => win.webContents.executeJavaScript(code).catch(error => { throw new Error(`${error.message}: ${code.slice(0, 240)}`); });
     const until = async (check, description) => {
       for (let attempt = 0; attempt < 300; attempt++) {
         if (await check()) return;
@@ -252,14 +260,14 @@ if (process.versions.electron && process.argv.includes(fixtureFlag)) {
     await until(() => evaluate("!document.body.textContent.includes('Connect to a server')"), "Settings closes normally");
     win.webContents.send("workspaces:open-settings");
     await until(() => evaluate("document.querySelector('[role=dialog]')?.textContent.includes('Connect to a server')"), "native request reopens workspace Settings");
-    await evaluate("(() => { const el = document.querySelector('input[aria-label=\"Search settings\"]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, 'appearance'); el.dispatchEvent(new Event('input', { bubbles: true })); })()");
+    await evaluate("(() => { const el = document.querySelector('[data-settings-search]'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, 'appearance'); el.dispatchEvent(new Event('input', { bubbles: true })); })()");
     await until(() => evaluate("!document.body.textContent.includes('Connect to a server')"), "Settings search changes section");
     win.webContents.send("workspaces:open-settings");
-    await until(() => evaluate("document.body.textContent.includes('Connect to a server') && document.querySelector('input[aria-label=\"Search settings\"]').value === ''"), "native connection request clears Settings search");
+    await until(() => evaluate("document.body.textContent.includes('Connect to a server') && document.querySelector('[data-settings-search]').value === ''"), "native connection request clears Settings search");
 
     const remote = await open(false);
-    assert.deepEqual(await remote.webContents.executeJavaScript("({ server: typeof window.ogb?.environments, companion: typeof window.ogb?.remoteClient, sharing: typeof window.ogb?.computerSharing, node: typeof window.require, workspaceMethods: Object.keys(window.ogb?.workspaces ?? {}) })"),
-      { server: "undefined", companion: "undefined", sharing: "undefined", node: "undefined", workspaceMethods: ["state", "menu"] });
+    assert.deepEqual(await remote.webContents.executeJavaScript("({ server: typeof window.ogb?.environments, companion: typeof window.ogb?.remoteClient, sharing: typeof window.ogb?.computerSharing, node: typeof window.require, workspaceState: typeof window.ogb?.workspaces?.state, workspaceMenu: typeof window.ogb?.workspaces?.menu })"),
+      { server: "undefined", companion: "undefined", sharing: "undefined", node: "undefined", workspaceState: "function", workspaceMenu: "function" });
     assert.deepEqual(blockedRequests, [], "unexpected external request attempted");
     // Exercise Chromium's actual HttpOnly cookie jar and main-process fetch.
     // The server is the isolated fake-engine fixture, never the user's app.
@@ -305,7 +313,7 @@ if (process.versions.electron && process.argv.includes(fixtureFlag)) {
       name: "server-connection-fixture",
       resolveId(id) { if (id === "virtual:server-connection") return `\0${id}`; },
       load(id) {
-        if (id === "\0virtual:server-connection") return `import React from 'react'; import { createRoot } from 'react-dom/client'; import { setLocale } from '/src/lib/i18n.ts'; import { StoreProvider } from '/src/state/store.tsx'; import { RemoteComputerSection } from '/src/components/RemoteComputerSection.tsx'; import { ConnectedWorkspacesSettings } from '/src/components/ConnectedWorkspacesSettings.tsx'; import { DesktopWorkspaceSwitcher } from '/src/components/DesktopWorkspaceSwitcher.tsx'; import '/src/styles.css'; setLocale('en'); localStorage.setItem('omb-analytics-opt-out', '1'); const root = createRoot(document.getElementById('root')); if (location.search.includes('app=1')) { document.body.classList.remove('p-4'); import('/src/App.tsx').then(({default: App}) => root.render(React.createElement(App))); } else root.render(React.createElement(StoreProvider, null, location.search.includes('workspaces=1') ? React.createElement('div', { className: 'flex flex-col gap-5 max-w-2xl mx-auto' }, React.createElement(DesktopWorkspaceSwitcher), React.createElement('h1', { className: 'text-lg font-semibold text-ink' }, 'Servers'), React.createElement(ConnectedWorkspacesSettings)) : React.createElement(RemoteComputerSection)));`;
+        if (id === "\0virtual:server-connection") return `import React from 'react'; import { createRoot } from 'react-dom/client'; import { setLocale } from '/src/lib/i18n.ts'; import { StoreProvider } from '/src/state/store.tsx'; import { RemoteComputerSection } from '/src/components/RemoteComputerSection.tsx'; import { ConnectedWorkspacesSettings } from '/src/components/ConnectedWorkspacesSettings.tsx'; import { DesktopWorkspaceSwitcher } from '/src/components/DesktopWorkspaceSwitcher.tsx'; import '/src/styles.css'; setLocale('en'); localStorage.setItem('omb-analytics-opt-out', '1'); const root = createRoot(document.getElementById('root')); if (location.search.includes('app=1')) { localStorage.setItem('omb-advanced-mode', '1'); document.body.classList.remove('p-4'); import('/src/App.tsx').then(({default: App}) => root.render(React.createElement(App))); } else root.render(React.createElement(StoreProvider, null, location.search.includes('workspaces=1') ? React.createElement('div', { className: 'flex flex-col gap-5 max-w-2xl mx-auto' }, React.createElement(DesktopWorkspaceSwitcher), React.createElement('h1', { className: 'text-lg font-semibold text-ink' }, 'Servers'), React.createElement(ConnectedWorkspacesSettings)) : React.createElement(RemoteComputerSection)));`;
       },
       configureServer(server) {
         server.middlewares.use((req, res, next) => {

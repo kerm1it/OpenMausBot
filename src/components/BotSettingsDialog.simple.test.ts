@@ -815,7 +815,7 @@ describe("the Library tab", () => {
   });
 
   it("opens Plugins beside Skills with the saved selection count", () => {
-    const rendered = botTab(makeBot({ plugins: ["proof"] }));
+    const rendered = library(makeBot({ plugins: ["proof"] }));
     expect(rowValue(rendered, "plugins")).toBe(1);
     click(find(rendered, "data-panel-page", "plugins"));
     expect(onOpen).toHaveBeenLastCalledWith("plugins");

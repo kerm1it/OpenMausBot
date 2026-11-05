@@ -48,7 +48,7 @@ vi.mock("./McpServersPanel", async () => {
       : createElement("div", { "data-embedded": String(Boolean(embedded)) }, "MCP inventory"),
   };
 });
-vi.mock("@/lib/analytics", () => ({ track: fixture.track }));
+
 vi.mock("./Avatar", () => ({ BotAvatar: ({ bot }: { bot: Bot }) => createElement("span", { "data-avatar": bot.id }) }));
 // The native HighLevel card has its own DOM suite; here it is a marker so tile counts stay the catalog's.
 vi.mock("./HighLevelCard", () => ({
@@ -388,12 +388,12 @@ describe("Apps pop-up", () => {
       };
       await connectApp("gmail");
       await vi.advanceTimersByTimeAsync(20_000);
-      expect(fixture.track.mock.calls).toEqual([["connector_connect", { app: "gmail", result: "connected" }]]);
+      expect(fixture.track).not.toHaveBeenCalled();
 
       fixture.track.mockReset();
       await connectApp("acme-internal-crm");
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(fixture.track.mock.calls).toEqual([["connector_connect", { app: "other", result: "connected" }]]);
+      expect(fixture.track).not.toHaveBeenCalled();
 
       fixture.track.mockReset();
       fixture.effects = [];
@@ -427,7 +427,7 @@ describe("Apps pop-up", () => {
       expect(fixture.track).not.toHaveBeenCalled();
       vi.mocked(api).mockResolvedValue({ services: { slack: { connected: true, pending: false, status: "ACTIVE", accounts: [working, { id: "ca_2", status: "ACTIVE" }] } } });
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(fixture.track.mock.calls).toEqual([["connector_connect", { app: "slack", result: "connected" }]]);
+      expect(fixture.track).not.toHaveBeenCalled();
     } finally {
       vi.mocked(api).mockReset();
       vi.useRealTimers();

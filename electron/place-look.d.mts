@@ -21,8 +21,8 @@ export declare function installPlaceLook(deps: {
   ipcMain: { handle(channel: string, handler: (...args: any[]) => unknown): void };
   guard: (handler: (...args: any[]) => unknown) => (...args: any[]) => unknown;
   place: () => any;
-  session: () => { clouds?: import("./cloud-list.mjs").CloudListEntry[] | null; homeOrigin?: string | null };
-  setColor: (cloudId: string, swatch: import("./cloud-list.mjs").CloudSwatch | null) => Promise<{ outcome: PlaceColorOutcome }>;
+  session?: () => { clouds?: import("./cloud-list.mjs").CloudListEntry[] | null; homeOrigin?: string | null };
+  setColor?: (cloudId: string, swatch: import("./cloud-list.mjs").CloudSwatch | null) => Promise<{ outcome: PlaceColorOutcome }>;
   save: (id: string, color: import("./cloud-buy.mjs").CloudColor | null) => void;
   rail?: { owns(event: unknown): boolean; places(): Array<{ id: string; paint?: unknown }>; saved(id: string): any };
 }): { look(): (PlaceLook & { cloudId?: string }) | null };

@@ -1,3 +1,4 @@
+import { Select } from "./Select";
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/state/store";
 import { t } from "@/lib/i18n";
@@ -66,7 +67,7 @@ export function ExtensionImportDialog({ initialInput, onClose, onImported }: {
         if (alive.current && current === generation.current) setGrokBots(bots);
         return;
       }
-      if (bots) value = grokBotRecipe(bots[0]!) as ExtensionInput;
+      if (bots) value = JSON.stringify(grokBotRecipe(bots[0]!));
       setGrokBots([]);
       const updateProgress = (next: ExtensionPreparationProgress) => { if (alive.current && current === generation.current) setProgress(next); };
       const result = value instanceof File ? await prepareExtensionFile(value, controller.signal, updateProgress) : await prepareExtension(value, controller.signal, updateProgress);
@@ -101,7 +102,7 @@ export function ExtensionImportDialog({ initialInput, onClose, onImported }: {
     {!preview ? <div className="space-y-4">
       <p className="text-[13px] text-ink-secondary">{t("extension.inputHelp")}</p>
       <textarea className={`${extensionFieldClass} min-h-28`} aria-label={t("extension.source")} value={input} onChange={event => setInput(event.target.value)} placeholder="https://… / openmausbot://… / grokbot://…" disabled={busy} />
-      {grokBots.length > 0 && <div className="space-y-2"><p>{t("extension.chooseBot")}</p>{grokBots.map((bot, index) => <button key={index} className={extensionButtonClass} disabled={busy} onClick={() => void prepare(grokBotRecipe(bot) as ExtensionInput)}>{bot.name}</button>)}</div>}
+      {grokBots.length > 0 && <div className="space-y-2"><p>{t("extension.chooseBot")}</p>{grokBots.map((bot, index) => <button key={index} className={extensionButtonClass} disabled={busy} onClick={() => void prepare(JSON.stringify(grokBotRecipe(bot)))}>{bot.name}</button>)}</div>}
       <div className="flex items-center gap-3"><button className={extensionButtonClass} disabled={busy || !input.trim()} onClick={() => void prepare(input)}>{busy ? t("extension.preparing") : t("extension.preview")}</button>
         <label className="cursor-pointer text-[13px] text-accent">{t("extension.chooseFile")}<input className="sr-only" type="file" accept=".zip,.json" disabled={busy} onChange={event => { const file = event.target.files?.[0]; if (file) void prepare(file); }} /></label></div>
       {busy && <div role="status" aria-live="polite" className="space-y-2 rounded-lg bg-control p-3 text-[13px]">
@@ -118,8 +119,8 @@ export function ExtensionImportDialog({ initialInput, onClose, onImported }: {
       {preview.warnings.map((warning, index) => <p key={index} className="rounded-lg bg-control p-3 text-ink-secondary">{warning}</p>)}
       {preview.type === "bot" && <>
         <label className="block">{t("extension.botName")}<input className={extensionFieldClass} value={name} onChange={event => setName(event.target.value)} /></label>
-        <div className="grid grid-cols-2 gap-3"><label>{t("extension.department")}<select className={extensionFieldClass} value={section} onChange={event => setSection(event.target.value)}><option value="">{t("extension.defaultDepartment")}</option>{(state.sections ?? []).map(value => <option key={value}>{value}</option>)}</select></label>
-          <label>{t("extension.model")}<select className={extensionFieldClass} value={model} onChange={event => setModel(event.target.value)}><option value="">{t("extension.defaultModel")}</option>{state.instances.filter(instance => instance.snapshot.state === "available").flatMap(instance => instance.models.options.map(option => <option key={`${instance.instanceId}/${option.id}`} value={JSON.stringify([instance.instanceId, option.id])}>{instance.displayName} · {option.label}</option>))}</select></label></div>
+        <div className="grid grid-cols-2 gap-3"><label>{t("extension.department")}<Select className={extensionFieldClass} value={section} onChange={event => setSection(event.target.value)}><option value="">{t("extension.defaultDepartment")}</option>{(state.sections ?? []).map(value => <option key={value}>{value}</option>)}</Select></label>
+          <label>{t("extension.model")}<Select className={extensionFieldClass} value={model} onChange={event => setModel(event.target.value)}><option value="">{t("extension.defaultModel")}</option>{state.instances.filter(instance => instance.snapshot.state === "available").flatMap(instance => instance.models.options.map(option => <option key={`${instance.instanceId}/${option.id}`} value={JSON.stringify([instance.instanceId, option.id])}>{instance.displayName} · {option.label}</option>))}</Select></label></div>
         {preview.profile?.soul && <details><summary className="cursor-pointer">{t("extension.instructions")}</summary><pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded bg-control p-3">{preview.profile.soul}</pre></details>}
       </>}
       {preview.requirements.length > 0 && <div className="rounded-lg bg-control p-3"><h4 className="font-medium">{t("extension.requirements")}</h4>{preview.requirements.map((requirement, index) => <p key={index} className="mt-1"><strong>{requirement.name}</strong>{requirement.description ? ` · ${requirement.description}` : ""}</p>)}</div>}

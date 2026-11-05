@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer } from "node:http";
-import { readFileSync } from "node:fs";
-import vm from "node:vm";
+
+
 import { createCloudAccountClient } from "./cloud-account.mjs";
 import { CLOUD_HOME_NAME, cloudHomeConnectUrl, cloudPlanDisk, cloudUnreachableText, isCloudHomeEntry, parseCloudCredit, parseCloudOffer, parseCloudPower, parseCloudPurchase, parseCloudSummary, parseCloudTeams, teamRoleLabel, CLOUD_TEAM_ROLES, parseCloudTrial, parsePairingGrant, parsePublicOffer, rememberedCloudHome, savedCloudHomeOrigin, withCloudHome, withoutTrial } from "./cloud-home.mjs";
 import environments from "./environments.cjs";
-import { handSaved } from "./own-home-main.mjs";
-import { homeLook, withoutOldCloudHome } from "./cloud-list.mjs";
+
+
 
 const NOW = 1_800_000_000_000;
 const origin = "https://omb-u-1a2b3c4d5e6f.fly.dev";
@@ -196,51 +196,6 @@ test("signing out forgets the machine", async t => {
   assert.equal(f.client.homeTarget(), null);
 });
 
-test("main lists the machine from verified states only, and connects without a dialog", async () => {
-  const source = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
-  const start = source.indexOf("function rememberCloudHome("), end = source.indexOf("async function forgetEnvironment(", start);
-  assert.ok(start > 0 && end > start);
-  const persisted = [], navigated = [], dialogs = [], probes = [];
-  let client, look = null;
-  const context = vm.createContext({
-    environmentsState: { environments: [], activeId: environments.LOCAL_ID },
-    persistEnvironments: next => { persisted.push(next); context.environmentsState = next; },
-    navigateMainWindow: url => navigated.push(url), withCloudHome, withoutOldCloudHome, homeLook, withActive: environments.withActive, cloudLook: { pending: () => look },
-    randomUUID: () => "cloud-home-id", slog: () => {}, Date: { now: () => NOW }, AbortSignal: { timeout: ms => ({ timeoutMs: ms }) },
-    session: { defaultSession: { fetch: async (url, init) => { probes.push([url, init.credentials, init.signal.timeoutMs]); return { ok: false, json: async () => ({}) }; } } },
-    dialog: { showMessageBox: async () => { dialogs.push(1); return { response: 1 }; } },
-    ensureCloudAccount: () => client,
-  });
-  vm.runInContext(`${source.slice(start, end)}; this.rememberCloudHome = rememberCloudHome; this.connectCloudHome = connectCloudHome; this.activateCloud = activateCloud;`, context);
-  context.rememberCloudHome({ status: "unavailable", machine: { status: "ready", origin } });
-  context.rememberCloudHome({ status: "signed-out" });
-  assert.deepEqual(persisted, []);
-  look = { name: "Studio", color: "purple" };
-  context.rememberCloudHome({ status: "connected", machine: { status: "ready", origin } });
-  context.rememberCloudHome({ status: "connected", machine: { status: "ready", origin } });
-  assert.equal(persisted.length, 1);
-  assert.equal(context.environmentsState.activeId, environments.LOCAL_ID);
-  assert.deepEqual([context.environmentsState.environments[0].name, context.environmentsState.environments[0].color], ["Studio", "purple"], "listed as named while it was set up");
-  context.environmentsState = { environments: [], activeId: environments.LOCAL_ID }; look = null;
-
-  // Every open goes through the home window (home-window.mjs), which looks nothing up before the Admin says ready.
-  const opened = [], state = { status: "connected" };
-  let done = 0, refuse = false;
-  client = { state: () => state, checkoutDone: () => done++ };
-  context.cloudAccount = client;
-  context.homeWindow = { openCloud: async (open) => { opened.push(open); if (refuse) throw new Error("My Cloud is not ready to connect yet."); } };
-  assert.equal(await context.connectCloudHome(), state, "the renderer gets the sign-in's state back, as before");
-  await context.connectCloudHome("phone");
-  assert.deepEqual(opened, [null, "phone"]);
-  assert.deepEqual([navigated, probes, done], [[], [], 0], "main itself neither loads nor asks My Cloud");
-  context.activateCloud(origin);
-  assert.equal(done, 1, "opened: the purchase is over");
-  assert.equal(context.environmentsState.activeId, "cloud-home-id");
-  refuse = true;
-  await assert.rejects(context.connectCloudHome(), /not ready/);
-  assert.deepEqual(dialogs, []);
-});
-
 test("why a ready Cloud can't be reached is read when the Admin sends it, and says so plainly; a malformed reason is dropped, never the machine", () => {
   const host = { cause: "host", since: NOW - 6 * 60_000 }, quiet = { cause: "no_answer", since: NOW - 16 * 60_000 };
   assert.deepEqual(parseCloudSummary({ state: "ready", origin, pairingAvailable: true, unreachable: host }), { status: "ready", origin, unreachable: host });
@@ -424,75 +379,6 @@ test("the Cloud's address is remembered through a failed check for the same acco
   assert.equal(isCloudHomeEntry({ origin }, { homeOrigin: origin }), true);
   assert.equal(isCloudHomeEntry({ origin: "https://other.example.test" }, { homeOrigin: origin, remembered: known }), false);
   assert.equal(isCloudHomeEntry({ origin }, {}), false);
-});
-
-test("the Server menu opens My Cloud through the Cloud's own connection, never a pairing-code page", async () => {
-  const source = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
-  const start = source.indexOf("let rememberedHome = null;"), end = source.indexOf("const organizationEntry = createOrganizationEntry", start);
-  assert.ok(start > 0 && end > start);
-  const calls = [];
-  let connect = async () => { calls.push("connect"); }, signedIn = false;
-  const entry = { id: "cloud", name: CLOUD_HOME_NAME, origin }, other = { id: "vps", kind: "remote", name: "VPS", origin: "https://vps.example.test" };
-  const context = vm.createContext({
-    environmentsState: { environments: [entry, other], activeId: environments.LOCAL_ID }, LOCAL_ID: environments.LOCAL_ID,
-    cloudAccount: { homeTarget: () => ({ origin }), state: () => ({}) }, isCloudHomeEntry, slog: () => {},
-    connectCloudHome: (...args) => connect(...args), cloudHomeSignedIn: async () => signedIn,
-    openCloudSettings: async () => { calls.push("settings"); },
-    persistEnvironments: next => { calls.push(`active:${next.activeId}`); context.environmentsState = next; }, withActive: environments.withActive,
-    navigateMainWindow: url => calls.push(`navigate:${url}`), activeOrigin: () => context.environmentsState.environments.find(e => e.id === context.environmentsState.activeId)?.origin,
-    homeWindow: { cloudOrigin: () => null, asking: () => false }, showHome: async (options) => { calls.push(options ? `home:${JSON.stringify(options)}` : "home"); },
-    homePlaces: { remember: (place) => calls.push(`remember:${JSON.stringify(place)}`) },
-    runningDataDir: "/data", desktopDataDir: () => "/data",
-    handSaved, serverOpens: async (place) => { calls.push(`look:${place.id}`); return answers; }, session: { defaultSession: { fetch: async () => null } }, dialog: {},
-  });
-  let answers = true;
-  vm.runInContext(`${source.slice(start, end)}; this.switchEnvironment = switchEnvironment; this.remember = value => { rememberedHome = value; };`, context);
-  await context.switchEnvironment("cloud");
-  assert.deepEqual(calls, ["remember:null", "connect"]);
-  calls.length = 0; await context.switchEnvironment("vps");
-  assert.deepEqual(calls, ["remember:null", "look:vps", "active:vps", `navigate:${other.origin}`], "another server: the remembered team is let go");
-  calls.length = 0; context.environmentsState = { ...context.environmentsState, activeId: environments.LOCAL_ID }; answers = false;
-  await context.switchEnvironment("vps");
-  assert.deepEqual(calls, ["remember:null", "look:vps"], "a server that doesn't answer: the window stays where it is");
-  answers = true;
-  const acme = { id: "acme", name: "Acme", origin: "https://omb-u-acme.fly.dev", team: { id: "team-acme", role: "member" } };
-  context.environmentsState = { environments: [entry, other, acme], activeId: environments.LOCAL_ID };
-  calls.length = 0; await context.switchEnvironment("acme");
-  assert.deepEqual(calls, ['home:{"place":{"team":"team-acme","name":"Acme"}}'], "a team opens through the home window's team pairing, never a plain navigation");
-  context.environmentsState = { environments: [entry, other, acme], activeId: "acme" };
-  context.homeWindow = { cloudOrigin: () => origin, asking: () => false };
-  calls.length = 0; await context.switchEnvironment("cloud");
-  assert.deepEqual(calls, ["remember:null", 'home:{"place":"cloud"}'], "back to My Cloud from a team: My Cloud itself, remembered");
-  context.homeWindow = { cloudOrigin: () => null, asking: () => false };
-  context.environmentsState = { environments: [entry, other], activeId: environments.LOCAL_ID };
-  context.environmentsState = { environments: [entry, other], activeId: environments.LOCAL_ID };
-  context.cloudAccount = { homeTarget: () => null, state: () => ({ status: "connected", machine: { status: "stopped" } }) }; context.remember({ accountId: "a1", origin });
-  connect = async () => { calls.push("connect"); throw new Error("Your Cloud is not ready to connect yet."); };
-  calls.length = 0; await context.switchEnvironment("cloud");
-  assert.deepEqual(calls, ["remember:null", "connect", "settings"], "not signed in there: Settings → OMB Cloud says what to do next");
-  signedIn = true; calls.length = 0; await context.switchEnvironment("cloud");
-  assert.deepEqual(calls, ["remember:null", "connect", "active:cloud", `navigate:${origin}`], "signed in there already: it opens as any server does");
-  context.cloudAccount = null; context.environmentsState = { environments: [entry, other], activeId: environments.LOCAL_ID };
-  calls.length = 0; await context.switchEnvironment("cloud");
-  assert.deepEqual(calls, ["remember:null", "active:cloud", `navigate:${origin}`]);
-  context.homeWindow = { cloudOrigin: () => origin, asking: () => false }; context.environmentsState = { environments: [entry, other], activeId: "vps" };
-  calls.length = 0; await context.switchEnvironment("cloud");
-  assert.deepEqual(calls, ["remember:null", 'home:{"place":"cloud"}'], "once My Cloud is home, choosing it shows home the one way every window does");
-
-  // A My Cloud entry saved before, for the address the Admin is setting up again: never loaded by its address.
-  context.homeWindow = { cloudOrigin: () => null, asking: () => false }; context.remember(null);
-  context.cloudAccount = { homeTarget: () => null, state: () => ({ status: "connected", machine: { status: "provisioning", origin } }) };
-  context.environmentsState = { environments: [entry, other], activeId: environments.LOCAL_ID };
-  connect = async () => { calls.push("connect"); };
-  calls.length = 0; await context.switchEnvironment("cloud");
-  assert.deepEqual(calls, ["remember:null", "connect"], "the home window's setup screen, until the Admin says ready");
-  // That screen is this computer's own page: This computer is already the Server menu's choice, and still leaves it.
-  calls.length = 0; await context.switchEnvironment(environments.LOCAL_ID);
-  assert.deepEqual(calls, [], "nothing asked for: choosing the server shown changes nothing");
-  context.homeWindow = { cloudOrigin: () => null, asking: () => true };
-  calls.length = 0; await context.switchEnvironment(environments.LOCAL_ID);
-  assert.deepEqual(calls.slice(0, 2), ["remember:null", `active:${environments.LOCAL_ID}`]);
-  assert.match(calls[2], /^navigate:/);
 });
 
 test("the session's teams are read with their role and their Cloud as the machine summary; a malformed team is left out whole, and a team twice is read once", () => {

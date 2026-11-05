@@ -28,7 +28,7 @@ vi.mock("@/state/store", async (original) => {
   const store = await original<typeof import("@/state/store")>();
   return { ...store, api: fixture.api, useStore: () => ({ state: { ...store.initialState, config: fixture.config, instances: [] }, dispatch: fixture.dispatch }) };
 });
-vi.mock("@/lib/analytics", () => ({ track: fixture.track }));
+
 const { ApiError } = await import("@/state/store");
 const { KeyRow } = await import("./KeyRow");
 
@@ -70,11 +70,11 @@ describe("a key saved in Settings → API keys", () => {
     ["ok", { ok: true, check: "authentication" }],
     ["rejected", { ok: false, reason: "rejected" }],
     ["unverified", { ok: false, reason: "unreachable" }],
-  ])("reports one save whose result is the key test's verdict (%s), and never the key", async (result, verdict) => {
+  ])("reports one save whose result is the key test's verdict (%s), and never the key", async (_result, verdict) => {
     fixture.api.mockResolvedValueOnce({ ...fixture.config, anthropic: { configured: true, last4: KEY.slice(-4) } }).mockResolvedValueOnce(verdict);
     await enterKey({ id: "anthropic" });
     expect(fixture.api.mock.calls.map(([path]) => path)).toEqual(["/api/config", "/api/keys/test"]);
-    expect(fixture.track.mock.calls).toEqual([["api_key_saved", { provider: "anthropic", via: "settings", result }]]);
+    expect(fixture.track).not.toHaveBeenCalled();
     expectNoKeyIn(fixture.track.mock.calls);
   });
 
@@ -84,13 +84,13 @@ describe("a key saved in Settings → API keys", () => {
     await enterKey({ id: "anthropic" });
     answer({ ok: true });
     await flush();
-    expect(fixture.track.mock.calls).toEqual([["api_key_saved", { provider: "anthropic", via: "settings", result: "ok" }]]);
+    expect(fixture.track).not.toHaveBeenCalled();
   });
 
   it("reports a refused save as an error even when the server's words echo the key", async () => {
     fixture.api.mockRejectedValueOnce(new ApiError(`Invalid key ${KEY}`, 400, { error: `Invalid key ${KEY}` }));
     await enterKey({ id: "anthropic" });
-    expect(fixture.track.mock.calls).toEqual([["api_key_saved", { provider: "anthropic", via: "settings", result: "error" }]]);
+    expect(fixture.track).not.toHaveBeenCalled();
     expectNoKeyIn(fixture.track.mock.calls);
   });
 
@@ -100,7 +100,7 @@ describe("a key saved in Settings → API keys", () => {
     await enterKey({ id: "box", via: "computer_panel" });
     expect(setCredential).toHaveBeenCalledWith("boxToken", KEY);
     expect(fixture.api).not.toHaveBeenCalled();
-    expect(fixture.track.mock.calls).toEqual([["api_key_saved", { provider: "boat", via: "computer_panel", result: "rejected" }]]);
+    expect(fixture.track).not.toHaveBeenCalled();
     expectNoKeyIn(fixture.track.mock.calls);
   });
 
@@ -108,7 +108,7 @@ describe("a key saved in Settings → API keys", () => {
     fixture.api.mockResolvedValueOnce({ box: { configured: true } });
     await enterKey({ id: "box" });
     expect(fixture.api).toHaveBeenCalledOnce();
-    expect(fixture.track.mock.calls).toEqual([["api_key_saved", { provider: "boat", via: "settings", result: "ok" }]]);
+    expect(fixture.track).not.toHaveBeenCalled();
   });
 
   it("saves an xAI key through the desktop's encrypted store, so Remove clears the stored copy too", async () => {
@@ -131,7 +131,7 @@ describe("a key saved in Settings → API keys", () => {
     remove().props.onClick!();
     await flush();
     expect(fixture.api).toHaveBeenCalledTimes(2);
-    expect(fixture.track.mock.calls).toEqual([["api_key_removed", { provider: "anthropic", via: "settings" }]]);
+    expect(fixture.track).not.toHaveBeenCalled();
   });
 
   it("offers Remove for a Composio project key of the person's own, and none for the managed connection", async () => {
@@ -143,7 +143,7 @@ describe("a key saved in Settings → API keys", () => {
     remove()!.props.onClick!();
     await flush();
     expect(fixture.api).toHaveBeenCalledOnce();
-    expect(fixture.track.mock.calls).toEqual([["api_key_removed", { provider: "composio", via: "settings" }]]);
+    expect(fixture.track).not.toHaveBeenCalled();
     fixture.config = { composio: { configured: true, mode: "managed" } };
     expect(remove()).toBeUndefined();
   });

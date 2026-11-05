@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 import { createCloudAccountClient } from "./cloud-account.mjs";
-import { createDesktopPrefs, registerDesktopPrefs } from "./desktop-prefs.mjs";
-import { createUpdatesConsent, parseUpdatesConsent, registerUpdatesConsent, UPDATES_CONSENT_VERSION } from "./updates-consent.mjs";
+import { createDesktopPrefs } from "./desktop-prefs.mjs";
+import { createUpdatesConsent, parseUpdatesConsent, UPDATES_CONSENT_VERSION } from "./updates-consent.mjs";
 
 // The real Cloud client and desktop prefs against a fake Admin on loopback: what this computer keeps, and what reaches
 // the Admin's consent endpoints (account: GET/POST /api/cloud/desktop/updates-consent; no account: POST /api/updates-consent).
@@ -215,27 +215,4 @@ test("the record on disk: only a whole, known answer is kept", () => {
   const id = prefs.installId();
   assert.equal(prefs.installId(), id, "one id per install");
   assert.equal(createDesktopPrefs({ read: () => saved, write: () => {} }).installId(), id, "kept across launches");
-});
-
-test("only this computer's page and My Cloud's own page may ask or answer; main wires it through the desktop prefs", async () => {
-  const handlers = new Map(), calls = [];
-  const consent = { state: async () => { calls.push("state"); return { due: true }; }, choose: async choice => { calls.push(choice); return { due: false }; } };
-  registerUpdatesConsent({ ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) }, page: event => event.page, consent });
-  assert.deepEqual([...handlers.keys()], ["updates-consent:state", "updates-consent:choose"]);
-  for (const page of ["server", null]) {
-    await assert.rejects(async () => handlers.get("updates-consent:state")({ page }), /only available in this app's window/);
-    await assert.rejects(async () => handlers.get("updates-consent:choose")({ page }, { status: "opted_in" }), /only available/);
-  }
-  assert.deepEqual(await handlers.get("updates-consent:state")({ page: "local" }), { due: true });
-  assert.deepEqual(await handlers.get("updates-consent:choose")({ page: "cloud" }, { status: "declined" }), { due: false });
-  assert.deepEqual(calls, ["state", { status: "declined" }]);
-
-  const channels = new Set();
-  const ipcMain = { handle: channel => channels.add(channel), on: channel => channels.add(channel) };
-  const base = { ipcMain, read: () => null, write: () => {}, page: () => "local", cloudOffered: async () => false };
-  assert.equal(registerDesktopPrefs(base), null, "no Cloud client: no question");
-  assert.equal(channels.has("updates-consent:state"), false);
-  const wired = registerDesktopPrefs({ ...base, cloudAccount: () => null });
-  assert.equal(typeof wired.accountChanged, "function");
-  assert.ok(channels.has("updates-consent:state") && channels.has("updates-consent:choose"));
 });

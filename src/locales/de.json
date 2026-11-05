@@ -3100,5 +3100,6 @@
   "teamMemory.you": "du",
   "teamSettings.general": "Allgemein",
   "canvas.botCount": "{count} Bots",
-  "canvas.botCountOne": "1 Bot"
+  "canvas.botCountOne": "1 Bot",
+  "server.skill.files": " Es bleiben {count} zusätzliche Dateien erhalten, die der Bot bei Bedarf liest oder ausführt."
 }

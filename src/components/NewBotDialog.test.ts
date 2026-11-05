@@ -7,7 +7,7 @@ const fixture = vi.hoisted(() => ({ effects: [] as EffectCallback[], dispatch: v
 vi.mock("@/state/thread-navigation", async importOriginal => ({
   ...await importOriginal<typeof import("@/state/thread-navigation")>(), openBot: fixture.openBot,
 }));
-vi.mock("@/lib/analytics", () => ({ track: fixture.track }));
+
 vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => fixture.advanced }));
 vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => fixture.admin }));
 vi.mock("./DesktopCapabilities", () => ({ useDesktopCapabilities: () => ({ capabilities: {} }) }));
@@ -168,7 +168,7 @@ describe("bot draft dialog", () => {
     [["research"], { source: "template", template: "research" }],
     [["coder", ""], { source: "blank" }],
     [[], { source: "blank" }],
-  ])("reports the starting role chosen in the dialog (%j) once the bot is created", async (choices, props) => {
+  ])("reports the starting role chosen in the dialog (%j) once the bot is created", async (choices, _props) => {
     vi.stubGlobal("window", {});
     fixture.ready = true;
     fixture.create.mockResolvedValue({ bot: { id: "created", name: "Fixture" }, warnings: [] });
@@ -176,7 +176,7 @@ describe("bot draft dialog", () => {
     for (const value of choices) chooseStartingRole(dialog, value);
     dialog.filter(node => node.type === "button").at(-1)!.props.onClick!();
     await vi.waitFor(() => expect(fixture.close).toHaveBeenCalledOnce());
-    expect(fixture.track.mock.calls).toEqual([["bot_created", props]]);
+    expect(fixture.track).not.toHaveBeenCalled();
   });
 
   it("on a team's Cloud, opens the creator's own private chat with the new bot, never the team's shared main chat", async () => {
@@ -210,7 +210,7 @@ describe("bot draft dialog", () => {
     (dialog.find(named("DraftSection"))!.props as unknown as { draft: BotCreationDraft }).draft.choosePreset({ id: "My secret preset", skills: [], notes: [] });
     dialog.filter(node => node.type === "button").at(-1)!.props.onClick!();
     await vi.waitFor(() => expect(fixture.close).toHaveBeenCalledOnce());
-    expect(fixture.track.mock.calls).toEqual([["bot_created", { source: "preset" }]]);
+    expect(fixture.track).not.toHaveBeenCalled();
   });
 
   it("reports nothing when saving the defaults for new bots, or when creating fails", async () => {

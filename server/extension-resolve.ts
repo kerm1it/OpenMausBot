@@ -31,7 +31,7 @@ export async function resolveExtension(input: unknown, stage: string, deps: Reso
   const exported = grokExportBots(input);
   if (exported) {
     if (exported.length !== 1) extensionError("Select one Bot from this Grok export before importing it");
-    input = grokBotRecipe(exported[0]!);
+    input = JSON.stringify(grokBotRecipe(exported[0]!));
   }
   const request = parseExtensionInput(input);
   if (!isExtensionImportRequest(request) && !(Object.keys(request).length === 1 && "url" in request)) {

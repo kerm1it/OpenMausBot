@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { AppWindow, Bot as BotIcon, Cloud, Download, Mail, Smartphone, Sparkles, type LucideIcon } from "lucide-react";
 
-import { track } from "@/lib/analytics";
+
 import { INTRO_CHIPS, setupSteps, type IntroChip, type SetupStep } from "@/lib/default-bot";
 import { t } from "@/lib/i18n";
 import { phonePairingSettingsAction } from "@/lib/phone-pairing";
@@ -26,7 +26,7 @@ export function setupAction(step: SetupStep): Action {
     case "bots": return { type: "newBot" };
     case "apps": return { type: "togglePlugins", open: true, surface: "apps" };
     case "phone": return phonePairingSettingsAction();
-    case "cloud": return { type: "openCloudAdd", source: "app_onboarding" };
+    case "cloud": return { type: "toggleAppSettings", open: true, section: "general" };
   }
 }
 
@@ -49,7 +49,6 @@ export function HelperSetup() {
           const { label, icon: Icon } = STEPS[step];
           return (
             <button key={step} type="button" data-helper-step={step} onClick={() => {
-              if (step === "cloud") track("onboarding_cloud", { action: "start_trial" });
               dispatch(setupAction(step));
             }}
               className="inline-flex items-center gap-1.5 rounded-full bg-accent/10 px-3 py-1.5 text-[13px] font-medium text-ink hover:bg-accent/20">
@@ -76,7 +75,7 @@ export function chipAction(chip: Exclude<IntroChip, "ai">): Action {
     case "apps": return { type: "togglePlugins", open: true, surface: "apps" };
     case "import": return { type: "toggleAppSettings", open: true, section: "import" };
     case "phone": return phonePairingSettingsAction();
-    case "cloud": return { type: "openCloudAdd", source: "app_onboarding" };
+    case "cloud": return { type: "toggleAppSettings", open: true, section: "general" };
   }
 }
 
@@ -91,11 +90,10 @@ export function IntroChips({ chips }: { chips: readonly IntroChip[] }) {
   const { dispatch } = useStore();
   const [tapped, setTapped] = useState<ReadonlySet<IntroChip>>(new Set());
   const [connecting, setConnecting] = useState(false);
-  const shown = chips.filter((chip) => !tapped.has(chip)).slice(0, INTRO_CHIPS);
+  const shown = chips.filter((chip) => chip !== "cloud" && !tapped.has(chip)).slice(0, INTRO_CHIPS);
   const tap = (chip: IntroChip) => {
     setTapped((now) => new Set([...now, chip]));
     if (chip === "ai") return setConnecting(true);
-    if (chip === "cloud") track("onboarding_cloud", { action: "start_trial" });
     dispatch(chipAction(chip));
   };
   return (

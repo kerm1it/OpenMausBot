@@ -74,7 +74,7 @@ vi.mock("@/lib/interface-mode", () => ({
   useAdvancedMode: () => fixture.advancedMode,
   setAdvancedMode: fixture.setAdvancedMode,
 }));
-vi.mock("@/lib/analytics", () => ({ analyticsEnabled: () => false, setAnalyticsEnabled: vi.fn() }));
+
 vi.mock("./PeopleSection", () => ({ PeopleSection: () => null }));
 vi.mock("@/lib/chrome-rail", () => ({ useChromeRail: () => fixture.rail, setChromeRailHidden: (hidden: boolean) => fixture.railHidden.push(hidden) }));
 vi.mock("./SettingsPrimitives", async (importOriginal) => {
@@ -426,8 +426,7 @@ describe("Settings → Appearance", () => {
     fixture.section = "organization";
     vi.stubGlobal("window", { ogb: { organization: {} } });
     const local = render();
-    expect(local).toContain('<option value="organization" selected="">Organization</option>');
-    expect(local).toContain("personal and local models");
+    expect(local).not.toContain('<option value="organization"');
     fixture.section = "appearance";
     vi.stubGlobal("window", {});
     expect(render()).not.toContain('<option value="organization"');
@@ -438,8 +437,7 @@ describe("Settings → Appearance", () => {
   it("offers personal Cloud separately and only through the local desktop bridge", () => {
     fixture.section = "cloudAccount";
     vi.stubGlobal("window", { ogb: { cloudAccount: {} } });
-    expect(render()).toContain('<option value="cloudAccount" selected="">MausBot Cloud</option>');
-    expect(render()).toContain("Free local use");
+    expect(render()).not.toContain('<option value="cloudAccount"');
     fixture.section = "appearance";
     vi.stubGlobal("window", {}); expect(render()).not.toContain('<option value="cloudAccount"');
     vi.stubGlobal("window", { ogb: { cloudAccount: {}, remoteClient: { active: true } } });

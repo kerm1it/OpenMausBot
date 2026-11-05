@@ -60,6 +60,6 @@ export function ExtensionHost({ disabled, onLegacyPackage }: { disabled: boolean
   return <>
     {importing && <ExtensionImportDialog key={JSON.stringify(importing.input) ?? "manual"} initialInput={importing.input} onClose={close} onImported={imported} />}
     {bot && <BotTemplateExportDialog bot={bot} onClose={close} />}
-    {notice && createPortal(<div role="status" className="fixed bottom-4 left-4 z-[90] max-w-md rounded-xl border border-hairline bg-card p-4 text-[13px] text-ink shadow-xl">{notice}</div>, document.body)}
+    {notice && createPortal(<div role="status" className="fixed bottom-4 left-[calc(var(--rail-beside,0px)+1rem)] z-[90] max-w-md rounded-xl border border-hairline bg-card p-4 text-[13px] text-ink shadow-xl">{notice}</div>, document.body)}
   </>;
 }

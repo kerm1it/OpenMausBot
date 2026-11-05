@@ -7621,7 +7621,7 @@
   "extension.department": "Department",
   "extension.defaultDepartment": "Default department",
   "extension.model": "Model",
-  "extension.defaultModel": "Use workspace default",
+  "extension.defaultModel": "Default model for new bots",
   "extension.instructions": "Standing instructions",
   "extension.requirements": "Configuration required after import",
   "extension.plugins": "Plugins",
@@ -7659,5 +7659,6 @@
   "extension.progress.download": "Download progress",
   "extension.progress.elapsed": "Elapsed: {seconds}s",
   "extension.progress.retry": "Retrying download (attempt {attempt})",
-  "extension.chooseBot": "Choose a Bot from this export. You can return to import another."
+  "extension.chooseBot": "Choose a Bot from this export. You can return to import another.",
+  "server.skill.files": " It keeps {count} supporting files the bot reads or runs when needed."
 }

@@ -7420,7 +7420,7 @@
   "extension.department": "部门",
   "extension.defaultDepartment": "默认部门",
   "extension.model": "模型",
-  "extension.defaultModel": "使用当前环境默认模型",
+  "extension.defaultModel": "新 Bot 的默认模型",
   "extension.instructions": "常驻指令",
   "extension.requirements": "导入后需要配置",
   "extension.plugins": "插件",
@@ -7458,5 +7458,6 @@
   "extension.progress.download": "下载进度",
   "extension.progress.elapsed": "已用时 {seconds} 秒",
   "extension.progress.retry": "正在重试下载（第 {attempt} 次）",
-  "extension.chooseBot": "请选择要导入的 Bot，完成后可返回继续导入其他 Bot。"
+  "extension.chooseBot": "请选择要导入的 Bot，完成后可返回继续导入其他 Bot。",
+  "server.skill.files": " 保留 {count} 个支持文件，Bot 可在需要时读取或运行。"
 }

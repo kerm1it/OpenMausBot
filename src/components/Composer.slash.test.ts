@@ -17,7 +17,7 @@ vi.mock("@/state/store", async (importOriginal) => {
     dispatch: vi.fn(),
   }) };
 });
-vi.mock("@/lib/analytics", () => ({ track: vi.fn() }));
+
 vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => true }));
 vi.mock("@/lib/use-slash-skills", () => ({
   useSlashSkills: (_botId: string | undefined, _threadId: string, active: boolean) =>

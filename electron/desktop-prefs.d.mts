@@ -72,13 +72,8 @@ export declare function registerDesktopPrefs(options: {
   read(): unknown;
   write(value: unknown): void;
   page(event: unknown): "local" | "cloud" | "server" | null;
-  cloudOffered(): Promise<boolean>;
-  localConfig?(): unknown;
   languageChanged?(language: string, sender: unknown): void;
   /** The window's frame: `made()`, the frame the window was made with (null before it is); `restarts`, a change waits for
    * the app to start again; `changed()`, the pages hear it. */
   frame?: { made(): boolean | null; restarts: boolean; changed(): void } | null;
-  /** The MausBot Cloud sign-in client: with it, the product-updates question is asked and its answer kept here. */
-  cloudAccount?(): import("./updates-consent.mjs").UpdatesConsentClient | null;
-  now?: () => number;
-}): import("./updates-consent.mjs").UpdatesConsent | null;
+}): void;

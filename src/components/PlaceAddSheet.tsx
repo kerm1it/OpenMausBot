@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Building2, Cloud, Loader2, Server, UserRound, X } from "lucide-react";
 import type { RailAddChoices } from "../../electron/cloud-rail.mjs";
-import { track } from "@/lib/analytics";
+
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import { AddCloudFlow } from "./cloud-buy/AddCloudFlow";
@@ -22,7 +22,6 @@ export function OwnServerLink({ onBack, onConnected, connect = null }: { onBack:
     event.preventDefault();
     const pasted = link.trim();
     if (!pasted || busy) return;
-    track("rail_add", { step: "link" });
     setBusy(true);
     setFailed(false);
     try {
@@ -96,7 +95,6 @@ export function PlaceAddSheet({ choices, connect = null, onClose, onAccount }: {
   const [wide, setWide] = useState(false);
   const workspaces = window.ogb?.workspaces;
   const firstCloud = () => {
-    track("rail_add", { step: "cloud" });
     onClose();
     void workspaces?.add?.("cloud").catch(() => {});
   };

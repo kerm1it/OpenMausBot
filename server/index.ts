@@ -1038,7 +1038,6 @@ function parentThreadModel(botId: string, parentThreadId: string): { modelSelect
 }
 
 
-
 /** Loopback is not the owner on a Cloud home: only processes on the machine (a bot's shell) arrive that way. */
 function cloudOwnerSession(auth: RequestAuth): boolean {
   return auth.kind === "session" && auth.scopes.includes("admin");
@@ -11273,7 +11272,7 @@ function appendSkillRequestCard(args: {
   };
 } & Pick<SkillRequestCardData, "shared">): { requestId: string; summary: string } {
   const requestId = randomUUID();
-  const copy = skillCardCopy(args.staged);
+  const copy = skillCardCopy(args.staged, conversationLanguage(args.threadId));
   const payload: SkillRequestCardData = {
     version: 1,
     requestId,

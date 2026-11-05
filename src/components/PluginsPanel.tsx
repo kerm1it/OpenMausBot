@@ -10,7 +10,7 @@ import { connectorStatusMemory, preloadConnectedApps, rememberConnectorStatus } 
 import { reserveConnectionPage, reusableConnectionUrl, type PendingAuthorization } from "@/lib/connector-oauth";
 import { mcpSignInLink } from "@/lib/mcp-sign-in";
 import { pollConnector } from "@/lib/connector-poll";
-import { connectorConnect } from "@/lib/product-events";
+
 import { managedConnectorUnavailableReason } from "../../shared/connector-availability";
 import { connectorServiceAccess, isConnectorToolGrantShape } from "@/lib/connector-grants";
 import {
@@ -332,9 +332,8 @@ export function PluginsPanel() {
 
   const startPolling = (slug: string, before: ConnectorStatus | undefined) => {
     polls.current.get(slug)?.();
-    const stop = pollConnector(before, () => refreshStatus([slug]).then((services) => services[slug]), (result) => {
+    const stop = pollConnector(before, () => refreshStatus([slug]).then((services) => services[slug]), () => {
       if (polls.current.get(slug) === stop) polls.current.delete(slug);
-      connectorConnect(slug, result);
     });
     polls.current.set(slug, stop);
   };

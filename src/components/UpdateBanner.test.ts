@@ -40,11 +40,9 @@ function serverPageBridge(origin: string, answered: boolean) {
 }
 
 describe("UpdateBanner", () => {
-  it("shows the ready update and its restart on My Cloud's page", () => {
+  it("does not expose the desktop updater to a remote server page", () => {
     const html = render({ status: "downloaded", version: "0.2.0" }, { location: { origin: CLOUD }, ogb: serverPageBridge(CLOUD, true) });
-    expect(html).toContain("MausBot 0.2.0 is ready");
-    expect(html).toContain("Restart to update");
-    expect(html).toContain("Later");
+    expect(html).toBe("");
   });
 
   it("is absent from another server's page, which never gets the updater", () => {

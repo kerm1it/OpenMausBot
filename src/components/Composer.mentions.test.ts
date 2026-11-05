@@ -19,7 +19,7 @@ vi.mock("@/state/store", async (importOriginal) => {
     dispatch: fixture.dispatch,
   }) };
 });
-vi.mock("@/lib/analytics", () => ({ track: vi.fn() }));
+
 vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => true }));
 vi.mock("./CallView", () => ({ CallButton: () => null }));
 vi.mock("./GroupCallView", () => ({ GroupCallButton: () => null }));

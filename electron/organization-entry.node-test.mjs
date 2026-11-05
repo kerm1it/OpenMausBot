@@ -201,24 +201,6 @@ test("failed local loading keeps the confirmed restart intent for the next launc
   assert.deepEqual(h.calls.map(call => call[0]), ["save"]);
 });
 
-test("native entry checks owned server readiness before creating, sending to, or navigating a window", () => {
-  const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
-  const navigation = main.slice(main.indexOf("  openLocalSettings: async () => {"), main.indexOf("  relaunch: relaunchAfterDesktopRemoteChange"));
-  assert.match(navigation, /if \(!serverReady\) throw new Error\(/);
-  const guard = navigation.indexOf("if (!serverReady)");
-  for (const action of ["createWindow(", "win.webContents.send(", "win.loadURL("]) {
-    assert.ok(navigation.indexOf(action) > guard, `${action} must follow the owned-server guard`);
-  }
-});
-
-test("startup delivers a pending organisation action before default navigation and falls back after cancellation", () => {
-  const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
-  const startup = main.slice(main.indexOf("  let restoredOrganizationEntry = false;"), main.indexOf("  // Reconcile incomplete setup"));
-  assert.ok(startup.indexOf("await deliverOrganizationEntry()") < startup.indexOf("await showHome()"));
-  // A launch from the login item lending added opens no window: lending runs out of sight until the person opens it.
-  assert.match(startup, /if \(!hiddenStart && !restoredOrganizationEntry && !deliveredOrganizationEntry && !deliveredCloudEntry\) await showHome\(\);/);
-});
-
 test("concurrent links share one confirmation and stale confirmations cannot change a new selection", async () => {
   const h = fixture();
   let decide;

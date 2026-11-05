@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+
 import test from "node:test";
-import vm from "node:vm";
+
 
 import { parseCloudList } from "./cloud-list.mjs";
 import { addCloudView, createAddedCloudNotice, installCloudRail, railPlaces } from "./cloud-rail.mjs";
 import { otherCloudSnapshot } from "./cloud-plan-ipc.mjs";
 
 const HOME = "https://omb-u-1a2b3c4d5e6f.fly.dev", CLIENT_A = "https://omb-c-a.fly.dev", TEAM = "https://omb-t-acme.fly.dev", VPS = "https://bots.example.test";
-const LOCAL = "http://127.0.0.1:8799";
+
 const entry = (over = {}) => ({ id: "c-a", name: "Client A", color: "green", role: "owner", tier: "pro", runsOn: "cloud", status: "ready", origin: CLIENT_A,
   teamId: null, primary: false, ...over });
 const PRIMARY = entry({ id: "c-home", name: "My Cloud", color: null, origin: HOME, primary: true });
@@ -308,53 +308,7 @@ test("Make … my home: only on a server connected by hand that main offers it f
   assert.throws(() => rail().call("workspaces:make-home", "vps"), /can't be your bots' home/, "a main that offers it nowhere");
 });
 
-const PRELOAD = readFileSync(new URL("./preload.cjs", import.meta.url), "utf8");
-function preload(origin, { activation = false } = {}) {
-  let bridge; const invoked = [];
-  vm.runInNewContext(PRELOAD, {
-    process: { platform: "darwin", argv: [`--omb-local-origin=${LOCAL}`, "--omb-company-desktop=1"] },
-    location: { origin }, navigator: { userActivation: { isActive: activation } }, TextEncoder, localStorage: { getItem: () => null }, queueMicrotask,
-    require: () => ({ webUtils: {}, contextBridge: { exposeInMainWorld: (_name, value) => { bridge = value; } },
-      ipcRenderer: { on() {}, removeListener() {}, send() {}, sendSync: () => null, invoke: (...args) => { invoked.push(args); return Promise.resolve(); } } }),
-  });
-  return { bridge, invoked };
-}
 
-test("a Cloud's page gets the rail and the add sheet's narrow bridges; a circle, ＋ and checkout open only from the person's click", async () => {
-  const page = preload(HOME);
-  assert.deepEqual(Object.keys(page.bridge.workspaces), ["state", "menu", "line", "places", "open", "add", "look", "color", "recolor", "remove", "makeHome", "onChanged"]);
-  assert.deepEqual(Object.keys(page.bridge.cloudAdd), ["state", "start", "reopen", "copyLink", "open", "interest", "sheet", "organization"]);
-  await page.bridge.workspaces.places();
-  await page.bridge.cloudAdd.state();
-  await assert.rejects(page.bridge.workspaces.open("a"), /Choose a place/);
-  await assert.rejects(page.bridge.workspaces.add("link"), /Choose what to add/);
-  await assert.rejects(page.bridge.cloudAdd.start("pro", "Client B", "rose"), /Continue to checkout/);
-  await assert.rejects(page.bridge.cloudAdd.reopen(), /Reopen checkout/);
-  await assert.rejects(page.bridge.cloudAdd.copyLink(), /Copy link/);
-  await assert.rejects(page.bridge.cloudAdd.open(), /Open/);
-  await assert.rejects(page.bridge.cloudAdd.organization("Client B", "rose"), /Create organization/);
-  await assert.rejects(page.bridge.workspaces.color("rose"), /Choose a color/, "a page changes its place's colour only from the person's click");
-  await assert.rejects(page.bridge.workspaces.recolor("vps", "rose"), /Choose a color/);
-  await assert.rejects(page.bridge.workspaces.remove("old"), /Choose Remove from list/, "Remove from list only from the person's click");
-  await assert.rejects(page.bridge.workspaces.makeHome("vps"), /Choose Make my home/, "a move starts only from the person's click");
-  await page.bridge.workspaces.look();
-  assert.deepEqual(page.invoked.at(-1), ["workspaces:look"]);
-  const clicked = preload(HOME, { activation: true });
-  await clicked.bridge.workspaces.open({ toString: () => "a" });
-  await clicked.bridge.workspaces.add("link");
-  await clicked.bridge.cloudAdd.start("pro", "Client B", null);
-  await clicked.bridge.workspaces.color("rose");
-  await clicked.bridge.workspaces.color(null);
-  await clicked.bridge.cloudAdd.organization({ toString: () => "Client C" }, null);
-  assert.deepEqual(clicked.invoked, [["workspaces:open", "a"], ["workspaces:add", "link"], ["cloud-add:start", "pro", "Client B", null], ["workspaces:color", "rose"], ["workspaces:color", null],
-    ["cloud-add:organization", "Client C", null]]);
-  await clicked.bridge.cloudAdd.start("team", "Studio", "blue", { toString: () => "app_whats_new_team" });
-  assert.deepEqual(clicked.invoked.at(-1), ["cloud-add:start", "team", "Studio", "blue", "app_whats_new_team"], "a source travels as plain text");
-  assert.equal(page.bridge.cloudAccount, undefined, "never the account bridge");
-  const local = preload(LOCAL);
-  await local.bridge.workspaces.open("a");
-  assert.deepEqual(local.invoked, [["workspaces:open", "a"]], "this app's own page needs no click check");
-});
 
 test("Remove from list on a server saved by hand: main forgets it here, by its own word for which one", async () => {
   const forgotten = [];

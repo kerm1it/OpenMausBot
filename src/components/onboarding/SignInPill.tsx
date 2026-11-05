@@ -7,7 +7,7 @@ import { openExternalLink } from "@/lib/app-links";
 import { useCopyFeedback } from "@/lib/copy-text";
 import { t } from "@/lib/i18n";
 import { plainSignIn } from "@/lib/onboarding";
-import { engineSignedIn } from "@/lib/product-events";
+
 import { api, useStore, type InstanceInfo } from "@/state/store";
 import { deviceSignInLink, isDeviceSignInCode } from "../../../shared/device-sign-in";
 
@@ -43,8 +43,6 @@ export function useSignInPill(instance: InstanceInfo | undefined) {
   useEffect(() => () => { live.current = false; }, []);
 
   const done = useCallback(async () => {
-    engineSignedIn(method === "paste-code" ? "claude" : provider,
-      method === "browser-pkce" ? "browser" : method === "paste-code" ? "code" : "device_code");
     try { await refreshInstances(); } catch {}
     try { await refreshModels(id); } catch {}
     if (live.current) setSlot({ kind: "start" });

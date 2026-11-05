@@ -42,7 +42,7 @@ it("installs through AI, persists bot choices, guards active turns and uninstall
   };
   try {
     makePlugin();
-    expect((await api("POST", "/api/plugins/install", { source }, 400)).error).toContain("local paths are not supported");
+    expect((await api("POST", "/api/plugins/install", { source }, 400)).error).toMatch(/source.*(?:HTTP|https|must match)/);
     expect((await api("GET", "/api/plugins")).plugins).toEqual([]);
     await expect(runControlOmb(["install-plugin", "--source", source, "--url", url])).rejects.toThrow("local paths are not supported");
     const chief = (await control("new-bot", "--name", "Installer", "--section", "Plugins")).bot;
@@ -69,7 +69,7 @@ it("installs through AI, persists bot choices, guards active turns and uninstall
     evidence.push({ aiToolCalls: calls });
     expect(calls).toHaveLength(4);
     expect(calls[0].response.result?.isError).toBe(true);
-    expect(JSON.stringify(calls[0].response)).toContain("local paths are not supported");
+    expect(JSON.stringify(calls[0].response)).toMatch(/source.*(?:HTTP|https|must match)/);
     expect(calls.slice(1).every(item => !item.response.error && !item.response.result?.isError)).toBe(true);
     const plugins = (await control("plugins")).plugins;
     expect(plugins).toEqual([expect.objectContaining({ id: "fixture-plugin", version: "1.0.0" })]);

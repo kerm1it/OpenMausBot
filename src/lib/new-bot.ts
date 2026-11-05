@@ -8,7 +8,7 @@ import { BotCreationDraft } from "./bot-creation-draft";
 import { isBotLimitRefusal } from "./bot-limit";
 import { createConfiguredBot } from "./create-configured-bot";
 import { t } from "./i18n";
-import { botCreated } from "./product-events";
+
 
 export interface BotDefaultsAnswer { defaults: NewBotDefaults; modelSelection: ModelSelection; suggestedName: string }
 
@@ -39,8 +39,7 @@ export function reportsToFor(chosen: string | null, section: string | undefined,
 /** A bot just made joins the sidebar and, unless the caller keeps its own place, its chat opens: on a team's Cloud the
  * creator's own conversation, never the main chat every member reads. */
 export function announceNewBot(dispatch: (action: Action) => void, bot: Bot, warnings: readonly string[],
-  { preserveSelection = false, showThreads, source, role }: { preserveSelection?: boolean; showThreads: boolean; source: BotSource; role?: string }) {
-  botCreated(source, role);
+  { preserveSelection = false, showThreads }: { preserveSelection?: boolean; showThreads: boolean; source: BotSource; role?: string }) {
   dispatch({ type: "botAdded", bot, preserveSelection });
   if (!preserveSelection && teamChats()) openBot(dispatch, bot, showThreads);
   if (warnings.length) dispatch({ type: "error", message: warnings.join("\n") });

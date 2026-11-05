@@ -4,9 +4,9 @@ const TOKEN = /^[0-9a-f]{64}$/;
 export const DEFAULT_MANAGED_COMPOSIO_BROKER_URL = "https://openmausbot-composio.milindsoni201.workers.dev";
 
 /** An explicit URL wins; otherwise the default, only for a shipped build, so development and tests never register. */
-export function managedComposioBrokerUrl(configured, shipped) {
+export function managedComposioBrokerUrl(configured) {
   const explicit = typeof configured === "string" ? configured.trim() : "";
-  return normalizeManagedComposioBrokerUrl(explicit || (shipped ? DEFAULT_MANAGED_COMPOSIO_BROKER_URL : ""));
+  return normalizeManagedComposioBrokerUrl(explicit);
 }
 
 export function normalizeManagedComposioBrokerUrl(value) {

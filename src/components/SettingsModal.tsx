@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Archive, ChartNoAxesColumn, Cloud, CloudDownload, Coins, Download, FlaskConical, KeyRound, LockKeyhole, Monitor, Palette, ScrollText, Search, Settings, Sparkles, TabletSmartphone, Terminal, User, Users, X, Building2, Zap, BookOpen } from "lucide-react";
+import { Archive, ChartNoAxesColumn, CloudDownload, Coins, Download, FlaskConical, KeyRound, LockKeyhole, Monitor, Palette, ScrollText, Search, Settings, Sparkles, TabletSmartphone, Terminal, User, Users, X, Building2, Zap, BookOpen } from "lucide-react";
 import { useStore, type AppSettingsSection } from "@/state/store";
 import { skillsLibraryEnabled } from "@/lib/feature-flags";
 import { type LocaleKey } from "@/locales";
@@ -8,8 +8,8 @@ import { AdminOnly } from "./AdminOnly";
 import { KeysPage } from "./keys/KeysPage";
 import { KEY_CATALOG, keyMatches, keySection, type KeyEntry } from "./keys/key-catalog";
 import { openKeySettings, useKeyFocus } from "./keys/key-focus";
-import { AnalyticsRow } from "./AnalyticsRow";
-import { UpdatesConsentRow } from "./UpdatesConsent";
+
+
 import { OpenAtLoginRow } from "./OpenAtLoginRow";
 import { DefaultBotSidebarRow } from "./DefaultBotControls";
 import { TalkShortcutRow, talkShortcutKeywords } from "./TalkShortcutRow";
@@ -35,8 +35,8 @@ import { ChromeRailRow } from "./ChromeRailToggle";
 import { WindowFrameRow } from "./WindowFrameRow";
 import { OrganizationSettings } from "./OrganizationSettings";
 import { CloudAccountSettings } from "./CloudAccountSettings";
-import { ProSettingsCard } from "./ProIntroduction";
-import { CloudUsageSettings } from "./CloudUsageMeter";
+
+
 import { Card, SettingsGroup, SIMPLE_BUTTONS } from "./SettingsPrimitives";
 import { shortcutLabel } from "./ShortcutHint";
 import { UsageSection } from "./UsageSection";
@@ -56,7 +56,7 @@ import { ThreadCleanupSettings } from "./ThreadCleanupSettings";
 import { PinnedPanelsSettings } from "./PinnedPanelsSettings";
 import { DefaultBotSettings } from "./NewBotDialog";
 import { WorkspaceBackupSettings } from "./WorkspaceBackupSettings";
-import { CompanyBackupSettings } from "./CompanyBackupSettings";
+
 import { ImportSettings } from "./ImportSettings";
 import { cn } from "@/lib/cn";
 import { scrollWithin } from "@/lib/scroll-within";
@@ -98,8 +98,6 @@ export const SECTIONS: Array<{
   { id: "desktopWorkspaces", group: "computers", labelKey: "settings.section.desktopWorkspaces", icon: Building2, keywords: ["workspace", "cloud", "hosted", "vps", "server", "servers", "connect", "pair", "switch", "local"] },
   { id: "computer", group: "computers", labelKey: "settings.section.computer", icon: Monitor, keywords: ["vm", "virtual", "desktop", "browser", "built-in browser", "profiles", "browser profiles"] },
   { id: "logins", group: "computers", labelKey: "settings.section.logins", icon: LockKeyhole, keywords: ["logins", "login", "passwords", "password", "sign in", "2fa", "one-time code", "totp", "fill_login", "1password", "vault"] },
-  { id: "cloudAccount", group: "account", labelKey: "settings.section.cloudAccount", icon: Cloud, keywords: ["cloud", "my cloud", "account", "personal", "sign in", "pro", "subscription", "billing", "sync", "send", "this computer", "bots", "logins", "1password"] },
-  { id: "organization", group: "account", labelKey: "settings.section.organization", icon: Building2, keywords: ["company", "organization", "organisation", "sign in", "enroll", "managed", "models", "disconnect"] },
   { id: "usage", group: "account", labelKey: "settings.section.usage", icon: Coins, keywords: ["tokens", "cost", "billing", "plan", "quota", "remaining", "weekly", "5-hour", "model", "used"] },
   { id: "backups", group: "account", labelKey: "settings.section.backups", icon: Archive, keywords: ["export", "import", "restore", "full backup", "password", "recovery"] },
   { id: "import", group: "account", labelKey: "settings.section.import", icon: Download, keywords: ["import", "grok", "grok bot", "move", "cursor", "claude code", "codex", "gemini", "skills", "mcp", "tools", "bring"] },
@@ -183,7 +181,7 @@ export function SettingsModal() {
   const advanced = useAdvancedMode();
   const remoteActive = window.ogb?.remoteClient?.active === true;
   const requested = state.appSettingsSection;
-  const section: AppSettingsSection =
+  const section: AppSettingsSection = ["cloudAccount", "organization"].includes(requested) ? "general" :
     (remoteActive && !["appearance", "desktopWorkspaces"].includes(requested)) || requested === "remote"
       ? "companion"
       : advanced && requested === "updates" ? "general" : requested;
@@ -340,8 +338,8 @@ export function SettingsModal() {
             <DefaultBotSidebarRow />
             <TalkShortcutRow />
 
-            <ProSettingsCard />
-            <CloudUsageSettings />
+            <></>
+            <></>
             <Card title={t("settings.profile.title")} subtitle={t("settings.profile.sharedSubtitle")}>
               <ProfileFields />
             </Card>
@@ -350,8 +348,8 @@ export function SettingsModal() {
             <OpenAtLoginRow />
             <NewBotEffortRow />
             <SavedStepsRow />
-            <AnalyticsRow />
-            <UpdatesConsentRow />
+            <></>
+            <></>
             <DefaultBotSettings />
 
             <Card title={t("settings.roomTurns.title")} subtitle={t("settings.roomTurns.subtitle")}>
@@ -405,7 +403,7 @@ export function SettingsModal() {
         return <AdminOnly><KeysPage /></AdminOnly>;
       case "decisionModel": return <AdminOnly><DecisionModelSettings /></AdminOnly>;
       case "engines": return <AdminOnly><EnginesSettings /></AdminOnly>;
-      case "backups": return <AdminOnly><WorkspaceBackupSettings /><CompanyBackupSettings /></AdminOnly>;
+      case "backups": return <AdminOnly><WorkspaceBackupSettings /><></></AdminOnly>;
       case "import": return <AdminOnly><ImportSettings /></AdminOnly>;
       case "companion":
         return <>{remoteAccess.client}{remoteAccess.domain}{remoteAccess.pairing}{remoteAccess.companion}</>;

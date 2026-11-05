@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { setEmailGateDone, track } from "@/lib/analytics";
+import { setEmailGateDone } from "@/lib/onboarding-storage";
 import { cn } from "@/lib/cn";
 import { chiefStepFits, myDefaultBot, setChiefStepOpen, useViewerEmail } from "@/lib/default-bot";
 import { beatsFor, completionPatch, firstRunPatch, markWelcomeFinished, resumeBeat, showWelcome, type BeatId } from "@/lib/onboarding";
@@ -74,7 +74,6 @@ export function WelcomeFlow({
   record.current = state.config?.onboarding;
 
   useEffect(() => {
-    track("onboarding_step", { step: beat, replay });
     if (keepsDraft && !finishing.current) saveWelcomeDraft({ beat });
   }, [beat, replay, keepsDraft]);
 
@@ -86,10 +85,9 @@ export function WelcomeFlow({
   }, []);
 
   const finish = useCallback(
-    async (reason: "completed" | "skipped", botId: string | null) => {
+    async (_reason: "completed" | "skipped", botId: string | null) => {
       if (finishing.current) return;
       finishing.current = true;
-      track("onboarding_completed", { reason, at: beat, replay });
       setEmailGateDone("submitted");
       if (!replay && !embedded) markWelcomeFinished();
       if (keepsDraft) clearWelcomeDraft();

@@ -3,7 +3,7 @@ import { Check, Loader2, Minus } from "lucide-react";
 import { useCloudSendNotice } from "@/components/CloudSendStrip";
 import { countedList } from "@/lib/cloud-send";
 import { WindowDragStrip } from "@/components/DesktopCapabilities";
-import { track } from "@/lib/analytics";
+
 import { reopenCloudIntent } from "@/lib/cloud-intent";
 import {
   CLOUD_SETUP_MOVE_SKIPPED, CLOUD_WELCOME_DONE, CLOUD_WELCOME_SHOWN, WELCOME_STEPS, welcomeStepFinished, welcomeStepHint, welcomeView, welcomeViewAfter,
@@ -91,7 +91,6 @@ export function CloudWelcome() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
-    track("cloud_welcome_step", { step: view });
     if (!navigated.current) return;
     navigated.current = false;
     heading.current?.focus();
@@ -133,8 +132,7 @@ export function CloudWelcome() {
     go(welcomeViewAfter(withEarlyHints(record, ids), step), focus);
   };
   const finishBring = (outcome: BringOutcome) => finish("bring", outcome === "skipped" ? [CLOUD_SETUP_MOVE_SKIPPED] : []);
-  const end = (reason: "done" | "skipped") => {
-    track("cloud_welcome_ended", { reason, at: view });
+  const end = (_reason: "done" | "skipped") => {
     remember([CLOUD_WELCOME_DONE]);
     endWelcomeHere();
   };

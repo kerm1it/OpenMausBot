@@ -1,3 +1,4 @@
+import { serverLine } from "./server-lines.ts";
 import { createHash } from "node:crypto";
 
 import { redactSecretsInText } from "./redact.ts";
@@ -12,10 +13,10 @@ export function skillCardCopy(staged: {
   gist: string;
   warnings: string[];
   files?: Array<{ path: string }>;
-}): { title: string; subtitle: string; tool: string } {
+}, language?: string): { title: string; subtitle: string; tool: string } {
   const warnings = staged.warnings.length ? `\n\nWarnings:\n- ${staged.warnings.join("\n- ")}` : "";
   const references = (staged.files ?? []).filter((file) => file.path !== "SKILL.md").length;
-  const referenceNote = references ? ` It keeps ${references} supporting file${references === 1 ? "" : "s"} the bot reads or runs when needed.` : "";
+  const referenceNote = references ? serverLine(language, "server.skill.files", { count: references }) : "";
   return {
     title: staged.action === "create"
       ? `Enable skill "${staged.name}"?`

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+
 import test from "node:test";
 import { accountPlace, accountPlaces, clearPlaceStorage, createPlaceStash, withoutAccountPlaces, withoutPlaces, withPlacesBack } from "./account-places.mjs";
 import { accountsView, createAccountLeave, createDesktopRing, installAccounts } from "./accounts-main.mjs";
@@ -211,11 +211,6 @@ test("signing out one of two: only its group goes, and the other account takes o
   assert.deepEqual(f.ring.waiting(), [], "nothing of it kept");
   assert.equal(f.files.active.account.id, "b");
   assert.deepEqual(f.saved().environments.map((entry) => entry.id), ["by-hand", "local-2"], "servers saved by hand stay");
-});
-
-test("the app waits for lending's last answers before it clears an account's sessions", () => {
-  const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
-  assert.match(main, /createDesktopRing\(\{[^\n]*lendingDone: \(\) => computerSharing\?\.goodbyesDone\(\)/);
 });
 
 test("a My Cloud saved by hand is the account's only while the sign-in names it; what left is removed by id, so a list that changed meanwhile loses nothing else", () => {

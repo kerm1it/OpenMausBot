@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fixture = vi.hoisted(() => ({ track: vi.fn(), openBot: vi.fn() }));
-vi.mock("@/lib/analytics", () => ({ track: fixture.track }));
+
 vi.mock("@/state/thread-navigation", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/state/thread-navigation")>(), openBot: fixture.openBot,
 }));
@@ -73,7 +73,7 @@ describe("New bot", () => {
     expect(created()).toMatchObject({ name: "Pixel", modelSelection: { instanceId: "claude", model: "sonnet" }, requireAvailableModel: true, useDefaults: false });
     expect(created()).not.toHaveProperty("reportsTo");
     expect(sent).toEqual([{ type: "botAdded", bot: expect.objectContaining({ id: "created", name: "Pixel" }), preserveSelection: false }]);
-    expect(fixture.track.mock.calls).toEqual([["bot_created", { source: "blank" }]]);
+    expect(fixture.track).not.toHaveBeenCalled();
   });
 
   it("names the bot so it never repeats one already here", async () => {

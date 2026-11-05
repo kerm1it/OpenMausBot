@@ -5,7 +5,7 @@ import { installCommandFor } from "@/state/engine-install";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
 import type { KeyResult, KeyVia } from "@/lib/analytics-allowlist";
-import { keyRemoved, keySaved, keySaveFailure, savedKeyResult } from "@/lib/product-events";
+
 import { InstanceProviderMark } from "../ProviderIcons";
 import { keyEntry, keyForInstance, looksLikeOtherKey, savedState, shownKeyEntry, type KeyEntry, type KeyId, type SavedState } from "./key-catalog";
 import { checkKey, cleanKey, looksLikeKey, saveKey } from "./key-save";
@@ -81,7 +81,6 @@ function errorText(cause: unknown): string {
 export function KeyRow({
   id,
   row: rowId,
-  via = "settings",
   onSaved,
   bare = false,
   rejected: rejectedHere,
@@ -199,10 +198,9 @@ export function KeyRow({
       if (hadFocus) focusAfter.current = now.configured ? "replace" : "input";
       if (!now.configured) setProblem(t("keys.row.notKept"));
       onSaved?.(now.configured);
-      keySaved(target.analytics, via, now.configured && target.test ? await runCheck() : savedKeyResult(target.analytics));
+      if (now.configured && target.test) await runCheck();
     } catch (cause) {
       setProblem(errorText(cause));
-      keySaved(target.analytics, via, keySaveFailure(cause));
     } finally {
       busyRef.current = false;
       setBusy(null);
@@ -248,7 +246,6 @@ export function KeyRow({
       setReplacing(false);
       setDraft("");
       onSaved?.(target.saved(status).configured);
-      keyRemoved(target.analytics, via);
     } catch (cause) {
       setProblem(errorText(cause));
     } finally {

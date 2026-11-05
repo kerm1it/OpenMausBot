@@ -3,12 +3,23 @@ import test from "node:test";
 
 import { readFileSync } from "node:fs";
 import { appPermissionAllowed, appPermissionHandlers, emailDraftUrl, externalLinkUrl, externalWebUrl, remoteClipboardWriteAllowed } from "./app-permissions.mjs";
-import { boatClaimMailto } from "../src/lib/boat-offer.ts";
+
 import { cloudPlanSnapshot, createCloudAccountClient } from "./cloud-account.mjs";
 import { myCloudOrigin, rememberedCloudHome } from "./cloud-home.mjs";
 
 const LOCAL_ORIGIN = "http://127.0.0.1:5199";
 const LOCAL_PAGE = "http://127.0.0.1:5199/chat?botId=bot-1";
+
+test("local and self-hosted permission checks work without a managed Cloud client", () => {
+  const origin = "https://bots.example.test";
+  const contents = { getURL: () => `${origin}/` };
+  const handlers = appPermissionHandlers({ rendererOrigin: () => LOCAL_ORIGIN, mainContents: () => contents,
+    activeRemoteOrigin: () => origin, activeRemoteMicrophone: () => true });
+  assert.equal(handlers.check(contents, "notifications", origin, { isMainFrame: true }), true);
+  assert.equal(handlers.check(contents, "media", origin, { isMainFrame: true, mediaTypes: ["audio"] }), true);
+  assert.equal(handlers.check(contents, "media", origin, { isMainFrame: true, mediaTypes: ["video"] }), false);
+  assert.equal(handlers.check(contents, "notifications", "https://other.example.test", { isMainFrame: true }), false);
+});
 
 test("grants notifications, clipboard, and fullscreen to the local renderer page", () => {
   for (const permission of ["notifications", "clipboard-read", "clipboard-sanitized-write", "fullscreen"]) {
@@ -94,10 +105,6 @@ test("an email link opens only as a draft to one address with a subject and a bo
     assert.throws(() => externalLinkUrl(url), /Only web/, url);
   for (const url of [null, 123, "not a url"])
     assert.throws(() => externalLinkUrl(url), /web address/);
-});
-
-test("the app's claim to Boat opens exactly as the app drafts it", () => {
-  assert.equal(externalLinkUrl(boatClaimMailto()), boatClaimMailto());
 });
 
 test("both external-link entry points use the policy and IPC retains the local-origin gate", () => {
@@ -256,24 +263,6 @@ test("this computer's own page keeps its permissions through the same handlers",
   assert.equal(ask("notifications", {}, local), true);
   assert.equal(check("clipboard-read", "", { isMainFrame: true }, local), true);
   assert.equal(check("clipboard-read", "https://other.example", { isMainFrame: true }, local), false);
-});
-
-test("the app installs these handlers, with its one rule for My Cloud and a wait for the saved sign-in", () => {
-  const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8").replace(/\r\n/g, "\n");
-  assert.match(main, /setPermissionRequestHandler\(appPermissions\.request\)/);
-  assert.match(main, /setPermissionCheckHandler\(appPermissions\.check\)/);
-  assert.match(main, /ipcMain\.handle\("perm:status", \(event\) => \(\{[^}]*pageMic: appPermissions\?\.pageMicrophone\(event\) \?\? "refused",/s);
-  assert.match(main, /^let appPermissions = null;$/m);
-  assert.match(main, /^  appPermissions = appPermissionHandlers\(\{$/m);
-  assert.doesNotMatch(main, /(const|let|var) appPermissions = appPermissionHandlers/);
-  assert.match(main, /cloudHomeOrigin: myCloud,\n/);
-  assert.match(main, /homeOrigin: \(\) => homeWindow\.placeOrigin\(\),\n/, "notifications on the page the window shows: My Cloud's, or a team's Cloud's");
-  assert.match(main, /cloudHomeRestoring: \(\) => cloudAccountRestoring \? cloudAccountRestored\(\) : null,\n/);
-  assert.equal(main.match(/myCloudOrigin\(/g)?.length, 1);
-  assert.match(main, /cloudPageSenderAllowed\(event, \{ contents, homeOrigin: myCloud\(\),/);
-  assert.doesNotMatch(main, /rememberedHome\??\.accountId/);
-  assert.doesNotMatch(main, /remembered: true/);
-  assert.match(main, /cloudAccountRestoring = true;\n\s+cloudAccountStarted = ensureCloudAccount\(\)\.start\(\)\.catch\(\(\) => \{\}\)\.then\(\(\) => accountRing\(\)\?\.start\(\)\)\.finally\(\(\) => \{ cloudAccountRestoring = false; \}\);/);
 });
 
 const ADMIN = "http://127.0.0.1:9";

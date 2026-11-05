@@ -3,15 +3,14 @@
 // the person hid the window's rail of places and whether they turned the window's frame off.
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
-import { onboardingHints } from "./onboarding-record.mjs";
+
 import { DEFAULT_TALK_KEY, isTalkKey } from "./talk-keys.mjs";
-import { createUpdatesConsent, parseUpdatesConsent, registerUpdatesConsent } from "./updates-consent.mjs";
+import { parseUpdatesConsent } from "./updates-consent.mjs";
 import { accountFullName } from "./system-name.mjs";
 
 export { DESKTOP_PORTS } from "./desktop-ports.mjs";
 /** The only notices a page may record, so no page can write anything else into the file. */
 export const DESKTOP_NOTICES = Object.freeze(["whats-new-2026-11", "boat-credit-2026-11", "grok-move-2026-11"]);
-const WHATS_NEW = DESKTOP_NOTICES[0];
 /** A locale code such as "de" or "pt-br", or "" for following the system. */
 const LANGUAGE = /^(?:[a-z]{2,3}(?:-[a-z0-9]{2,8}){0,2})?$/i;
 const isLanguage = value => typeof value === "string" && value.length <= 24 && LANGUAGE.test(value);
@@ -137,7 +136,7 @@ export function createDesktopPrefs({ read, write }) {
  * MausBot Cloud, asked once its Cloud sign-in is restored. `localConfig()`: This computer's own workspace's config.json.
  * `languageChanged(language, sender)`: tells this desktop's other pages the language picked on one of them.
  */
-export function registerDesktopPrefs({ prefs: given, ipcMain, read, write, page, cloudOffered, cloudAccount, localConfig = () => null, languageChanged = () => {}, frame = null, now = Date.now, systemName = accountFullName }) {
+export function registerDesktopPrefs({ prefs: given, ipcMain, read, write, page, languageChanged = () => {}, frame = null, systemName = accountFullName }) {
   let prefs = given ?? null;
   const store = () => prefs ??= createDesktopPrefs({ read, write });
   const from = (channel, pages, handler) => (event, ...args) => {
@@ -146,26 +145,9 @@ export function registerDesktopPrefs({ prefs: given, ipcMain, read, write, page,
     return handler(asking, ...args);
   };
   // This computer's workspace record counts on every page, before This computer's page has loaded.
-  const state = async () => {
-    const cloud = await cloudOffered();
-    let hints = [];
-    try { hints = onboardingHints(localConfig()); } catch {}
-    const seen = store().seen(), closed = hints.includes(WHATS_NEW);
-    return { seen: closed && !seen.includes(WHATS_NEW) ? [...seen, WHATS_NEW] : seen, cloud };
-  };
-  const ANY = ["local", "cloud", "server"];
-  ipcMain.handle("desktop-notices:state", from("desktop-notices:state", ANY, state));
-  ipcMain.handle("desktop-notices:seen", from("desktop-notices:seen", ANY, (_, id) => store().markSeen(id)));
+  const ANY = ["local", "server"];
   // A first run's default name for the profile: this computer's own page only, never a server's.
   ipcMain.handle("desktop-profile:system-name", from("desktop-profile:system-name", ["local"], () => systemName()));
-  // Security: a server's page learns only that this desktop turned analytics off, never that it is on.
-  ipcMain.on("desktop-analytics:read", event => {
-    try {
-      const asking = page(event), saved = store().analytics();
-      event.returnValue = asking === "local" ? saved : asking && saved === false ? false : null;
-    } catch { event.returnValue = null; }
-  });
-  ipcMain.handle("desktop-analytics:set", from("desktop-analytics:set", ["local"], (_, enabled) => { store().setAnalytics(enabled === true); }));
   ipcMain.on("desktop-language:read", event => {
     try { event.returnValue = page(event) ? store().language() : null; } catch { event.returnValue = null; }
   });
@@ -188,10 +170,4 @@ export function registerDesktopPrefs({ prefs: given, ipcMain, read, write, page,
     try { frame?.changed(); } catch {}
     return frameState();
   }));
-  if (!cloudAccount) return null;
-  const consent = createUpdatesConsent({ prefs: { installId: () => store().installId(), updatesConsent: () => store().updatesConsent(), setUpdatesConsent: value => store().setUpdatesConsent(value) },
-    account: cloudAccount, available: cloudOffered, now });
-  registerUpdatesConsent({ ipcMain, page, consent });
-  void cloudOffered().then(offered => offered && consent.sync()).catch(() => {});
-  return consent;
 }

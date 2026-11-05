@@ -31,7 +31,7 @@ vi.mock("@/lib/interface-mode", () => ({
   useAdvancedMode: () => fixture.advancedMode,
   setAdvancedMode: vi.fn(),
 }));
-vi.mock("@/lib/analytics", () => ({ analyticsEnabled: () => false, setAnalyticsEnabled: vi.fn() }));
+
 vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => fixture.ownerOrAdmin }));
 vi.mock("@/lib/chrome-rail", () => ({ useChromeRail: () => fixture.rail, setChromeRailHidden: (hidden: boolean) => fixture.railHidden.push(hidden) }));
 vi.mock("./SettingsPrimitives", async (importOriginal) => {
@@ -167,7 +167,7 @@ describe("Settings in Simple mode", () => {
   it("opens General on Account, then Appearance, Notifications, System and Import, with Advanced mode last as a plain row", () => {
     const html = render();
     expect(currentPage(html)).toBe("general");
-    expect(groupLabels(html)).toEqual(["Account", "Appearance", "Notifications", "System", "Import", "Organization"]);
+    expect(groupLabels(html)).toEqual(["Account", "Appearance", "Notifications", "System", "Import"]);
     expect(blocks(html).at(-1)).toBe("advanced-mode");
     expect([...html.matchAll(/<button[^>]*role="switch"[^>]*>/g)].at(-1)?.[0]).toContain('aria-label="Advanced mode"');
     expect(html).toContain("Show every control, including tools for builders. Nothing is deleted either way.");
@@ -206,11 +206,11 @@ describe("Settings in Simple mode", () => {
 
   it("keeps the everyday rows and leaves the fourteen builder controls to Advanced, where search still points", () => {
     const general = open("general");
-    for (const shown of ['aria-label="Send usage analytics"', 'aria-label="Color my messages with the bot&#x27;s color"', 'aria-label="Send messages with"',
+    for (const shown of ['aria-label="Color my messages with the bot&#x27;s color"', 'aria-label="Send messages with"',
       'aria-label="Notification sounds"', 'aria-label="Show the notification feed"', 'aria-label="App language"', 'role="radiogroup" aria-label="Theme"']) {
       expect(placement(general, shown), shown).toBe("shown");
     }
-    expect(placement(open("updates"), "MARKER:updatesConsent;")).toBe("shown");
+    expect(placement(open("updates"), "MARKER:updatesConsent;")).toBe("missing");
     const everyPage = ["general", "engines", "companion", "usage", "updates"].map((section) => open(section as AppSettingsSection)).join("");
     for (const gone of ["Effort for new bots", "Defaults for new bots", "Group turns", "MCP calls", "Parallel threads", "Automatic recovery", "Event log cleanup",
       "Interface font", "Chat width", "Pinned bots as circles", "Universal pins", "Tool calls", "This run", "Keep prompt cache warm"]) {
@@ -225,7 +225,7 @@ describe("Settings in Simple mode", () => {
     fixture.updater = { status: "idle" };
     const html = open("updates");
     expect(html).toMatch(/>MausBot [^<]+<\/div>/);
-    for (const shown of ["Check for updates", "MARKER:updatesConsent;", "Replay welcome tour", "Diagnostics"]) expect(placement(html, shown), shown).toBe("shown");
+    for (const shown of ["Check for updates", "Replay welcome tour", "Diagnostics"]) expect(placement(html, shown), shown).toBe("shown");
   });
 
   it("checks the server's version from a browser", () => {
@@ -266,14 +266,14 @@ describe("Settings in Simple mode", () => {
     expect(html).toContain('aria-label="Enable the built-in browser"');
   });
 
-  it("leads Usage & billing with one usage block, folds the limits, then shows the plan", () => {
-    fixture.section = "cloudAccount";
+  it("keeps usage and provider limits without Cloud plan controls", () => {
+    fixture.section = "usage";
     const html = render();
     expect(currentPage(html)).toBe("billing");
-    expect(blocks(html)).toEqual(["usage", "cloudAccount"]);
-    expect(html.indexOf("See all limits")).toBeLessThan(html.indexOf("MARKER:cloudAccount;"));
+    expect(blocks(html)).toEqual(["usage"]);
     expect(placement(html, "MARKER:usage;")).toBe("folded");
-    expect(groupLabels(html)).toContain("Plan");
+    expect(html).not.toContain("MARKER:cloudAccount;");
+    expect(groupLabels(html)).not.toContain("Plan");
   });
 
   it("shows a hosted workspace's admins People in Account and Activity as its own group", () => {
@@ -308,7 +308,6 @@ describe("Settings in Simple mode", () => {
     ["general", "general"],
     ["appearance", "general"],
     ["import", "general"],
-    ["organization", "general"],
     ["engines", "ai"],
     ["connections", "ai"],
     ["companion", "computer"],
@@ -317,7 +316,6 @@ describe("Settings in Simple mode", () => {
     ["computer", "computer"],
     ["logins", "computer"],
     ["usage", "billing"],
-    ["cloudAccount", "billing"],
     ["updates", "updates"],
   ])("lands a deep link to %s on %s", (section, page) => {
     fixture.section = section;
@@ -365,7 +363,7 @@ describe("Settings in Advanced mode", () => {
     expect(html.indexOf('aria-label="Advanced mode"')).toBeLessThan(html.indexOf("Language"));
     expect(html).toContain("Show every technical control on this device");
     expect(html).not.toContain("More settings");
-    for (const kept of ["Group turns", 'aria-label="Effort for new bots"', 'aria-label="Send usage analytics"', "Diagnostics"]) {
+    for (const kept of ["Group turns", 'aria-label="Effort for new bots"', "Diagnostics"]) {
       expect(placement(html, kept), kept).toBe("shown");
     }
   });
