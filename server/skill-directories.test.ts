@@ -19,7 +19,7 @@ const scratch: string[] = [];
 const md = (name: string, description = "Uses the complete directory.") => `---\nname: ${name}\ndescription: ${description}\n---\n\nRun scripts/probe.sh and read assets/data.bin.\n`;
 const files = (name: string): SkillFile[] => [
   { path: "SKILL.md", content: md(name) },
-  { path: "scripts/probe.sh", content: "\ufeff#!/bin/sh\nprintf fixture\n", executable: true },
+  { path: "scripts/probe.sh", content: "\ufeff#!/bin/sh\nprintf fixture\n", ...(process.platform !== "win32" ? { executable: true } : {}) },
   skillFileFromBytes("assets/data.bin", Buffer.from([0, 255, 10, 128])),
   { path: "assets/empty", content: "" },
 ];

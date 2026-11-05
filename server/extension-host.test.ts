@@ -26,7 +26,7 @@ describe("extension prepare and confirmation", () => {
     const {host, createBot} = setup();
     const archive = Buffer.from(zipSync({"extension.json": strToU8(JSON.stringify(manifest("Template"))), "bot.json": strToU8(JSON.stringify({schemaVersion: 1, profile: {name: "Template", soul: "Template instructions"}})), "skills/proof/SKILL.md": strToU8(skill), "skills/proof/run.sh": [strToU8("#!/bin/sh\necho proof"), {os: 3, attrs: 0o100755 << 16}], "skills/proof/asset.bin": new Uint8Array([0, 255, 3]), "MEMORY.md": strToU8("Portable note")}));
     const preview = await host.prepare(undefined, archive);
-    expect(preview.skills[0]?.files).toEqual(expect.arrayContaining([expect.objectContaining({path: "skills/proof/run.sh", executable: true}), expect.objectContaining({path: "skills/proof/asset.bin", size: 3})]));
+    expect(preview.skills[0]?.files).toEqual(expect.arrayContaining([expect.objectContaining({path: "skills/proof/run.sh", executable: process.platform !== "win32"}), expect.objectContaining({path: "skills/proof/asset.bin", size: 3})]));
     const bytes = host.file(preview.id, "skills/proof/asset.bin");
     expect(bytes).toEqual(Buffer.from([0, 255, 3]));
     const result = await host.import(preview.id, {}, auth);
@@ -34,7 +34,7 @@ describe("extension prepare and confirmation", () => {
     expect(await host.import(preview.id, {}, auth)).toEqual(result);
     expect(createBot).toHaveBeenCalledTimes(1);
     const [draft, options] = createBot.mock.calls[0]! as unknown as [{skills: Array<{directory:string}>}, object];
-    expect(draft.skills[0]!.directory).toContain("skills/proof");
+    expect(draft.skills[0]!.directory).toContain(join("skills", "proof"));
     expect(options).toEqual({});
     host.close();
   });
@@ -72,6 +72,6 @@ describe("extension prepare and confirmation", () => {
   it("retains raw Grok plugin IDs and inline binary resources", async () => {
     const draft = await prepareGrokRecipe({profile: {name: "Grok fixture", description: "Do useful work"}, skills: [{name: "proof", content: skill, files: [{path: "asset.bin", content: "AP8D", encoding: "base64"}]}], plugins: [{pluginId: "9717366", name: "pstack"}]}, root, "grok-bot");
     expect(draft.pluginReferences).toEqual([{id: "9717366", name: "pstack", optional: false, source: undefined, ecosystem: "grok-bot"}]);
-    expect(draft.skills[0]!.directory).toContain("skills/proof");
+    expect(draft.skills[0]!.directory).toContain(join("skills", "proof"));
   });
 });

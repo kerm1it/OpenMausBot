@@ -1967,7 +1967,7 @@ describe("agents-proxy MCP surface", () => {
     const list = await rpc("tools/list");
     const manage = list.result.tools.find((t: { name: string }) => t.name === "skill_manage");
     expect(JSON.stringify(manage.inputSchema)).not.toMatch(/"(oneOf|anyOf|allOf|const|format)":/);
-    expect(manage.inputSchema.required).toEqual(["action", "skill_md", "source"]);
+    expect(manage.inputSchema.required).toEqual(["action", "source"]);
     expect(manage.inputSchema.properties.action.enum).toEqual(["create", "update"]);
 
     const listed = await callTool("skills_list", {});

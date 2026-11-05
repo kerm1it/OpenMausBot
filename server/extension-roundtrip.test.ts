@@ -58,7 +58,7 @@ describe("portable bot template round trip", () => {
     expect(listSkills(target.id).map(value => [value.name, value.enabled])).toEqual([["private-proof", false], ["shared-proof", false]]);
     const restored = readSkillDirectory(target.id, "private-proof")!;
     expect(readFileSync(join(restored.directory, "asset.bin"))).toEqual(Buffer.from([0, 255, 9]));
-    expect(statSync(join(restored.directory, "scripts/check.sh")).mode & 0o111).not.toBe(0);
+    if (process.platform !== "win32") expect(statSync(join(restored.directory, "scripts/check.sh")).mode & 0o111).not.toBe(0);
     expect(readMemoryFile(target.id).text).toContain("Portable memory");
     const importedRoutine = routines.listRoutines().find(value => value.botId === target.id)!;
     expect(importedRoutine.id).not.toBe(originalRoutine.id);

@@ -1,3 +1,4 @@
+import { Select } from "./Select";
 import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/state/store";
 import { t } from "@/lib/i18n";
@@ -106,8 +107,8 @@ export function ExtensionImportDialog({ initialInput, onClose, onImported }: {
       {preview.warnings.map((warning, index) => <p key={index} className="rounded-lg bg-control p-3 text-ink-secondary">{warning}</p>)}
       {preview.type === "bot" && <>
         <label className="block">{t("extension.botName")}<input className={extensionFieldClass} value={name} onChange={event => setName(event.target.value)} /></label>
-        <div className="grid grid-cols-2 gap-3"><label>{t("extension.department")}<select className={extensionFieldClass} value={section} onChange={event => setSection(event.target.value)}><option value="">{t("extension.defaultDepartment")}</option>{(state.sections ?? []).map(value => <option key={value}>{value}</option>)}</select></label>
-          <label>{t("extension.model")}<select className={extensionFieldClass} value={model} onChange={event => setModel(event.target.value)}><option value="">{t("extension.defaultModel")}</option>{state.instances.filter(instance => instance.snapshot.state === "available").flatMap(instance => instance.models.options.map(option => <option key={`${instance.instanceId}/${option.id}`} value={JSON.stringify([instance.instanceId, option.id])}>{instance.displayName} · {option.label}</option>))}</select></label></div>
+        <div className="grid grid-cols-2 gap-3"><label>{t("extension.department")}<Select className={extensionFieldClass} value={section} onChange={event => setSection(event.target.value)}><option value="">{t("extension.defaultDepartment")}</option>{(state.sections ?? []).map(value => <option key={value}>{value}</option>)}</Select></label>
+          <label>{t("extension.model")}<Select className={extensionFieldClass} value={model} onChange={event => setModel(event.target.value)}><option value="">{t("extension.defaultModel")}</option>{state.instances.filter(instance => instance.snapshot.state === "available").flatMap(instance => instance.models.options.map(option => <option key={`${instance.instanceId}/${option.id}`} value={JSON.stringify([instance.instanceId, option.id])}>{instance.displayName} · {option.label}</option>))}</Select></label></div>
         {preview.profile?.soul && <details><summary className="cursor-pointer">{t("extension.instructions")}</summary><pre className="max-h-56 overflow-auto whitespace-pre-wrap rounded bg-control p-3">{preview.profile.soul}</pre></details>}
       </>}
       {preview.requirements.length > 0 && <div className="rounded-lg bg-control p-3"><h4 className="font-medium">{t("extension.requirements")}</h4>{preview.requirements.map((requirement, index) => <p key={index} className="mt-1"><strong>{requirement.name}</strong>{requirement.description ? ` · ${requirement.description}` : ""}</p>)}</div>}

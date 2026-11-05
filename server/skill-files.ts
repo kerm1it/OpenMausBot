@@ -130,7 +130,8 @@ export function prepareSkillFiles(input: SkillFile[]): PreparedSkillFiles | { er
     const prefix = md.path.slice(0, -"SKILL.md".length);
     const files = input.map(file => {
       if (!file.path.startsWith(prefix)) throw new Error(`File is outside the Skill root: ${file.path}`);
-      return { ...file, path: file.path.slice(prefix.length) };
+      const { executable, ...content } = file;
+      return { ...content, path: file.path.slice(prefix.length), ...(executable && process.platform !== "win32" ? { executable: true } : {}) };
     }).sort((a, b) => a.path === "SKILL.md" ? -1 : b.path === "SKILL.md" ? 1 : a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
     validateSkillFiles(files);
     const warnings = files.flatMap(file => file.encoding ? [] : scanSkillText(file.content).map(warning => file.path === "SKILL.md" ? warning : `${file.path}: ${warning}`));

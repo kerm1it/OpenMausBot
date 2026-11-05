@@ -19,7 +19,7 @@ describe("extension source directories", () => {
     await downloadGithubDirectory({ repository: "fixture/plugins", ref: "main", path: "selected" }, root, fetcher);
     expect(readFileSync(join(root, "asset.bin"))).toEqual(binary);
     expect(readFileSync(join(root, "run.sh"))).toEqual(script);
-    expect(statSync(join(root, "run.sh")).mode & 0o111).not.toBe(0);
+    if (process.platform !== "win32") expect(statSync(join(root, "run.sh")).mode & 0o111).not.toBe(0);
     expect(existsSync(join(root, "other"))).toBe(false);
     expect(fetcher).toHaveBeenCalledExactlyOnceWith("https://codeload.github.com/fixture/plugins/zip/main", expect.any(Object));
   });

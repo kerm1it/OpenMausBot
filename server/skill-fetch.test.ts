@@ -76,7 +76,7 @@ describe("complete GitHub Skill downloads", () => {
     const files = result.skills[0].files;
     expect(files.map(file => file.path).sort()).toEqual(["SKILL.md", "assets/empty", "assets/logo.png", "scripts/run.sh"]);
     expect(skillFileBytes(files.find(file => file.path === "assets/logo.png")!)).toEqual(binary);
-    expect(files.find(file => file.path === "scripts/run.sh")?.executable).toBe(true);
+    expect(Boolean(files.find(file => file.path === "scripts/run.sh")?.executable)).toBe(process.platform !== "win32");
     expect(files.find(file => file.path === "assets/empty")?.content).toBe("");
     expect(vi.mocked(fixture.fetcher).mock.calls.some(([input]) => String(input).includes("raw.githubusercontent.com/a/b/main/skills/other/"))).toBe(false);
   });

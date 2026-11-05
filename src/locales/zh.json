@@ -3170,7 +3170,7 @@
   "extension.department": "部门",
   "extension.defaultDepartment": "默认部门",
   "extension.model": "模型",
-  "extension.defaultModel": "使用当前环境默认模型",
+  "extension.defaultModel": "新 Bot 的默认模型",
   "extension.instructions": "常驻指令",
   "extension.requirements": "导入后需要配置",
   "extension.plugins": "插件",
