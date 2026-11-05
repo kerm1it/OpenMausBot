@@ -1,6 +1,7 @@
 // Verification recipes are followed by hand, so nothing else notices when a
 // command, file, route or link they cite stops existing. This reads every
 // recipe under docs/verification and checks each citation against the tree.
+import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,7 +11,8 @@ import { HELP } from "../control-omb.ts";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 const DOCS = join(ROOT, "docs", "verification");
-const recipes = readdirSync(DOCS).filter((name) => name.endsWith(".md")).sort();
+const recipes = execFileSync("git", ["ls-files", "-z", "--", "docs/verification/*.md"], { cwd: ROOT, encoding: "utf8" })
+  .split("\0").filter(Boolean).map((path) => path.slice("docs/verification/".length)).filter((name) => !name.includes("/")).sort();
 const text = (recipe: string) => readFileSync(join(DOCS, recipe), "utf8");
 // Paths inside external links belong to other repositories.
 const withoutUrls = (markdown: string) => markdown.replace(/https?:\/\/\S+/g, " ");
