@@ -109,9 +109,9 @@ function signedCredentials(overrides = {}) {
 }
 
 describe("Companion account service", () => {
-  it("uses the packaged hosted default and only explicit safe development origins", () => {
+  it("requires an explicit safe control-plane origin in packaged and development builds", () => {
     expect(resolveCompanionControlPlaneURL({ isPackaged: true, environment: {} })).toBe(
-      "https://accounts.openmausbot.com",
+      "",
     );
     expect(resolveCompanionControlPlaneURL({
       isPackaged: false,

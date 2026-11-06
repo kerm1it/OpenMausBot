@@ -46,8 +46,9 @@ export interface TodaySources {
   groups: ReadonlyArray<{ id: string; threadId: string; tasks?: ReadonlyArray<{ threadId: string }> }>;
   routines: { listRoutines(): ReadonlyArray<{ botId: string; groupId?: string }>; listRuns(from?: number): readonly RunRecord[] } | null;
   engines: ReadonlyArray<{ instanceId: string; snapshot?: { state: string; authenticated?: boolean } }>;
-  /** Work parked on a question for the person (a NEEDS INPUT line rather than a card). */
-  parked: ReadonlyArray<{ id: string; botId: string; threadId: string; question?: string; createdAt: number }>;
+  /** Work parked on a question for the person (a NEEDS INPUT line rather than a card); one its requester decides
+   * (`decide`) waits on no person. */
+  parked: ReadonlyArray<{ id: string; botId: string; threadId: string; question?: string; decide?: unknown; createdAt: number }>;
 }
 
 /** Place failures a person fixes by changing a setting or plan; the rest pass or retry by themselves. */
@@ -57,7 +58,7 @@ const OWNER_PLACES: ReadonlySet<PlaceState> = new Set([
 ]);
 /** A connected app refusing for want of a working sign-in, as Composio and the apps behind it word it. */
 const BROKEN_CONNECTION = /\b(?:401|unauthori[sz]ed|invalid[_ ]grant|(?:token|credentials?) (?:has |have )?(?:expired|been revoked)|expired (?:token|credentials?)|re-?authori[sz]e|re-?authenticate|reconnect|no (?:active )?connected account|connected ?account (?:not found|is (?:inactive|expired|disabled))|connection (?:is )?(?:inactive|expired|revoked|not found)|insufficient[_ ](?:scopes?|permissions?)|ACCESS_TOKEN_SCOPE_INSUFFICIENT|not connected)\b/i;
-const KIND_ORDER: Record<NeedsYouItem["kind"], number> = { "signed-out": 0, "out-of-credit": 1, "usage-limit": 2, connection: 3, place: 4, question: 5 };
+const KIND_ORDER: Record<NeedsYouItem["kind"], number> = { "signed-out": 0, "out-of-credit": 1, "usage-limit": 2, connection: 3, place: 4, question: 5, message: 6 };
 const DAY_MS = 24 * 60 * 60_000;
 const TITLE_CHARS = 160;
 /** A failed row and the summary its turn ends with are written this close together. */
@@ -117,8 +118,9 @@ function approvalText(card: QuestionCard & { tool?: string }): string {
   return plainTitle(`Approve: ${card.subtitle || card.tool || card.title || ""}`);
 }
 
+/** A question card the harness made carries the question as its subtitle, under a generic title. */
 function questionText(card: QuestionCard): string {
-  return plainTitle(card.questionRequest?.questions?.[0]?.question || card.title || card.subtitle || "");
+  return plainTitle(card.questionRequest?.questions?.[0]?.question || (card.requestType === "question" && card.subtitle) || card.title || card.subtitle || "");
 }
 
 export function todayReport(sources: TodaySources, viewer: TodayViewer, requestedSince: number, now = Date.now()): TodayReport {
@@ -324,7 +326,7 @@ function needsYou(sources: TodaySources, viewer: TodayViewer, owners: Map<string
   }
 
   for (const work of sources.parked) {
-    if (!work.question || items.has(`question:${work.threadId}`) || !seen(work.threadId) || (viewer.asks && !viewer.asks(work.botId, work.threadId))) continue;
+    if (!work.question || work.decide || items.has(`question:${work.threadId}`) || !seen(work.threadId) || (viewer.asks && !viewer.asks(work.botId, work.threadId))) continue;
     keep(`question:${work.threadId}`, { kind: "question", id: work.id, at: work.createdAt, botId: work.botId, threadId: work.threadId, text: plainTitle(work.question) });
   }
 

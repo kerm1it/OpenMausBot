@@ -98,14 +98,16 @@ describe.skipIf(process.platform === "win32")("a bot's old desktop after an app 
     const port = await freePortBlock([0, 1]);
     base = `http://127.0.0.1:${port}`;
     output = "";
-    const proc = spawn(process.execPath, ["--import", pathToFileURL(join(ROOT, "server/testing/group-local-vm-hooks.mjs")).href, join(ROOT, "server/index.ts")], {
+    // Started as the desktop app starts its own server, so this computer really is on offer and must still be withheld.
+    const proc = spawn(process.execPath, ["--import", pathToFileURL(join(ROOT, "server/testing/group-local-vm-hooks.mjs")).href,
+      "--import", pathToFileURL(join(ROOT, "server/testing/desktop-parent.mjs")).href, join(ROOT, "server/index.ts")], {
       cwd: ROOT, env: {
         PATH: dirname(process.execPath), ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
         HOME: home, USERPROFILE: home, OMB_DATA_DIR: data,
         APPDATA: join(home, "appdata"), LOCALAPPDATA: join(home, "localappdata"),
         TEMP: home, TMP: home, TMPDIR: home,
         OMB_PORT: String(port), OMB_WEBHOOK_PORT: String(port + 1), OMB_STATIC_DIR: join(home, "static"), OMB_TEST_VM_STATE: stateFile,
-        OMB_USER_DATA: join(home, "user-data"), OMB_EXTRA_PATH: fakeBin,
+        OMB_TEST_DESKTOP_CUA_CONNECTION: join(home, "user-data", "cua-connection.json"), OMB_EXTRA_PATH: fakeBin,
         FAKE_DOCKER_DIR: fakeBin, FAKE_DOCKER_LOG: join(fakeBin, "docker.log"), OMB_TEST_SEALED_PATH: "1",
       }, stdio: ["ignore", "pipe", "pipe"],
     });
@@ -116,7 +118,7 @@ describe.skipIf(process.platform === "win32")("a bot's old desktop after an app 
       if (proc.exitCode !== null) throw new Error(`server exited during boot:\n${output}`);
       try { return (await fetch(base + "/api/health")).ok; } catch { return false; }
     }, Boolean, "the server starting");
-    // Chief first makes the seeded bot its team's Chief, which answers a teammate's failed run with a Team incidents turn
+    // Chief first makes the seeded bot its team's Chief, which answers a teammate's failed run with a Problems to look at turn
     // of its own that quotes the failed request, on this computer: dumpFor would take it for the turn under test. Stepped
     // down, each dump is the test's own. Only the first boot finds it a Chief.
     const seeded = (await apiOk("GET", "/api/bots?messages=0")).bots.find((bot: any) => bot.chiefOfStaff);

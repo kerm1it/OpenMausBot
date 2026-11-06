@@ -14,7 +14,7 @@ afterEach(() => { vi.restoreAllMocks(); for (const root of roots.splice(0)) rmSy
 function setup(fetcher: typeof fetch) {
   const root = mkdtempSync(join(tmpdir(), "omb-extension-timeout-")); roots.push(root);
   const plugins = createPluginService({ library: new PluginLibrary(join(root, "plugins")), store: { removePluginReferences: () => [] }, inUse: () => false, getDefaults: () => undefined, saveDefaults: () => {} });
-  const host = createExtensionHost({ dataDir: root, plugins, fetcher, createBot: async () => ({ botId: "created" }) });
+  const host = createExtensionHost({ dataDir: root, plugins, fetcher, importBot: async () => ({ botId: "created" }) });
   return { root, plugins, host };
 }
 function stalled(signal: AbortSignal) {

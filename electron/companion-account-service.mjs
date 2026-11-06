@@ -67,13 +67,12 @@ const ownString = (document, field) =>
 
 /** Development must name an exact origin so an OTP or bearer never reaches an accidental host; an invalid override disables the feature. */
 export function resolveCompanionControlPlaneURL({
-  isPackaged,
   environment = process.env,
 } = {}) {
   if (Object.hasOwn(environment, "OMB_CONTROL_PLANE_URL")) {
     return normalizeControlPlaneURL(environment.OMB_CONTROL_PLANE_URL);
   }
-  return isPackaged ? DEFAULT_COMPANION_CONTROL_PLANE_URL : "";
+  return "";
 }
 
 export function companionAccountCleanupPending(credentials) {

@@ -20,8 +20,20 @@ describe("extension prepare and confirmation", () => {
   function setup() {
     const plugins = createPluginService({library: new PluginLibrary(join(root, "library")), store: {removePluginReferences: () => []}, inUse: () => false, getDefaults: () => undefined, saveDefaults: () => {}});
     const createBot = vi.fn(async () => ({botId: "created-bot", threadId: "created-thread"}));
-    return {plugins, createBot, host: createExtensionHost({dataDir: root, plugins, createBot})};
+    return {plugins, createBot, host: createExtensionHost({dataDir: root, plugins, importBot: createBot})};
   }
+  it("prepares and imports the official Grok export through the unified host", async () => {
+    const {host, createBot} = setup();
+    try {
+      const preview = await host.prepare(JSON.stringify({format: "grok-bot-export", version: 1, bots: [{
+        name: "Official export", instructions: "Keep these instructions", skills: [{name: "Summarize", instructions: "Read the input"}],
+      }]}));
+      expect(preview.name).toBe("Official export");
+      expect(preview.skills[0]?.name).toBe("summarize");
+      await host.import(preview.id, {}, auth);
+      expect(createBot).toHaveBeenCalledWith(expect.objectContaining({profile: expect.objectContaining({profile: expect.objectContaining({soul: "Keep these instructions"})})}), {}, [], auth);
+    } finally { host.close(); }
+  });
   it("imports the reviewed archive snapshot once, retaining complete skill files", async () => {
     const {host, createBot} = setup();
     const archive = Buffer.from(zipSync({"extension.json": strToU8(JSON.stringify(manifest("Template"))), "bot.json": strToU8(JSON.stringify({schemaVersion: 1, profile: {name: "Template", soul: "Template instructions"}})), "skills/proof/SKILL.md": strToU8(skill), "skills/proof/run.sh": [strToU8("#!/bin/sh\necho proof"), {os: 3, attrs: 0o100755 << 16}], "skills/proof/asset.bin": new Uint8Array([0, 255, 3]), "MEMORY.md": strToU8("Portable note")}));

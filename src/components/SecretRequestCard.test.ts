@@ -22,7 +22,7 @@ vi.mock("@/state/store", async (original) => ({
   api: fixture.api,
   useStore: () => ({ dispatch }),
 }));
-vi.mock("@/lib/analytics", () => ({ track: fixture.track }));
+
 
 import { SecretRequestCard } from "./SecretRequestCard";
 
@@ -73,6 +73,30 @@ describe("SecretRequestCard superseded requests", () => {
   });
 });
 
+describe("SecretRequestCard on a page reached through a desktop paired to another computer", () => {
+  const remote = (secret: Record<string, unknown>) => {
+    vi.stubGlobal("window", { ogb: { remoteClient: { active: true } } });
+    return view(secret);
+  };
+
+  it("offers the field for a secret the server keeps: a custom one, or a provider key", () => {
+    for (const secret of [
+      { target: "customSecret", label: "Mailbox password", delivery: "ref", placeholder: "", helpUrl: "" },
+      { target: "openaiApiKey", label: "OpenAI API key" },
+    ]) {
+      const html = remote(secret);
+      expect(html, secret.target).toContain('type="password"');
+      expect(html, secret.target).not.toContain("must be saved on the host computer");
+    }
+  });
+
+  it("sends a key the host computer keeps in its own encrypted store to that computer", () => {
+    const html = remote({ target: "boxToken", label: "Boat token" });
+    expect(html).toContain("must be saved on the host computer");
+    expect(html).not.toContain('type="password"');
+  });
+});
+
 describe("SecretRequestCard ask card", () => {
   it("waits as a compact ask card with a masked field", () => {
     const html = view({});
@@ -80,6 +104,12 @@ describe("SecretRequestCard ask card", () => {
     expect(html).toContain("text-accent-text");
     expect(html).toContain('type="password"');
     expect(html).toContain('autoComplete="new-password"');
+  });
+
+  it("stays in view while it waits, however far the chat scrolls, and lets go once it is settled", () => {
+    expect(view({})).toMatch(/data-ask-card="pending"[^>]*class="[^"]*\bsticky\b/);
+    expect(view({ provided: true, resumed: true })).not.toContain("sticky");
+    expect(view({ superseded: true })).not.toContain("sticky");
   });
 
   it("folds into one line that names the key once it is saved and the bot resumed", () => {
@@ -100,24 +130,48 @@ describe("SecretRequestCard ask card", () => {
   });
 });
 
+describe("SecretRequestCard mailbox", () => {
+  const email = { target: "customSecret", delivery: "email", label: "Connect your mailbox", placeholder: "Mailbox password", helpUrl: "", description: "Ledger never sees the password." };
+
+  it("asks for the address and the password on one card, with the address the bot knew", () => {
+    const html = view({ ...email, address: "me@shop.example" });
+    expect(html).toContain('type="email"');
+    expect(html).toContain('value="me@shop.example"');
+    expect(html).toContain('type="password"');
+    expect(html).toContain("Mailbox password");
+    expect(html).toContain("They never see it.");
+  });
+
+  it("asks for the server only once one could not be found, and other cards have no address field", () => {
+    expect(view(email)).not.toContain("Incoming mail server");
+    expect(view({})).not.toContain('type="email"');
+  });
+
+  it("says the bot goes on once connected, without the address field", () => {
+    const html = view({ ...email, provided: true, resumed: true, address: "me@shop.example" });
+    expect(html).toContain('data-ask-card="settled"');
+    expect(html).not.toContain("<input");
+  });
+});
+
 describe("SecretRequestCard key analytics", () => {
   const KEY = "boat_ZZtestSECRET0123456789abcdef";
   type Props = { children?: ReactNode; type?: string; onChange?: (event: { target: { value: string } }) => void; onSubmit?: (event: { preventDefault(): void }) => void };
   const nodes = (tree: ReactNode): Array<ReactElement<Props>> =>
     Children.toArray(tree).flatMap((child) => isValidElement<Props>(child) ? [child, ...nodes(child.props.children)] : []);
-  const card = (target: string) => {
+  const card = (target: string, extra: Record<string, unknown> = {}) => {
     fixture.counting = true;
     fixture.index = 0;
     try {
-      return nodes(SecretRequestCard({ botId: "bot-1", threadId: "thread-1", message: secretCard({ target, label: "Key" }) }));
+      return nodes(SecretRequestCard({ botId: "bot-1", threadId: "thread-1", message: secretCard({ target, label: "Key", ...extra }) }));
     } finally {
       fixture.counting = false;
     }
   };
   const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
-  async function submit(target: string, typed = KEY) {
-    card(target).find((node) => node.type === "input")!.props.onChange!({ target: { value: typed } });
-    card(target).find((node) => node.type === "form")!.props.onSubmit!({ preventDefault: () => {} });
+  async function submit(target: string, typed = KEY, extra: Record<string, unknown> = {}) {
+    card(target, extra).find((node) => node.type === "input")!.props.onChange!({ target: { value: typed } });
+    card(target, extra).find((node) => node.type === "form")!.props.onSubmit!({ preventDefault: () => {} });
     await flush();
   }
 
@@ -137,14 +191,14 @@ describe("SecretRequestCard key analytics", () => {
     await flush();
     expect(setCredential).toHaveBeenCalledExactlyOnceWith("boxToken", KEY);
     expect(fixture.api).toHaveBeenCalledTimes(2);
-    expect(fixture.track.mock.calls).toEqual([["api_key_saved", { provider: "boat", via: "chat_request", result: "ok" }]]);
+    expect(fixture.track).not.toHaveBeenCalled();
     for (const fragment of [KEY, KEY.slice(0, 6), KEY.slice(-6), String(KEY.length)]) expect(JSON.stringify(fixture.track.mock.calls)).not.toContain(fragment);
   });
 
   it("reports a Boat key boat.dev refused as rejected", async () => {
     vi.stubGlobal("window", { ogb: { setCredential: vi.fn().mockRejectedValue(new Error("Error invoking remote method 'credential:set': KeyRejected: That doesn't look like a Boat API key")) } });
     await submit("boxToken");
-    expect(fixture.track.mock.calls).toEqual([["api_key_saved", { provider: "boat", via: "chat_request", result: "rejected" }]]);
+    expect(fixture.track).not.toHaveBeenCalled();
   });
 
   // Even with the desktop bridge, the 1Password token goes to this server's Logins (which checks it with 1Password),
@@ -165,6 +219,50 @@ describe("SecretRequestCard key analytics", () => {
     fixture.api.mockResolvedValueOnce({ xai: { configured: true } }).mockResolvedValueOnce({ ok: true });
     await submit("xaiApiKey", "xai-ZZtestSECRET0123456789");
     expect(fixture.api.mock.calls[0]).toEqual(["/api/config", { method: "PUT", body: JSON.stringify({ xai: { key: "xai-ZZtestSECRET0123456789" } }) }]);
-    expect(fixture.track.mock.calls).toEqual([["api_key_saved", { provider: "xai", via: "chat_request", result: "unverified" }]]);
+    expect(fixture.track).not.toHaveBeenCalled();
+  });
+
+  // Settings keeps an AI provider key in the server's settings, not the desktop's store: the card does the same.
+  it("saves an Anthropic key where Settings does, never through the desktop store, keeping Claude sign-ins", async () => {
+    const setCredential = vi.fn();
+    vi.stubGlobal("window", { ogb: { setCredential } });
+    fixture.api.mockResolvedValueOnce({ anthropic: { configured: true } }).mockResolvedValueOnce({ ok: true });
+    await submit("anthropicApiKey", "sk-ant-ZZtestSECRET0123456789");
+    expect(setCredential).not.toHaveBeenCalled();
+    expect(fixture.api.mock.calls[0]).toEqual(["/api/config", { method: "PUT", body: JSON.stringify({ anthropic: { key: "sk-ant-ZZtestSECRET0123456789", everyClaudeBot: false } }) }]);
+    expect(fixture.track).not.toHaveBeenCalled();
+  });
+
+  it("saves the Composio key in the desktop store's slot, as Settings does", async () => {
+    const setCredential = vi.fn().mockResolvedValue({ composio: { configured: true } });
+    vi.stubGlobal("window", { ogb: { setCredential } });
+    fixture.api.mockResolvedValueOnce({ ok: true });
+    await submit("composioApiKey", "ak_ZZtestSECRET0123456789");
+    expect(setCredential).toHaveBeenCalledExactlyOnceWith("composioApiKey", "ak_ZZtestSECRET0123456789");
+  });
+
+  // A custom secret goes only to its own card's save, which resumes the bot: never Settings, the desktop store or an event.
+  it("keeps a custom secret behind its card, with no product event naming it", async () => {
+    const setCredential = vi.fn();
+    vi.stubGlobal("window", { ogb: { setCredential } });
+    fixture.api.mockResolvedValueOnce({ provided: true, resumed: true });
+    await submit("customSecret", "sk_live_ZZtestSECRET0123456789", { delivery: "ref", helpUrl: "" });
+    expect(setCredential).not.toHaveBeenCalled();
+    expect(fixture.api.mock.calls).toEqual([["/api/bots/bot-1/secret-cards/secret-card/save", {
+      method: "POST", body: JSON.stringify({ threadId: "thread-1", value: "sk_live_ZZtestSECRET0123456789" }),
+    }]]);
+    expect(fixture.track).not.toHaveBeenCalled();
+  });
+});
+
+describe("SecretRequestCard custom secrets", () => {
+  it("says what the bot may do with it, in the bot's words and plainly, with no key link", () => {
+    const file = view({ target: "customSecret", label: "Stripe secret key", reason: "To create test charges.", description: "To create test charges. Scout's commands can read it.", helpUrl: "", delivery: "file" });
+    expect(file).toContain("To create test charges.");
+    expect(file).not.toContain("Scout&#x27;s commands can read it.");
+    expect(file).toContain("Saved to a private file your bot&#x27;s commands can read for 24 hours, then deleted.");
+    expect(file).not.toContain("Where to get this key");
+    const ref = view({ target: "customSecret", label: "Notion key", reason: "For Notion.", helpUrl: "", delivery: "ref" });
+    expect(ref).toContain("MausBot keeps it for one use by its own tools. Your bot never sees it");
   });
 });

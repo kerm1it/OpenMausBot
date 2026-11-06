@@ -41,20 +41,20 @@ function messageText(message: Message): string {
   if (message.kind === "secret") parts.push("[Secret request — not restored]");
   if (message.kind === "signin") parts.push("[Sign-in request — not restored]");
   if (message.routineRun) parts.push(`[Routine: ${message.routineRun.routineName} — ${message.routineRun.status}]`, message.routineRun.summary ?? "", message.routineRun.error ?? "");
-  if (message.goalRun) parts.push(`[Room goal: ${message.goalRun.status}]`, message.goalRun.goal, message.goalRun.detail ?? "");
+  if (message.goalRun) parts.push(`[Goal: ${message.goalRun.status}]`, message.goalRun.goal, message.goalRun.detail ?? "");
   if (message.kind === "screen" || message.attachments?.length) parts.push("[Image or attachment — file not included in this backup]");
   return parts.filter(Boolean).join("\n");
 }
 
 /** `shown`: on a Team Cloud someone else's private chat is never in the exporting person's backup. */
 export function createTeamBackup(store: Store, routines: Routine[], name: string, shown: (threadId: string) => boolean = () => true): TeamBackup {
-  const botIds = new Set(store.bots.map((bot) => bot.id));
   const warnings: string[] = [];
   const history = (record: BotRecord | GroupRecord): BackupTask[] => {
     const tasks = record.tasks?.length ? record.tasks : [{ threadId: record.threadId, title: "Conversation", createdAt: record.createdAt }];
     return tasks.filter((task) => shown(task.threadId)).map((task) => ({
       key: task.threadId, title: task.title, createdAt: task.createdAt,
       titleFromFirstMessage: "titleFromFirstMessage" in task && task.titleFromFirstMessage || undefined,
+      outside: "outside" in task && task.outside || undefined,
       openedBy: "openedBy" in task && task.openedBy
         ? { botId: task.openedBy.botId, name: task.openedBy.name, at: task.openedBy.at,
             ...(task.openedBy.kind ? { kind: task.openedBy.kind } : {}) }
@@ -74,9 +74,13 @@ export function createTeamBackup(store: Store, routines: Routine[], name: string
       })),
     }));
   };
+  // A bot none of whose conversations the exporter may read (another member's own MausBot) is not theirs to export.
+  const histories = new Map(store.bots.map((bot) => [bot.id, history(bot)]));
+  const exported = store.bots.filter((bot) => histories.get(bot.id)!.length > 0);
+  const botIds = new Set(exported.map((bot) => bot.id));
   const groups = store.groups.map((group) => {
     const memberIds = group.memberIds.filter((id) => botIds.has(id));
-    if (memberIds.length !== group.memberIds.length) warnings.push(`Room “${group.name}” contains deleted bots. Its conversation is included with the remaining members.`);
+    if (group.memberIds.some((id) => !store.bot(id))) warnings.push(`Room “${group.name}” contains deleted bots. Its conversation is included with the remaining members.`);
     return {
       key: group.id, name: group.name, section: group.section, dm: Boolean(group.dm) && memberIds.length === 2,
       bulletin: group.bulletin, memberIds,
@@ -94,17 +98,18 @@ export function createTeamBackup(store: Store, routines: Routine[], name: string
   });
   const validRoutines = routines.filter((routine) => {
     const room = groups.find((group) => group.key === routine.groupId);
-    const valid = botIds.has(routine.botId) && (routine.target !== "room-goal" || (room && !room.dm && room.memberIds.includes(routine.botId)));
+    const valid = botIds.has(routine.botId) && (routine.target !== "room-goal" || !routine.groupId || (room && !room.dm && room.memberIds.includes(routine.botId)));
     if (!valid) warnings.push(`Routine “${routine.name}” is not included because its bot, room or coordinator was deleted.`);
     return valid;
   });
   const document = parseTeamBackup({
     format: "openmaus.backup", version: 1, name, exportedAt: Date.now(),
     warnings,
-    bots: store.bots.map((bot) => ({
+    bots: exported.map((bot) => ({
       key: bot.id, name: bot.name, title: bot.title, description: bot.description, soul: bot.soul,
       section: bot.section, color: bot.color,
       mascotExpression: bot.mascotExpression ?? undefined, mascotBody: bot.mascotBody ?? undefined,
+      mascotFaceColor: bot.mascotFaceColor ?? undefined,
       chiefOfStaff: Boolean(bot.chiefOfStaff), hidden: Boolean(bot.hidden), playbooks: bot.playbooks ?? [],
       // Grants travel so the team's shape survives, but the import still lands every bot grant-less.
       ...(bot.connectorTools ? { connectorTools: structuredClone(bot.connectorTools) } : {}),
@@ -113,7 +118,7 @@ export function createTeamBackup(store: Store, routines: Routine[], name: string
       ...(helperModelAllowed(bot) ? {} : { helperModel: false }),
       memory: memoryFor(bot.id),
       // Someone else's private chat selected: the backup opens on the first conversation it carries instead.
-      ...((tasks) => ({ activeTask: tasks.some((task) => task.key === bot.threadId) ? bot.threadId : tasks[0]?.key ?? bot.threadId, tasks }))(history(bot)),
+      ...((tasks) => ({ activeTask: tasks.some((task) => task.key === bot.threadId) ? bot.threadId : tasks[0]?.key ?? bot.threadId, tasks }))(histories.get(bot.id)!),
     })),
     groups,
     routines: validRoutines.map((routine) => ({
@@ -173,6 +178,7 @@ export function importTeamBackup(store: Store, routines: RoutineManager, input: 
         name: takeImportName(source.name, takenNames), title: source.title, description: source.description, soul: source.soul,
         color: source.color, mascotExpression: source.mascotExpression,
         mascotBody: botBodyId(source.mascotBody),
+        mascotFaceColor: source.mascotFaceColor,
         modelSelection: selection, section: sectionFor(source.section),
         // who may see the imported team is the importing admin's choice
         ...(options.visibility ? { visibility: options.visibility } : {}),
@@ -190,7 +196,7 @@ export function importTeamBackup(store: Store, routines: RoutineManager, input: 
         const record: TaskRecord = {
           threadId: i === 0 ? bot.threadId : newId(), title: task.title, createdAt: task.createdAt, resumeCursors: {},
           activity: "idle" as const, busy: false, unread: false,
-          ...(task.titleFromFirstMessage ? { titleFromFirstMessage: true } : {}),
+          ...(task.titleFromFirstMessage ? { titleFromFirstMessage: true } : {}), ...(task.outside ? { outside: true } : {}),
         };
         const opener = task.openedBy && botIds.get(task.openedBy.botId);
         if (task.openedBy && opener) record.openedBy = { botId: opener, name: task.openedBy.name, at: task.openedBy.at, ...(task.openedBy.kind ? { kind: task.openedBy.kind } : {}) };
@@ -241,7 +247,7 @@ export function importTeamBackup(store: Store, routines: RoutineManager, input: 
     }
     for (const source of backup.routines) {
       createdRoutines.push(routines.create({ ...source, botId: botIds.get(source.botId)!,
-        groupId: source.target === "room-goal" ? groupIds.get(source.groupId!) : undefined, enabled: false }));
+        groupId: source.target === "room-goal" && source.groupId ? groupIds.get(source.groupId) : undefined, enabled: false }));
     }
     return { name: backup.name, bots, groups, routines: createdRoutines };
   } catch (error) {

@@ -5,6 +5,7 @@
 import { isOutboundTool } from "../../shared/outbound.ts";
 import { READ_ONLY_ANNOTATIONS } from "../agent-tool-policy.ts";
 import { bm25Ranker } from "../mcp-directory.ts";
+import { AGENTS_TOOL_ALIASES } from "../../shared/agents-tool-names.ts";
 import type { Json } from "./agents-client.ts";
 
 /** The proxy's switch: "1" lists through the bridge, anything else lists the whole catalog. */
@@ -44,6 +45,7 @@ export const BRIDGE_HOT_TOOL_NAMES: ReadonlySet<string> = new Set([
   "request_credential",
   "request_sign_in",
   "fill_login",
+  "message_person",
   "send_voice_note",
   "memory_update",
 ]);
@@ -64,7 +66,7 @@ function record(value: unknown): value is Json {
 
 /** The agents server's prefix on its tools, per engine: Claude `mcp__agents__`, ACP `agents__`, the chat
  * runtime and Pi `agents_`, Codex none. */
-const SERVER_PREFIXES = ["", "mcp__agents__", "agents__", "agents_"] as const;
+export const SERVER_PREFIXES = ["", "mcp__agents__", "agents__", "agents_"] as const;
 
 /** Security: a tool the host classifies as outbound under any engine's spelling is always listed and never
  * run through use_tool. Derived from the classifier, so a new outbound tool cannot be hidden by omission. */
@@ -182,8 +184,9 @@ export function createToolBridge(tools: readonly BridgeTool[]): ToolBridge {
   async function find(args: unknown): Promise<BridgeAnswer> {
     const query = record(args) && typeof args.query === "string" ? args.query.trim() : "";
     if (!query || query.length > QUERY_CHARS) return { text: FIND_USAGE, isError: true };
-    if (listedNames.has(query)) return { text: `${query} is in your tool list: call it directly.` };
-    const ranked = await bm25Ranker(query, hidden, FIND_MATCHES_MAX);
+    const named = Object.hasOwn(AGENTS_TOOL_ALIASES, query) ? AGENTS_TOOL_ALIASES[query]!.tools[0]! : query;
+    if (listedNames.has(named)) return { text: `${named} is in your tool list: call it directly.` };
+    const ranked = await bm25Ranker(named, hidden, FIND_MATCHES_MAX);
     const matches: Array<Pick<BridgeTool, "name" | "description" | "inputSchema">> = [];
     let chars = 0;
     for (const candidate of ranked.slice(0, FIND_MATCHES_MAX)) {

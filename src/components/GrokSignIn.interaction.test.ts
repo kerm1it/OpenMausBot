@@ -20,7 +20,7 @@ vi.mock("@/state/store", async (original) => ({
   ...await original<typeof import("@/state/store")>(), api: fixture.api,
   useStore: () => ({ refreshInstances: fixture.refreshInstances, refreshModels: fixture.refreshModels }),
 }));
-vi.mock("@/lib/analytics", () => ({ track: fixture.track }));
+
 const { DeviceSignIn } = await import("./DeviceSignIn");
 
 type Node = ReactElement<{ children?: ReactNode; onClick?: () => Promise<void>; "data-device-sign-in"?: string }>;
@@ -67,7 +67,7 @@ it("starts only on request on Grok's own route, and never opens a page on the pe
   expect(fixture.api).toHaveBeenCalledWith("/api/instances/grok/auth/status?flowId=grok-flow", expect.objectContaining({ signal: expect.any(AbortSignal) }));
   expect(fixture.refreshInstances).toHaveBeenCalledOnce();
   expect(fixture.refreshModels).toHaveBeenCalledWith("grok");
-  expect(fixture.track.mock.calls).toEqual([["engine_signed_in", { engine: "grok", method: "device_code" }]]);
+  expect(fixture.track).not.toHaveBeenCalled();
   cleanup?.();
 });
 

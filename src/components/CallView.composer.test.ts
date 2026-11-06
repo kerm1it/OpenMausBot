@@ -43,7 +43,7 @@ vi.mock("@/lib/local-voice", async (importOriginal) => ({
   ...await importOriginal<typeof import("@/lib/local-voice")>(),
   localSystemVoiceActive: () => false,
 }));
-vi.mock("@/lib/analytics", () => ({ track: fixture.track }));
+
 // Stands in for the open state a click would set; SSR cannot click.
 vi.mock("./MenuMotion", async (importOriginal) => ({
   ...await importOriginal<typeof import("./MenuMotion")>(),
@@ -110,7 +110,7 @@ describe("composer call button", () => {
 
   it("starts the call with the same telemetry as the header button did", () => {
     render().button.props.onClick!();
-    expect(fixture.track).toHaveBeenCalledWith("call_started", { driver: "codex", mode: "turns" });
+    expect(fixture.track).not.toHaveBeenCalled();
     expect(fixture.startCall).toHaveBeenCalledWith("pepper");
     expect(fixture.endCall).not.toHaveBeenCalled();
   });
@@ -125,7 +125,7 @@ describe("composer call button", () => {
     }
     renderToStaticMarkup(createElement(Capture));
     findButton(tree)!.props.onClick!();
-    expect(fixture.track.mock.calls).toEqual([["call_started", { driver: "claude", mode: "turns" }]]);
+    expect(fixture.track).not.toHaveBeenCalled();
   });
 
   it("shows a hang-up state during the call and hangs up", () => {
@@ -163,7 +163,7 @@ describe("composer call button", () => {
     button.props.onClick!();
     expect(getUserMedia).toHaveBeenCalledTimes(1);
     expect(liveMedia()).toMatchObject({ phase: "starting", botId: "pepper" });
-    expect(fixture.track).toHaveBeenCalledWith("call_started", { driver: "codex", mode: "live" });
+    expect(fixture.track).not.toHaveBeenCalled();
   });
 
   it("is a Live call on a server's page in the Windows app and the Mac app alike", () => {
@@ -179,20 +179,21 @@ describe("composer call button", () => {
     }
   });
 
-  it("is round and filled with the bot's colour in the Simple composer, the call mode left to its + menu", () => {
+  it("is a 28px circle filled with the bot's tone, its glyph in the tone's ink, in the Simple composer, the call mode left to the bot panel", () => {
     let tree: ReactNode = null;
     function Capture() {
-      const element = CallButton({ bot, placement: "composer", fill: "#8057C8" }) as ReactElement<Parameters<typeof CallTargetButton>[0]>;
+      const element = CallButton({ bot, placement: "composer", fill: "#8057c8", ink: "#ffffff" }) as ReactElement<Parameters<typeof CallTargetButton>[0]>;
       tree = CallTargetButton(element.props);
       return tree;
     }
     const html = renderToStaticMarkup(createElement(Capture));
     const button = findButton(tree)!;
     const classes = String(button.props.className).split(" ");
-    expect(classes).toEqual(expect.arrayContaining(["size-8", "rounded-full", "text-white"]));
+    expect(classes).toEqual(expect.arrayContaining(["size-7", "rounded-full"]));
+    expect(classes).not.toContain("text-white");
     expect(classes).not.toContain("rounded-l-3xl");
     expect(classes).not.toContain("bg-control");
-    expect(button.props.style).toEqual({ backgroundColor: "#8057C8" });
+    expect(button.props.style).toEqual({ backgroundColor: "#8057c8", color: "#ffffff" });
     expect(html).toContain("lucide-audio-lines");
     expect(html).not.toContain('aria-label="Call mode"');
     expect(renderToStaticMarkup(createElement(() => CallButton({ bot, placement: "composer" })))).toContain('aria-label="Call mode"');

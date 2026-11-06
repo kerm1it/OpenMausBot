@@ -40,12 +40,15 @@ vi.mock("@/state/store", () => ({
     dispatch: fixture.dispatch,
   }),
 }));
-vi.mock("./McpServersPanel", () => ({
-  McpServersPanel: ({ embedded, whopCard }: { embedded?: boolean; whopCard?: boolean }) => whopCard
-    ? createElement("div", { "data-whop-card": true }, "Connect Whop")
-    : createElement("div", { "data-embedded": String(Boolean(embedded)) }, "MCP inventory"),
-}));
-vi.mock("@/lib/analytics", () => ({ track: fixture.track }));
+vi.mock("./McpServersPanel", async () => {
+  const { HOSTED_MCP_APPS } = await import("@/lib/hosted-mcp-apps");
+  return {
+    McpServersPanel: ({ embedded, hostedCards }: { embedded?: boolean; hostedCards?: { shown(id: string): boolean } }) => hostedCards
+      ? createElement("div", { "data-hosted-cards": true }, HOSTED_MCP_APPS.filter((app) => hostedCards.shown(app.id)).map((app) => createElement("div", { key: app.id, "data-hosted-app": app.id }, `Connect ${app.label}`)))
+      : createElement("div", { "data-embedded": String(Boolean(embedded)) }, "MCP inventory"),
+  };
+});
+
 vi.mock("./Avatar", () => ({ BotAvatar: ({ bot }: { bot: Bot }) => createElement("span", { "data-avatar": bot.id }) }));
 // The native HighLevel card has its own DOM suite; here it is a marker so tile counts stay the catalog's.
 vi.mock("./HighLevelCard", () => ({
@@ -55,6 +58,13 @@ vi.mock("./XCard", () => ({
   X_CARD_SEARCH: "x twitter treg tweets posts",
   XCard: () => createElement("div", { "data-x-card": true }, "X (Twitter)"),
 }));
+vi.mock("./EmailCard", () => ({
+  EmailCard: () => createElement("div", { "data-email-card": true }, "Email"),
+}));
+vi.mock("./PostizCard", () => ({
+  PostizCard: () => createElement("div", { "data-postiz-card": true }, "Postiz"),
+}));
+import { HOSTED_MCP_APPS } from "@/lib/hosted-mcp-apps";
 import { APPS_PREVIEW_COUNT, PluginsPanel, USED_BY_AVATAR_SIZE, botsUsingService } from "./PluginsPanel";
 import { FACE_BOX } from "./cursor-face-data";
 import { MASCOT_BODIES } from "../../shared/mascot-bodies";
@@ -65,8 +75,12 @@ const STATUS = 6;
 const PHASE = 13;
 const HIGHLEVEL_CONNECTED = 21;
 const X_CONNECTED = 22;
+const CATEGORY = 20;
+const POSTIZ_CONNECTED = 23;
+const EMAIL_CONNECTED = 24;
 const MODE = 4;
 const SEARCH = 15;
+const HOSTED_CONNECTED = 18;
 const TAB = 16;
 
 type Node = ReactElement<{ children?: ReactNode; "aria-pressed"?: boolean; "data-apps-filter"?: string; onClick?: () => void; [key: string]: unknown }>;
@@ -111,19 +125,57 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Apps pop-up", () => {
-  it("connects Whop inside the apps grid without a Composio key or MCP detour", () => {
+  it("connects each hosted app inside the apps grid without a Composio key or MCP detour", () => {
     fixture.overrides.set(CONFIGURED, false);
     const { html, nodes: tree } = render();
-    expect(html).toContain("Connect Whop");
-    expect(html).not.toContain("Set up Whop");
     const grid = tree.find((node) => node.props["data-apps-grid"] !== undefined)!;
-    expect(nodes(grid).some((node) => node.props.whopCard === true)).toBe(true);
+    expect(nodes(grid).some((node) => node.props.hostedCards !== undefined)).toBe(true);
+    for (const app of HOSTED_MCP_APPS) {
+      expect(html).toContain(`Connect ${app.label}`);
+      expect(html).not.toContain(`Set up ${app.label}`);
+    }
     expect(fixture.dispatch).not.toHaveBeenCalled();
   });
-  it("counts Whop among connected apps", () => {
-    fixture.overrides.set(18, true);
-    const { html } = render();
-    expect(html).toContain("2 connected");
+  it("counts every connected hosted app among connected apps", () => {
+    const everyApp = (connected: boolean) => Object.fromEntries(HOSTED_MCP_APPS.map((app) => [app.id, connected]));
+    fixture.overrides.set(HOSTED_CONNECTED, everyApp(true));
+    expect(render().html).toContain(`${1 + HOSTED_MCP_APPS.length} connected`);
+    fixture.overrides.set(HOSTED_CONNECTED, { ...everyApp(false), [HOSTED_MCP_APPS[0].id]: true });
+    expect(render().html).toContain("2 connected");
+  });
+  it.each(HOSTED_MCP_APPS)("finds $label by its own name and shows no other hosted card", (app) => {
+    fixture.overrides.set(SEARCH, app.label.toLowerCase());
+    const html = render().html;
+    expect(html).toContain(`data-hosted-app="${app.id}"`);
+    expect(html.match(/data-hosted-app="/g)).toHaveLength(1);
+  });
+  it("shows a hosted card under Connected only while it is not known to be disconnected", () => {
+    fixture.overrides.set(TAB, "connected");
+    expect(render().html).toContain(`data-hosted-app="${HOSTED_MCP_APPS[0].id}"`);
+    fixture.overrides.set(HOSTED_CONNECTED, Object.fromEntries(HOSTED_MCP_APPS.map((app) => [app.id, app === HOSTED_MCP_APPS[0]])));
+    const html = render().html;
+    expect(html).toContain(`data-hosted-app="${HOSTED_MCP_APPS[0].id}"`);
+    for (const other of HOSTED_MCP_APPS.slice(1)) expect(html).not.toContain(`data-hosted-app="${other.id}"`);
+  });
+  it.each(["agentcard", "opencommerce"])("finds Agentcard by %s and shows no other hosted card", (word) => {
+    fixture.overrides.set(SEARCH, word);
+    const html = render().html;
+    expect(html).toContain('data-hosted-app="agentcard"');
+    expect(html.match(/data-hosted-app="/g)).toHaveLength(1);
+  });
+  it("counts Whop and Agentcard both under Connected", () => {
+    fixture.overrides.set(HOSTED_CONNECTED, { whop: true, agentcard: true });
+    expect(render().html).toContain("3 connected");
+    fixture.overrides.set(TAB, "connected");
+    const html = render().html;
+    expect(html).toContain('data-hosted-app="whop"');
+    expect(html).toContain('data-hosted-app="agentcard"');
+  });
+  it("names the connected hosted apps in the setup notice", () => {
+    fixture.overrides.set(CONFIGURED, false);
+    fixture.overrides.set(HOSTED_CONNECTED, Object.fromEntries(HOSTED_MCP_APPS.map((app) => [app.id, true])));
+    const html = render().html;
+    expect(html).toContain(`Connected: ${new Intl.ListFormat("en", { style: "long", type: "conjunction" }).format(HOSTED_MCP_APPS.map((app) => app.label))}.`);
   });
   it("shows the native HighLevel card in the grid and counts it once connected", () => {
     const { html, nodes: tree } = render();
@@ -147,6 +199,26 @@ describe("Apps pop-up", () => {
     fixture.overrides.set(15, "zendesk");
     expect(wrapper(render().nodes).props.className).toBe("hidden");
   });
+  it("shows the Postiz card in the grid and under Social, with a Social pill, and counts it once connected", () => {
+    const wrapper = (tree: Node[]) => tree.find((node) => node.props["data-native-card"] === "postiz")!;
+    const { html, nodes: tree } = render();
+    expect(wrapper(tree).props.className).toBe("contents");
+    expect(tree.filter((node) => node.props["data-apps-category"]).map((node) => node.props["data-apps-category"])).toContain("Social");
+    expect(html).toContain("1 connected");
+    fixture.overrides.set(POSTIZ_CONNECTED, true);
+    expect(render().html).toContain("2 connected");
+    fixture.overrides.set(CATEGORY, "Social");
+    const social = render();
+    expect(wrapper(social.nodes).props.className).toBe("contents");
+    expect([...social.html.matchAll(/<h3 id="[^"]*"[^>]*>([^<]*)/g)].map((match) => match[1])).toEqual(["Social"]);
+    fixture.overrides.set(CATEGORY, "Productivity");
+    expect(wrapper(render().nodes).props.className).toBe("hidden");
+    fixture.overrides.set(CATEGORY, null);
+    fixture.overrides.set(SEARCH, "instagram");
+    expect(wrapper(render().nodes).props.className).toBe("contents");
+    fixture.overrides.set(SEARCH, "gmail");
+    expect(wrapper(render().nodes).props.className).toBe("hidden");
+  });
   it("shows the X card in the grid for every install and counts it once bots have X", () => {
     const wrapper = (tree: Node[]) => tree.find((node) => node.props["data-native-card"] === "x")!;
     const { html, nodes: tree } = render();
@@ -163,6 +235,24 @@ describe("Apps pop-up", () => {
     fixture.overrides.set(SEARCH, "twitter");
     expect(wrapper(render().nodes).props.className).toBe("contents");
     fixture.overrides.set(SEARCH, "gmail");
+    expect(wrapper(render().nodes).props.className).toBe("hidden");
+  });
+  it("shows the email card in the grid for every install and counts it once a mailbox is connected", () => {
+    const wrapper = (tree: Node[]) => tree.find((node) => node.props["data-native-card"] === "email")!;
+    const { html, nodes: tree } = render();
+    expect(nodes(wrapper(tree)).some((node) => node.props.onConnection !== undefined && node.props.refreshKey !== undefined)).toBe(true);
+    expect(wrapper(tree).props.className).toBe("contents");
+    expect(html).toContain("1 connected");
+    fixture.overrides.set(EMAIL_CONNECTED, true);
+    expect(render().html).toContain("2 connected");
+    fixture.overrides.set(TAB, "connected");
+    expect(wrapper(render().nodes).props.className).toBe("contents");
+    fixture.overrides.set(EMAIL_CONNECTED, false);
+    expect(wrapper(render().nodes).props.className).toBe("hidden");
+    fixture.overrides.set(TAB, "marketplace");
+    fixture.overrides.set(SEARCH, "imap");
+    expect(wrapper(render().nodes).props.className).toBe("contents");
+    fixture.overrides.set(SEARCH, "twitter");
     expect(wrapper(render().nodes).props.className).toBe("hidden");
   });
   it("leaves out the managed install's dead Twitter tile, which the X card replaces, unless it is already connected", () => {
@@ -298,12 +388,12 @@ describe("Apps pop-up", () => {
       };
       await connectApp("gmail");
       await vi.advanceTimersByTimeAsync(20_000);
-      expect(fixture.track.mock.calls).toEqual([["connector_connect", { app: "gmail", result: "connected" }]]);
+      expect(fixture.track).not.toHaveBeenCalled();
 
       fixture.track.mockReset();
       await connectApp("acme-internal-crm");
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(fixture.track.mock.calls).toEqual([["connector_connect", { app: "other", result: "connected" }]]);
+      expect(fixture.track).not.toHaveBeenCalled();
 
       fixture.track.mockReset();
       fixture.effects = [];
@@ -337,7 +427,7 @@ describe("Apps pop-up", () => {
       expect(fixture.track).not.toHaveBeenCalled();
       vi.mocked(api).mockResolvedValue({ services: { slack: { connected: true, pending: false, status: "ACTIVE", accounts: [working, { id: "ca_2", status: "ACTIVE" }] } } });
       await vi.advanceTimersByTimeAsync(5_000);
-      expect(fixture.track.mock.calls).toEqual([["connector_connect", { app: "slack", result: "connected" }]]);
+      expect(fixture.track).not.toHaveBeenCalled();
     } finally {
       vi.mocked(api).mockReset();
       vi.useRealTimers();
@@ -487,9 +577,12 @@ describe("Apps pop-up", () => {
     ]);
     const { html, nodes: tree } = render();
     const headings = [...html.matchAll(/<h3 id="[^"]*"[^>]*>([^<]*)/g)].map((match) => match[1]);
-    expect(headings).toEqual(["Connected", "Productivity", "Communication", "Analytics", "All apps"]);
-    expect(tree.filter((node) => node.props["data-apps-category"]).map((node) => node.props["data-apps-category"])).toEqual(["Productivity", "Communication", "Analytics", "Design", "Files"]);
+    // Postiz's own card lives in Social, so Social counts it beside the catalog's one social app.
+    expect(headings).toEqual(["Connected", "Productivity", "Communication", "Social", "All apps"]);
+    expect(tree.filter((node) => node.props["data-apps-category"]).map((node) => node.props["data-apps-category"])).toEqual(["Productivity", "Communication", "Social", "Analytics", "Design"]);
     expect(html).toContain('aria-label="More categories"');
+    // The dialog clips overflow, so the menu must portal out of it rather than open in place.
+    expect(tree.find((node) => node.props.ariaLabel === "More categories")!.props.placement).toBeUndefined();
     tree.find((node) => node.props["data-apps-category"] === "Design")!.props.onClick!();
     const design = render();
     expect(design.html.match(/data-app-tile="(?!whop)[^"]*"/g)).toEqual(['data-app-tile="figma"']);

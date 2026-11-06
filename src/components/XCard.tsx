@@ -4,9 +4,9 @@ import { Check, ExternalLink, Loader2 } from "lucide-react";
 import { api, useStore, type ConfigStatus } from "@/state/store";
 import { activeLocale, t } from "@/lib/i18n";
 import { xResearchAction } from "@/lib/cloud-plan";
-import { keyRemoved, keySaved, keySaveFailure, keyTestResult } from "@/lib/product-events";
+import { keyTestResult } from "@/lib/product-events";
 import { isXConnectorStatus, type XConnectorStatus, type XIncludedUsage } from "../../shared/x-connector";
-import { looksLikeKey, saveCredential, tregVerdict } from "./ApiKeys";
+import { looksLikeKey, saveCredential, tregVerdict } from "./keys/key-save";
 import { useCloudPlan } from "./ProIntroduction";
 
 const TREG_URL = "https://treg.to";
@@ -114,10 +114,9 @@ export function XCard({ refreshKey = 0, onConnection }: {
       if (!mounted.current) return;
       setKey("");
       setAddingOwn(false);
-      keySaved("treg", "apps", await test());
+      await test();
     } catch (cause) {
       if (mounted.current) setError(cause instanceof Error ? cause.message : String(cause));
-      keySaved("treg", "apps", keySaveFailure(cause));
     } finally {
       if (mounted.current) setBusy((current) => (current === "save" ? null : current));
     }
@@ -130,7 +129,6 @@ export function XCard({ refreshKey = 0, onConnection }: {
     setVerdict(null);
     try {
       await applied(await saveCredential("treg", "", false));
-      keyRemoved("treg", "apps");
     } catch (cause) {
       if (mounted.current) setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -161,7 +159,7 @@ export function XCard({ refreshKey = 0, onConnection }: {
             <span className="truncate text-[14px] font-semibold leading-5 text-ink">{t("apps.x.title")}</span>
             {using !== null && <Check size={13} strokeWidth={2.5} className="shrink-0 text-success" aria-label={t("apps.connected")} />}
           </div>
-          <p className="truncate text-[12.5px] leading-[18px] text-ink-secondary" title={description}>{description}</p>
+          <p className="truncate text-[13px] leading-[18px] text-ink-secondary" title={description}>{description}</p>
         </div>
         {status === null ? (
           loadFailed

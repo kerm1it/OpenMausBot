@@ -28,7 +28,7 @@ vi.mock("@/state/store", async (importOriginal) => {
 vi.mock("./DesktopCapabilities", () => ({
   useDesktopCapabilities: () => ({ capabilities: { dictation: { available: true, engine: "apple-speech", onDevice: true } }, ready: true }),
 }));
-vi.mock("@/lib/analytics", () => ({ track: vi.fn() }));
+
 
 const { CallTargetButton } = await import("./CallView");
 const { requestCallStart } = await import("@/lib/call-start-request");

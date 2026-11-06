@@ -19,7 +19,7 @@ vi.mock("@/state/store", async (original) => ({
   ...await original<typeof import("@/state/store")>(), api: fixture.api,
   useStore: () => ({ refreshInstances: fixture.refreshInstances, refreshModels: fixture.refreshModels }),
 }));
-vi.mock("@/lib/analytics", () => ({ track: fixture.track }));
+
 const { ApiError } = await import("@/state/store");
 const { ClaudeSignIn } = await import("./ClaudeSignIn");
 
@@ -64,7 +64,7 @@ it("treats a code Claude Code accepts as the sign-in: no status request after it
   expect(fixture.refreshInstances).toHaveBeenCalled();
   expect(fixture.refreshModels).toHaveBeenCalledWith("claude");
   expect(onDone).toHaveBeenCalledWith(true);
-  expect(fixture.track.mock.calls).toEqual([["engine_signed_in", { engine: "claude", method: "code" }]]);
+  expect(fixture.track).not.toHaveBeenCalled();
 });
 
 it("ends the flow with Claude Code's own words when it refuses the code, and offers to try again", async () => {

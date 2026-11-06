@@ -11,7 +11,9 @@ import {
 import { MAUS_COLORS, type MausColor, type MausMotion, type MausState } from "@/lib/mascot";
 import { HALLOWEEN_BODIES, type HalloweenBody, type HalloweenBodyId } from "../../shared/halloween-bodies";
 import type { CursorAvatarHandle } from "./CursorAvatar";
-import { usePrefersReducedMotion } from "./mascot-clock";
+import { mascotClock, usePrefersReducedMotion } from "./mascot-clock";
+import { frameFloorMs, nextFrameAt } from "./mascot-motion";
+import { mascotFaceInk, type MascotFaceColor } from "../../shared/bot-avatar";
 
 /** Where the face looks and how it feels. */
 export type CarvedPose = {
@@ -143,6 +145,7 @@ export function carvedFills(body: HalloweenBody, color: MausColor): { body: stri
 export type CarvedAvatarProps = {
   body: HalloweenBodyId;
   color: MausColor;
+  faceColor?: MascotFaceColor | null;
   size?: number;
   state?: MausState;
   motion?: MausMotion;
@@ -154,10 +157,11 @@ export type CarvedAvatarProps = {
 };
 
 function CarvedAvatarComponent(
-  { body: bodyId, color, size = 44, state = "idle", motion = "none", motionKey = 0, gaze, trackPointer = true, animated = true, label }: CarvedAvatarProps,
+  { body: bodyId, color, faceColor, size = 44, state = "idle", motion = "none", motionKey = 0, gaze, trackPointer = true, animated = true, label }: CarvedAvatarProps,
   ref: React.Ref<CursorAvatarHandle>,
 ) {
   const body = HALLOWEEN_BODIES[bodyId];
+  const faceInk = mascotFaceInk(faceColor);
   const uid = useId().replace(/:/g, "");
   const reduced = usePrefersReducedMotion();
   const live = animated && !reduced;
@@ -211,7 +215,6 @@ function CarvedAvatarComponent(
 
   useEffect(() => {
     if (!live) return;
-    let frame = 0;
     let last = performance.now();
     let glanceAt = last + 900 + Math.random() * 2600;
     let blinkAt = last + 1500 + Math.random() * 3500;
@@ -248,11 +251,11 @@ function CarvedAvatarComponent(
       const blink = since >= 1 ? 0 : since < 0.45 ? since / 0.45 : 1 - (since - 0.45) / 0.55;
       p.shut += (Math.max(want.shut, blink) - p.shut) * (blink > 0 ? 1 : k(10));
       paint(p);
-      frame = requestAnimationFrame(step);
+      return nextFrameAt(now, frameFloorMs(size));
     };
-    frame = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(frame);
-  }, [body, live]);
+    const ticket = mascotClock().add(step, group.current?.ownerSVGElement);
+    return () => ticket.remove();
+  }, [body, live, size]);
 
   const onPointerMove = (event: ReactPointerEvent<HTMLSpanElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -287,13 +290,13 @@ function CarvedAvatarComponent(
         <g ref={group} transform={initial.body}>
           {body.parts.map((part, i) => <path key={i} d={part.d} fill={resolve(part.fill)} />)}
           <g clipPath={`url(#carved-${uid})`}>
-            {initial.eyes.map((rect, i) => <rect key={i} ref={eyes[i]} {...rect} fill={body.eyes.ink} />)}
+            {initial.eyes.map((rect, i) => <rect key={i} ref={eyes[i]} {...rect} fill={faceInk ?? body.eyes.ink} />)}
           </g>
           {body.eyes.mouth && (
             <g>
               <path ref={smile} d={initial.smile.d} transform={initial.smile.transform} opacity={initial.smile.opacity}
-                fill="none" stroke={body.eyes.mouthInk} strokeWidth={body.eyes.w * 0.36} strokeLinecap="round" />
-              <ellipse ref={open} {...initial.open} fill={body.eyes.mouthInk} />
+                fill="none" stroke={faceInk ?? body.eyes.mouthInk} strokeWidth={body.eyes.w * 0.36} strokeLinecap="round" />
+              <ellipse ref={open} {...initial.open} fill={faceInk ?? body.eyes.mouthInk} />
             </g>
           )}
         </g>

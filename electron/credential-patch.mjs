@@ -6,6 +6,7 @@ export const CREDENTIAL_PATCH = {
   opencodeGoApiKey: (value) => ({ opencodeGo: { apiKey: value } }),
   ttsKey: (value) => ({ tts: { key: value } }),
   fishAudioKey: (value) => ({ tts: { fishKey: value } }),
+  geminiTtsKey: (value) => ({ tts: { geminiKey: value } }),
   jevApiKey: (value) => ({ decider: { key: value } }),
   openrouterDeciderKey: (value) => ({ decider: { openrouterKey: value } }),
   workersAiToken: (value) => ({ decider: { workersAiToken: value } }),
@@ -13,6 +14,7 @@ export const CREDENTIAL_PATCH = {
   customImageApiKey: (value) => ({ imageGen: { customApiKey: value } }),
   openaiLiveKey: (value) => ({ live: { key: value } }),
   tregApiKey: (value) => ({ treg: { key: value } }),
+  postizApiKey: (value) => ({ postiz: { key: value } }),
 };
 
 /** Electron 43's ipcMain.handle sends a thrown error to the page as its toString(), so a key the provider refused travels as its name. */

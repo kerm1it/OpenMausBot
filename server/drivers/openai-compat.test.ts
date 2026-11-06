@@ -3,6 +3,7 @@ import { recordEvents } from "../testing/events.ts";
 import { buildTurnContext, replaysNatively } from "../turn-context.ts";
 import { instanceConfigs } from "../config.ts";
 import { OpenAICompatDriver } from "./openai-compat.ts";
+import { flushNativeLogs } from "./native.ts";
 
 describe("OpenAICompatDriver", () => {
   const savedUrl = process.env.OPENAI_COMPAT_URL;
@@ -135,6 +136,38 @@ describe("OpenAICompatDriver", () => {
     await inst.dispose();
   });
 
+  it("lists Gemini's chat models by their plain IDs", async () => {
+    const fetchMock = vi.fn(async () => Response.json({ object: "list", data: [
+      { id: "models/gemini-2.5-pro", object: "model", owned_by: "google" },
+      { id: "models/gemini-embedding-001", object: "model", owned_by: "google" },
+      { id: "models/gemini-2.5-flash", object: "model", owned_by: "google" },
+      { id: "models/gemini-2.5-flash-preview-tts", object: "model", owned_by: "google" },
+      { id: "models/imagen-4.0-generate-001", object: "model", owned_by: "google" },
+      { id: "models/gemini-2.5-flash-image", object: "model", owned_by: "google" },
+      { id: "models/gemini-live-2.5-flash-preview", object: "model", owned_by: "google" },
+    ] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const inst = await OpenAICompatDriver.create({
+      instanceId: "openai-compat-1", displayName: "Google Gemini", enabled: true,
+      config: OpenAICompatDriver.decodeConfig({ url: "https://generativelanguage.googleapis.com/v1beta/openai", key: "gemini-fixture" }),
+      environment: {},
+    });
+    await vi.waitFor(() => expect(inst.models.options.map((option) => option.id)).toEqual(["gemini-2.5-pro", "gemini-2.5-flash"]));
+    expect(fetchMock).toHaveBeenCalledWith("https://generativelanguage.googleapis.com/v1beta/openai/models", expect.anything());
+    await inst.dispose();
+  });
+
+  it("keeps other servers' model IDs as they list them", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({ data: [{ id: "models/gemini-2.5-pro" }, { id: "text-embedding-3-small" }] })));
+    const inst = await OpenAICompatDriver.create({
+      instanceId: "openai-compat-2", displayName: "Proxy", enabled: true,
+      config: OpenAICompatDriver.decodeConfig({ url: "https://llm.example.com/v1", key: "sk-fixture" }),
+      environment: {},
+    });
+    await vi.waitFor(() => expect(inst.models.options.map((option) => option.id)).toEqual(["models/gemini-2.5-pro", "text-embedding-3-small"]));
+    await inst.dispose();
+  });
+
   it("reports unavailable without an API key", async () => {
     const inst = await OpenAICompatDriver.create({
       instanceId: "test-1",
@@ -263,6 +296,123 @@ describe("OpenAICompatDriver", () => {
         { id: "vendor/model-b", label: "vendor/model-b", custom: true },
       ],
     });
+    await inst.dispose();
+  });
+
+  it("lists LM Studio chat keys from the native catalog and skips the OpenAI variant id", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/models")) {
+        return Response.json({
+          models: [
+            { type: "llm", key: "google/gemma-4-26b-a4b" },
+            { type: "embedding", key: "acme/vector-model" },
+            { type: "decision", key: "acme/router" },
+          ],
+        });
+      }
+      if (url.endsWith("/v1/models")) return Response.json({ data: [{ id: "google/gemma-4-26b-a4b@q4_k_m" }] });
+      return new Response("no", { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const inst = await OpenAICompatDriver.create({
+      instanceId: "lm-studio",
+      displayName: "LM Studio",
+      enabled: true,
+      config: { url: "http://127.0.0.1:1234/v1", key: "lm-studio", apiKeyEnv: "OPENAI_COMPAT_API_KEY", catalog: "lmstudio" },
+      environment: {},
+    });
+    await inst.refreshModels?.();
+    expect(inst.models.options.map((option) => option.id)).toEqual(["google/gemma-4-26b-a4b"]);
+    expect(fetchMock.mock.calls.some((call) => {
+      const url = String(call[0]);
+      return url.endsWith("/v1/models") && !url.includes("/api/v1/");
+    })).toBe(false);
+    await inst.dispose();
+  });
+
+  it("keeps a configured LM Studio model when the native catalog omits it", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/models")) {
+        return Response.json({ models: [{ type: "llm", key: "other/model" }] });
+      }
+      return new Response("no", { status: 500 });
+    }));
+    const inst = await OpenAICompatDriver.create({
+      instanceId: "lm-studio",
+      displayName: "LM Studio",
+      enabled: true,
+      config: {
+        url: "http://127.0.0.1:1234/v1",
+        key: "lm-studio",
+        apiKeyEnv: "OPENAI_COMPAT_API_KEY",
+        model: "my-loaded-instance",
+        catalog: "lmstudio",
+      },
+      environment: {},
+    });
+    await inst.refreshModels?.();
+    expect(inst.models.default).toBe("my-loaded-instance");
+    expect(inst.models.options.map((option) => option.id)).toEqual(["my-loaded-instance", "other/model"]);
+    await inst.dispose();
+  });
+
+  it("asks only a server added as LM Studio for LM Studio's own catalog", async () => {
+    const fetchMock = vi.fn(async (_input: string | URL | Request) => Response.json({ data: [{ id: "local/model" }] }));
+    vi.stubGlobal("fetch", fetchMock);
+    const inst = await OpenAICompatDriver.create({
+      instanceId: "local-server",
+      displayName: "llama.cpp",
+      enabled: true,
+      config: { url: "http://127.0.0.1:8080/v1", key: "local", apiKeyEnv: "OPENAI_COMPAT_API_KEY" },
+      environment: {},
+    });
+    await inst.refreshModels?.();
+    const asked = fetchMock.mock.calls.map(([input]) => String(input));
+    expect(asked).toContain("http://127.0.0.1:8080/v1/models");
+    expect(asked.filter((url) => url.includes("/api/v1/models"))).toEqual([]);
+    expect(inst.models.options.map((option) => option.id)).toContain("local/model");
+    await inst.dispose();
+  });
+
+  it("falls back to OpenAI-compatible models when the native LM Studio catalog request fails", async () => {
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/models")) throw new Error("native offline");
+      if (url.endsWith("/v1/models")) return Response.json({ data: [{ id: "local-chat" }] });
+      return new Response("no", { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const inst = await OpenAICompatDriver.create({
+      instanceId: "lm-studio",
+      displayName: "LM Studio",
+      enabled: true,
+      config: { url: "http://127.0.0.1:1234/v1", key: "lm-studio", apiKeyEnv: "OPENAI_COMPAT_API_KEY", catalog: "lmstudio" },
+      environment: {},
+    });
+    await inst.refreshModels?.();
+    expect(inst.models.options.map((option) => option.id)).toEqual(["local-chat"]);
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).endsWith("/v1/models"))).toBe(true);
+    await inst.dispose();
+  });
+
+  it("uses the OpenAI model list when the LM Studio catalog is not JSON", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/models")) return new Response("not-json", { status: 200, headers: { "content-type": "text/plain" } });
+      if (url.endsWith("/v1/models")) return Response.json({ data: [{ id: "local-chat" }] });
+      return new Response("no", { status: 500 });
+    }));
+    const inst = await OpenAICompatDriver.create({
+      instanceId: "lm-studio",
+      displayName: "LM Studio",
+      enabled: true,
+      config: { url: "http://127.0.0.1:1234/v1", key: "lm-studio", apiKeyEnv: "OPENAI_COMPAT_API_KEY", catalog: "lmstudio" },
+      environment: {},
+    });
+    await inst.refreshModels?.();
+    expect(inst.models.options.map((option) => option.id)).toEqual(["local-chat"]);
     await inst.dispose();
   });
 
@@ -1014,6 +1164,8 @@ describe("OpenAICompatDriver", () => {
 
       const item = recorder.events.find((e) => e.type === "item.completed");
       expect(item).toMatchObject({ text: "start middle end" });
+      // The native log's flush timer is shared across tests and pending only sometimes; it is not the idle timer.
+      flushNativeLogs();
       expect(vi.getTimerCount()).toBe(0);
 
       recorder.stop();
@@ -1052,4 +1204,14 @@ it("openai-compat preserves an explicit tools-off connection and rejects ambiguo
   expect(OpenAICompatDriver.decodeConfig({ tools: false })).toMatchObject({ tools: false });
   expect(OpenAICompatDriver.decodeConfig({ tools: true })).toMatchObject({ tools: true });
   expect(() => OpenAICompatDriver.decodeConfig({ tools: "false" })).toThrow("tools must be a boolean");
+});
+
+describe("how long a turn waits for a reply", () => {
+  it("accepts 1 to 60 whole minutes and refuses anything else", () => {
+    expect(OpenAICompatDriver.decodeConfig({ url: "http://127.0.0.1:11434/v1", replyWaitMinutes: 20 })).toMatchObject({ replyWaitMinutes: 20 });
+    expect(OpenAICompatDriver.decodeConfig({ url: "http://127.0.0.1:11434/v1" })).not.toHaveProperty("replyWaitMinutes");
+    for (const bad of [0, 61, 2.5, "10", null]) {
+      expect(() => OpenAICompatDriver.decodeConfig({ url: "http://127.0.0.1:11434/v1", replyWaitMinutes: bad })).toThrow(/replyWaitMinutes/);
+    }
+  });
 });

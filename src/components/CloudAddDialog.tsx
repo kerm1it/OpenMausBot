@@ -5,17 +5,18 @@ import { X } from "lucide-react";
 import type { CloudColor } from "../../electron/cloud-buy.mjs";
 import type { CloudAccountState, CloudCheckoutOutcome } from "../../electron/cloud-account.mjs";
 import type { CloudOffer } from "../../electron/cloud-home.mjs";
-import { track } from "@/lib/analytics";
+
 import { cn } from "@/lib/cn";
 import { cloudColor, cloudNameShown, DEFAULT_CLOUD_COLOR } from "@/lib/cloud-look";
 import { cloudAddView, offerPlan, sameTerms, startedSleeps, type CloudAddView, type CloudSignInPhase } from "@/lib/cloud-plan";
 import { t } from "@/lib/i18n";
 import { welcomeOnScreen } from "@/lib/onboarding";
 import { useStore } from "@/state/store";
+import { AddCloudFlow } from "./cloud-buy/AddCloudFlow";
 import { ChooseScreen } from "./cloud-buy/ChooseScreen";
 import { OneCloudScreen, StatusScreen } from "./cloud-buy/OneCloudScreen";
 import { PayScreen } from "./cloud-buy/PayScreen";
-import { StagingMark } from "./cloud-buy/parts";
+import { CLOSE, ON_NIGHT, SHEET, StagingMark } from "./cloud-buy/parts";
 import { SetupScreen, TeamReadyScreen, TeamSetupScreen } from "./cloud-buy/SetupScreen";
 import { BrowserSignInScreen, codeDigits, SignInScreen } from "./cloud-buy/SignInScreen";
 
@@ -84,18 +85,18 @@ export function CloudAddPanel({ view, ui, actions }: { view: CloudAddView; ui: C
   }
 }
 
-const WIDTH: Partial<Record<CloudAddView["kind"], string>> = { offer: "max-w-[900px]", starting: "max-w-[720px]", ready: "max-w-[720px]" };
+const WIDTH: Partial<Record<CloudAddView["kind"], string>> = { offer: "max-w-[920px]", starting: "max-w-[720px]", ready: "max-w-[720px]" };
 /** Mid sign-in, checkout or setup a stray click beside the sheet (say, back from paying in the browser) must not lose it: there only Close and Esc do. */
 const HELD: ReadonlySet<CloudAddView["kind"]> = new Set(["sign-in", "signing-in", "waiting", "starting", "team-starting"]);
 
 /** The sheet over the app: one width per screen, the close button, and the staging mark when the app is on staging.
  * Above the z-50 layers (Settings, the welcome flow), which it may be opened over. */
 export function CloudAddSheet({ kind, staging, onClose, children }: { kind: CloudAddView["kind"]; staging: boolean; onClose: () => void; children: ReactNode }) {
-  return <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4 sm:p-6" onMouseDown={event => event.target === event.currentTarget && !HELD.has(kind) && onClose()}>
+  return <div className="ui-scrim fixed inset-0 z-[60] flex items-center justify-center p-4 sm:p-6" onMouseDown={event => event.target === event.currentTarget && !HELD.has(kind) && onClose()}>
     <div role="dialog" aria-modal="true" aria-labelledby="cloud-add-title" data-cloud-add-dialog tabIndex={-1}
-      className={cn("animate-pop-in relative max-h-full w-full overflow-y-auto overscroll-contain rounded-[18px] border border-hairline/70 bg-panel shadow-2xl outline-none", WIDTH[kind] ?? "max-w-[540px]")}>
-      <button type="button" onClick={onClose} aria-label={t("cloudAdd.close")} className="ui-icon-button absolute end-3.5 top-3.5 z-10"><X size={18} /></button>
-      {staging && <StagingMark className="absolute end-14 top-[19px] z-10" />}
+      className={cn(SHEET, "group/sheet animate-pop-in relative max-h-full w-full overflow-y-auto overscroll-contain outline-none", WIDTH[kind] ?? "max-w-[540px]")}>
+      <button type="button" onClick={onClose} aria-label={t("cloudAdd.close")} className={cn(CLOSE, ON_NIGHT, "absolute end-4 top-4 z-10")}><X size={16} /></button>
+      {staging && <StagingMark className="absolute end-14 top-[22px] z-10 group-has-[[data-night-card]]/sheet:bg-app" />}
       {children}
     </div>
   </div>;
@@ -130,6 +131,7 @@ export function CloudAddDialog({ now = Date.now }: { now?: () => number }) {
   const [, setTick] = useState(0);
   const [arrived, setArrived] = useState(false);
   const [terms, setTerms] = useState(false);
+  const [extraWide, setExtraWide] = useState(false);
   const open = Boolean(request && bridge);
   const profileEmail = state.config?.profile?.email?.trim() || null;
   // Over the welcome flow the sheet is as good as closed for "ready": main notifies, and nothing switches the window away.
@@ -199,8 +201,8 @@ export function CloudAddDialog({ now = Date.now }: { now?: () => number }) {
     if (kind === "settings") { close(); dispatch({ type: "toggleAppSettings", open: true, section: "cloudAccount" }); return; }
     if (kind === "checking") return;
     const first = reported.length === 0;
-    if (first) track("cloud_dialog_shown", { source: request.source, view: kind });
-    if (["starting", "ready"].includes(kind) && !reported.includes(kind)) track("cloud_dialog_view", { view: kind });
+    if (first) {}
+    if (["starting", "ready"].includes(kind) && !reported.includes(kind)) {}
     if (first || !reported.includes(kind)) setReported([...reported, kind]);
   }, [kind]);
   // The setup screen saves what its preview shows, even untouched, so the switcher matches it; One Cloud for now changes nothing.
@@ -263,17 +265,22 @@ export function CloudAddDialog({ now = Date.now }: { now?: () => number }) {
     return () => window.removeEventListener("blur", stop);
   }, [counting]);
   if (!open || !view || !request || !bridge || view.kind === "settings") return null;
+  if (view.kind === "has-cloud" && account?.status === "connected" && account.clouds && window.ogb?.cloudAdd
+    && (account.addCloud?.canAdd !== false || (account.adding && !account.adding.done))) {
+    return <CloudAddSheet kind={extraWide ? "offer" : "has-cloud"} staging={account.staging === true} onClose={close}>
+      <AddCloudFlow onClose={close} onFirstCloud={() => {}} onWide={setExtraWide} source={request.source} />
+    </CloudAddSheet>;
+  }
 
   const offerShown = offer ?? null;
   const planNow = () => view.kind === "waiting" && !chosen ? view.plan : offerShown ? offerPlan(offerShown, chosen).tier : null;
   const openCheckout = async (plan: string | null) => {
     if (!plan || !bridge.checkout) { setError("failed"); return; }
-    const trial = Boolean(offerShown?.plans.find(entry => entry.tier === plan)?.trialDays);
     const result = await bridge.checkout(plan, request.source);
     const outcome: CloudCheckoutOutcome = result.outcome;
     setAccount(result.state);
     if (outcome === "opened" || outcome === "signing-in") {
-      setChoosing(false); setError(null); setConflict(false); setNote(null); setTerms(false); track("cloud_checkout_opened", { plan, trial, source: request.source });
+      setChoosing(false); setError(null); setConflict(false); setNote(null); setTerms(false);
     }
     else if (outcome === "rate-limited") setError("rate-limited");
     else if (outcome === "failed") setError("failed");
@@ -292,7 +299,6 @@ export function CloudAddDialog({ now = Date.now }: { now?: () => number }) {
         setSignIn({ step: "code", intent: phase.intent, email: result.email, resendAt: result.resendAt, problem: null, triesLeft: null,
           ...(result.signupOpen === false ? { signupOpen: false } : {}) });
         setForm({ email: result.email, code: "" });
-        track("cloud_signin", { step: "code_sent", source: request.source });
       } else setSignIn({ ...phase, problem: result.outcome });
     }, () => setSignIn({ ...phase, problem: "failed" })).finally(() => setBusy(false));
   };
@@ -309,7 +315,6 @@ export function CloudAddDialog({ now = Date.now }: { now?: () => number }) {
           return;
         }
         setAccount(result.state); setArrived(true);
-        track("cloud_signin", { step: "signed_in", source: request.source });
         if (plan && free(result.state)) {
           // The account's own offer may differ from the one shown signed out (a trial already used, another price).
           if (sameTerms(offerShown, result.state.offer, plan)) { setSignIn({ step: "done", intent: true }); await openCheckout(plan); }
@@ -341,7 +346,6 @@ export function CloudAddDialog({ now = Date.now }: { now?: () => number }) {
       const plan = signIn?.intent ? planNow() : null;
       setSignIn(null);
       await bridge.signInCancel?.().catch(() => {});
-      track("cloud_signin", { step: "browser", source: request.source });
       if (plan) await openCheckout(plan);
       else setAccount(await bridge.begin());
     }),

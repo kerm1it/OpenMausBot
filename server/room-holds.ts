@@ -4,11 +4,18 @@
  */
 import { isMentionBoundary, isMentionNameContinuation } from "../shared/mention-boundary.ts";
 import type { RoomHold, RoomHeldMessage } from "../shared/wire.ts";
+import { isServerLine, serverLine } from "./server-lines.ts";
 
 const STOP_WINDOW = 2;
 const STOP_WORDS = new Set(["stop", "halt", "pause"]);
 const OBJECT_STARTERS = new Set(["this", "that", "these", "those", "the", "a", "an", "my", "our", "your", "his", "her", "their", "its"]);
 const OWN_WORK_OR_URGENCY = new Set(["now", "please", "right", "immediately", "asap", "work", "task", "job", "turn", "run", "reply"]);
+// Beyond English: the words of the app's own Stop buttons in its language packs ("chat.stop", "vm.safety.stop", "room.holds.stop").
+const STOP_COMMANDS = new Set(["stop", "halt", "cancel", "abort", "stopp", "stoppen", "detener", "arrêter", "रोकें", "interrompi", "ferma", "停止",
+  "중지", "멈추기", "zatrzymaj", "parar", "стоп", "остановить", "durdur", "зупинити", "dừng"]);
+const STOP_FILLERS = new Set(["now", "please", "right", "immediately", "asap", "it", "that", "this", "everything", "all", "alles", "bitte", "sofort", "jetzt",
+  "todo", "ahora", "tout", "maintenant", "tutto", "ora", "subito", "tudo", "agora", "wszystko", "teraz", "всё", "все", "сейчас", "пожалуйста", "зараз",
+  "hepsini", "şimdi", "lütfen"]);
 export const MAX_HELD_MESSAGES = 20;
 
 export type HoldDirective = {
@@ -81,6 +88,14 @@ function isBareResume(text: string): boolean {
   return words.length > 0 && words[0] === "resume" && words.slice(1).every((word) => ["all", "everyone", "please"].includes(word));
 }
 
+/** `ownName`: the bot it was sent to, which may be tagged. A tag of anyone else is a message about them, not a stop. */
+export function isStopCommand(text: string, ownName?: string): boolean {
+  const line = maskQuotedAndCode(text).normalize("NFC").toLowerCase();
+  const untagged = ["everyone", ...(ownName ? [ownName.normalize("NFC").toLowerCase()] : [])].reduce((rest, name) => rest.split(`@${name}`).join(" "), line);
+  const words = untagged.match(/[\p{L}\p{M}\p{N}_-]+/gu) ?? [];
+  return words.some((word) => STOP_COMMANDS.has(word)) && words.every((word) => STOP_COMMANDS.has(word) || STOP_FILLERS.has(word));
+}
+
 /** A stop word far from every mention changes nothing: re-dispatching a bot the person just stopped is the one mistake to avoid. */
 export function classifyHoldDirective(text: string, mentioned: readonly string[]): HoldDirective {
   const everyone = addressesEveryone(text);
@@ -140,10 +155,11 @@ export function rememberHeldMessage(
   return { ...heldMessages, [botId]: [...current, entry].slice(-MAX_HELD_MESSAGES) };
 }
 
-export function heldMemberLine(name: string): string {
-  return `${name} is held (stopped by you) — @mention it or say resume`;
+/** The room's status row for a held member, in the room's language; a coordinator reads it in English. */
+export function heldMemberLine(name: string, language?: string): string {
+  return serverLine(language, "server.rooms.held", { bot: name });
 }
 
 export function isHeldMemberLine(text: string): boolean {
-  return text.endsWith(" is held (stopped by you) — @mention it or say resume");
+  return isServerLine("server.rooms.held", text);
 }

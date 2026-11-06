@@ -4,10 +4,12 @@ import { approvalModeFor, isApprovalMode, type ApprovalMode } from "../../shared
 import { normalizeConnectorScopes } from "../../shared/connector-scopes.ts";
 import { normalizeOutboundPolicy } from "../../shared/outbound.ts";
 import { botPluginsSchema } from "../../shared/plugins.ts";
+import { normalizePhoneApps } from "../../shared/phone-apps.ts";
 import { parseToolScope, toolScopeWidens } from "../../shared/tool-scope.ts";
 import { isMausColor, MAUS_COLOR_NAMES, type WireBot, type WireGroup } from "../../shared/wire.ts";
 import { validateBotCwd } from "../bot-cwd.ts";
 import { parseBotProfilePatch } from "../bot-profile.ts";
+import { accessFromVisibility } from "../../shared/bot-access.ts";
 import { parseVisibility } from "../bot-visibility.ts";
 import type { BrowserLive } from "../browser-live.ts";
 import type { BrowserRuntime } from "../browser-runtime.ts";
@@ -21,13 +23,14 @@ import type { ProviderRegistry } from "../harness/registry.ts";
 import type { hostedModelPolicy } from "../hosted-models.ts";
 import { MAX_MCP_SERVERS, mcpServerNameError } from "../mcp-registry.ts";
 import type { MemoryUpkeep } from "../memory-upkeep.ts";
+import { phoneAppsFor } from "../phones/access.ts";
 import { profileSnapshot } from "../profile-revision.ts";
 import { recordProfileChange } from "../profile-versions.ts";
-import { clientBotPatchViolation, requestSource } from "../request-auth.ts"; import { defaultBotPatchRefusal, ownsDefaultBot } from "../default-bot.ts";
+import { memberBotPatchViolation, requestSource, type RequestAuth } from "../request-auth.ts"; import { defaultBotPatchRefusal, ownsDefaultBot } from "../default-bot.ts";
 import type { RoutineManager } from "../routines.ts";
 import type { SessionRegistry } from "../sessions.ts";
 import { parseConnectorTools } from "../connector-tools.ts";
-import { sectionKey, type BotRecord, type GroupRecord, type Store } from "../store.ts";
+import { sectionKey, type BotRecord, type GroupRecord, type Store, type TaskRecord } from "../store.ts";
 import * as vps from "../vps-computer.ts";
 import { vpsSshAliasForBot } from "../vps-hosts.ts";
 import { pinnedClientThreadGuard } from "./pinned-client-thread.ts";
@@ -70,6 +73,12 @@ export interface BotPatchRouteDeps {
   closeOpenApprovals(threadId: string): void;
   assertTeamComputerChangeIdle(before: BotRecord, after: BotRecord): void;
   forgetTemporaryBrowser(botId: string): Promise<void>;
+  /** What this session may do with the bot: off a Team Cloud a member chats with every bot they see. */
+  levelOf(auth: RequestAuth, botId: string): "none" | "view" | "chat" | "edit";
+  /** A Team Cloud, where a bot's sharing follows its visibility. */
+  team: boolean;
+  /** The bot's conversations the main-thread resolver may pick: a Team Cloud keeps only team-visible ones. */
+  mainThreadTasks(botId: string): readonly TaskRecord[];
 }
 
 export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
@@ -93,12 +102,16 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
       }
       const pairedDevice = req.headers["x-openmausbot-companion"] === "1";
       if ((auth.kind === "session" && !auth.scopes.includes("admin")) || pairedDevice) {
-        const field = clientBotPatchViolation(body, ownsDefaultBot(store.bot(m[1]), auth.kind === "session" ? auth.session.email : undefined));
+        const session = auth.kind === "session" ? auth.session : undefined;
+        const level = pairedDevice ? "chat" : deps.levelOf(auth, m[1]);
+        const field = memberBotPatchViolation(body, level === "none" ? "chat" : level, ownsDefaultBot(store.bot(m[1]), session?.email), session?.membershipAuthority === "team");
         if (field) {
           return json(res, 403, {
             error: pairedDevice
               ? `forbidden: a paired device may change how a bot looks, not "${field}"; change it on the host computer`
-              : `forbidden: this session may change how a bot looks, not "${field}" (needs the admin scope)`,
+              : level === "edit" ? `forbidden: "${field}" is an admin's to change`
+                : level === "view" ? `forbidden: you can view this bot, not change "${field}"`
+                  : `forbidden: this session may change how a bot looks, not "${field}" (needs the admin scope)`,
           });
         }
       }
@@ -204,6 +217,14 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
           patch.pinnedMessageId = body.pinnedMessageId;
         } else return json(res, 400, { error: "pinnedMessageId must be a message id" });
       }
+      // null clears the choice; otherwise an open conversation the main-thread resolver may pick, never a routine run or archived.
+      // Same 400 for unknown and ineligible ids, so a private thread's existence is not revealed.
+      if (body.mainThreadChoice !== undefined) {
+        const chosen = typeof body.mainThreadChoice === "string" ? deps.mainThreadTasks(m[1]).find((task) => task.threadId === body.mainThreadChoice) : null;
+        if (body.mainThreadChoice === null) patch.mainThreadChoice = undefined;
+        else if (chosen && !chosen.routineRunId && chosen.archivedAt === undefined) patch.mainThreadChoice = chosen.threadId;
+        else return json(res, 400, { error: "mainThreadChoice must be one of this bot's conversations" });
+      }
       if (section !== undefined) patch.section = section ?? undefined;
       if (body.chiefOfStaff === false) patch.chiefOfStaff = false;
       if (body.fallback !== undefined) {
@@ -229,6 +250,14 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
           const scopes = normalizeConnectorScopes(body.connectorScopes);
           if (!scopes) return json(res, 400, { error: "connectorScopes must be { apps: { <toolkit>: read | write } } or null" });
           patch.connectorScopes = scopes;
+        }
+      }
+      if (body.phoneApps !== undefined) {
+        if (body.phoneApps === null) patch.phoneApps = undefined;
+        else {
+          const apps = normalizePhoneApps(body.phoneApps);
+          if (!apps) return json(res, 400, { error: "phoneApps must be { <calendar|reminders|contacts|location|home|messages>: read | write } or null" });
+          patch.phoneApps = apps;
         }
       }
       if (body.outbound !== undefined) {
@@ -442,12 +471,6 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
         requestedApprovalMode = approvalModeFor(existingBot ?? {});
       }
       const currentApprovalMode = approvalModeFor(existingBot ?? {});
-      const approvalChangeRequested = body.approvalMode !== undefined || body.autoApprove !== undefined;
-      if (existingBot?.busy && approvalChangeRequested && requestedApprovalMode !== currentApprovalMode) {
-        return json(res, 409, {
-          error: "stop this bot's turn before changing its approval level",
-        });
-      }
       if (body.approvalMode !== undefined || body.autoApprove !== undefined) {
         patch.approvalMode = requestedApprovalMode;
         // Older paired apps read autoApprove as exactly Auto.
@@ -493,9 +516,6 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
       }
       if (body.applyToAllThreads === true && existingBot) {
         const threads = store.tasks(existingBot.id);
-        if (threads.some((task) => threadBusy(existingBot.id, task.threadId))) {
-          return json(res, 409, { error: "stop this bot's turns before changing its approval level" });
-        }
         if (threads.some((task) => approvalModeFor(store.projectBotForTask(existingBot.id, task.threadId) ?? {}) === "custom")) {
           return json(res, 403, { error: "A thread on Custom approval can only leave it from the packaged desktop app" });
         }
@@ -522,7 +542,7 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
         }
         patch.approvePeerComms = body.approvePeerComms;
       }
-      // null: everyone visible in the section; an array (even empty) is the explicit wiring. Narrowing is free;
+      // null: every visible bot; an array (even empty) is the explicit wiring. Narrowing is free;
       // widening needs acknowledgePeerScope, since any loopback caller (a bot with Bash) gets admin.
       if (body.peers !== undefined) {
         let nextPeers: string[] | undefined;
@@ -531,7 +551,7 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
           !Array.isArray(body.peers) ||
           body.peers.some((peerId: unknown) => typeof peerId !== "string")
         ) {
-          return json(res, 400, { error: "peers must be a list of bot ids, or null for every bot in this section" });
+          return json(res, 400, { error: "peers must be a list of bot ids, or null for every bot" });
         } else {
           nextPeers = [...new Set<string>(body.peers)].slice(0, MAX_WORKSPACE_BOTS);
         }
@@ -541,7 +561,7 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
           (nextPeers === undefined || nextPeers.some((peerId) => !currentPeers.includes(peerId)));
         if (widensReach && body.acknowledgePeerScope !== true) {
           return json(res, 400, {
-            error: "Widening a bot's allowed peers requires confirming it first (acknowledgePeerScope)",
+            error: "Letting a bot talk to more bots requires confirming it first (acknowledgePeerScope)",
           });
         }
         patch.peers = nextPeers;
@@ -552,13 +572,13 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
         const sections = [...new Set(parsed.data)];
         const newSections = sections.filter(section => !(existingBot?.managedSections ?? []).includes(section));
         if (newSections.some(section => section !== "" && !store.sections.includes(section))) {
-          return json(res, 400, { error: "Create the named department before giving a Chief access to it" });
+          return json(res, 400, { error: "Create the named department before making a Chief responsible for it" });
         }
         if (sections.length && !(body.chiefOfStaff === true || (existingBot?.chiefOfStaff && body.chiefOfStaff !== false))) {
-          return json(res, 400, { error: "Only a Chief of Staff can be given access to additional teams" });
+          return json(res, 400, { error: "Only a Chief of Staff can be made responsible for additional departments" });
         }
         if (newSections.length && body.acknowledgePeerScope !== true) {
-          return json(res, 400, { error: "Confirm which additional teams this Chief may work with (acknowledgePeerScope)" });
+          return json(res, 400, { error: "Confirm which additional departments this Chief is responsible for (acknowledgePeerScope)" });
         }
         patch.managedSections = sections;
       }
@@ -569,6 +589,7 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
         const parsed = parseVisibility(body.visibility);
         if (!parsed.ok) return json(res, 400, { error: parsed.error });
         patch.visibility = parsed.visibility;
+        if (deps.team) patch.access = accessFromVisibility(parsed.visibility);
       }
       if (body.alwaysAllow !== undefined) {
         if (!Array.isArray(body.alwaysAllow) || body.alwaysAllow.some((t: unknown) => typeof t !== "string")) {
@@ -585,6 +606,12 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
       if (body.connectorScopes !== undefined && existingBot?.connectorScopes &&
           (!trustPatch.connectorScopes || Object.entries(trustPatch.connectorScopes.apps).some(([slug, scope]) =>
             !existingBot.connectorScopes!.apps[slug] || (scope === "write" && existingBot.connectorScopes!.apps[slug] === "read")))) loosened.push("connectorScopes");
+      if (body.phoneApps !== undefined && existingBot) {
+        // Compare effective grants: clearing falls back to every app.
+        const before = phoneAppsFor(existingBot);
+        const after = phoneAppsFor({ ...existingBot, phoneApps: (patch as Pick<Partial<BotRecord>, "phoneApps">).phoneApps });
+        if (Object.entries(after).some(([cap, grant]) => !before[cap as keyof typeof before] || (grant === "write" && before[cap as keyof typeof before] === "read"))) loosened.push("phoneApps");
+      }
       if (body.fallback !== undefined && trustPatch.fallback?.some(candidate =>
           !existingBot?.fallback?.some(previous => previous.instanceId === candidate.instanceId && previous.model === candidate.model))) loosened.push("fallback");
       if (Array.isArray(patch.managedSections) && patch.managedSections.some(section => !(existingBot?.managedSections ?? []).includes(section))) {

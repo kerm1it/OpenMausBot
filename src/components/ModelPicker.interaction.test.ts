@@ -45,7 +45,9 @@ vi.mock("@/state/store", async (importOriginal) => ({
 // These cases cover the full picker; Simple mode has its own file.
 vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => true, setAdvancedMode: () => {} }));
 
-const { LOCAL_PROBE_TIMEOUT_MS, ModelEngineRail, ModelPicker, offersLocalModels, probeLocalModels } = await import("./ModelPicker");
+const { ModelPicker } = await import("./ModelPicker");
+const { LOCAL_PROBE_TIMEOUT_MS, offersLocalModels, probeLocalModels } = await import("./local-model-probe");
+const { ModelEngineRail } = await import("./ModelPickerFull");
 
 afterAll(() => vi.unstubAllGlobals());
 
@@ -161,6 +163,19 @@ describe("ModelPicker with a signed-out or missing Claude", () => {
     expect(html).toContain("Sign in to Claude");
     expect(html).not.toContain(">Opus 5.5<");
     expect(html).not.toContain("No model providers are available.");
+  });
+
+  it("on a paired desktop, sends a signed-out provider's sign-in to the host instead of offering one that cannot run", () => {
+    fixture.instances = [signedOut()];
+    window.ogb = { remoteClient: { active: true } } as NonNullable<Window["ogb"]>;
+    try {
+      const html = menu(open(bot("claude", "claude-opus-5-5")).html);
+      expect(html).toContain("data-engine-setup-on-host");
+      expect(html).toContain("Set up Claude there");
+      expect(html).not.toContain("data-claude-sign-in");
+    } finally {
+      delete window.ogb;
+    }
   });
 
   it("keeps the bot's own Claude with its install card when the CLI is not found", () => {

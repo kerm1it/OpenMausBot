@@ -14,7 +14,6 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 
-import { parseSkillCommand } from "../shared/skill-command.ts";
 import { isSkillName } from "../shared/skill-md.ts";
 import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
@@ -72,7 +71,7 @@ function readChoices(botId: string): Choices {
   return { off: [], on: {} };
 }
 
-function readBytes(path: string): Buffer | null {
+export function readFileNoFollow(path: string): Buffer | null {
   let fd: number | null = null;
   try {
     fd = openSync(path, constants.O_RDONLY | (process.platform === "win32" ? 0 : constants.O_NOFOLLOW));
@@ -149,7 +148,7 @@ function folderDigest(dir: string): Digest | null {
       hash.update(`d ${entry.path}\n`);
       continue;
     }
-    const bytes = readBytes(entry.full);
+    const bytes = readFileNoFollow(entry.full);
     if (bytes === null) return null;
     hash.update(`f ${entry.executable ? "x" : "-"} ${entry.path} ${createHash("sha256").update(bytes).digest("hex")}\n`);
   }
@@ -331,7 +330,7 @@ export function importedSkillListings(botId: string, shadowed: ReadonlySet<strin
 export function readImportedSkillFile(name: string): string | null {
   const entry = readImportedSkills()[name];
   if (!entry || !importedSkillIntact(name, entry)) return null;
-  const bytes = readBytes(join(IMPORTED_SKILLS_DIR, name, "SKILL.md"));
+  const bytes = readFileNoFollow(join(IMPORTED_SKILLS_DIR, name, "SKILL.md"));
   const text = bytes?.toString("utf8") ?? null;
   return text !== null && createHash("sha256").update(text).digest("hex") === entry.sha256 ? text : null;
 }
@@ -406,18 +405,6 @@ export function importedSkillsPrompt(skills: readonly ImportedSkillView[]): stri
     lines.push(line);
   }
   return block(lines, skills.length - lines.length);
-}
-
-/** `/name` for an imported skill, the way a bot's own skill command reads. */
-export function expandImportedSkillCommand(text: string, skills: readonly ImportedSkillView[]): string {
-  if (!text.trimStart().startsWith("/")) return text;
-  const command = parseSkillCommand(text, skills.map((skill) => skill.name));
-  const skill = command && skills.find((candidate) => candidate.name === command.name);
-  if (!command || !skill) return text;
-  const lead = `The user ran your ${command.name} skill with /${command.name}. Read ${JSON.stringify(skill.file)} with your file tools and follow it for this turn.`;
-  return command.request
-    ? `${lead} Where the skill says {input}, use the request.\n\nRequest: ${command.request}`
-    : `${lead} There is no further request, so run it as the skill describes.`;
 }
 
 const NATIVE_SKILL_DIRS = [".claude/skills", ".agents/skills", ".grok/skills"];

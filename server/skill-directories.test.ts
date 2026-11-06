@@ -140,7 +140,7 @@ describe("complete Skill directories", () => {
     expect(host.skillsIndex(record, thread)).toBe(before);
     expect(host.harnessListing(record.id, [], thread)[0].revision).toBe(pinned.revision);
     expect(realpathSync(path)).toBe(target);
-    expect(host.expandSkillCommand(record, `/${name}`, undefined, thread)).toContain(JSON.stringify(join(path, "SKILL.md")));
+    expect(host.expandSkillCommand(record, thread, `/${name}`, undefined, [], true)).toContain(JSON.stringify(join(path, "SKILL.md")));
     host.releaseTurnSkills(thread);
     host.beginTurnSkills(record, thread);
     expect(host.skillsIndex(record, thread)).toBe(before);

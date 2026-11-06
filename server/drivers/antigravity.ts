@@ -8,6 +8,7 @@ import type {
   ProviderDriver,
   ProviderInstance,
   ProviderSnapshot,
+  SendTurnInput,
 } from "../contracts.ts";
 import { createAcpDriver, type AcpConfig, type AcpSupport } from "./acp/core.ts";
 import {
@@ -15,6 +16,7 @@ import {
   antigravityProfileAuthenticated,
   prepareAntigravityProfile,
   probeAntigravityModels,
+  removeAntigravitySignIn,
   validateAntigravityRuntime,
 } from "./antigravity-acp.ts";
 import {
@@ -27,13 +29,30 @@ import { VERIFICATION_TEMP_KEY, scheduleAntigravityTempSweep } from "./antigravi
 import { augmentedPath } from "../env-path.ts";
 
 export const STATIC_ANTIGRAVITY_MODELS: ModelCatalog = {
-  default: "gemini-3.8-flash-high",
+  default: "gemini-3.8-flash",
   options: [
-    { id: "gemini-3.8-flash-high", label: "Gemini 3.8 Flash (High)" },
-    { id: "gemini-3.8-flash-medium", label: "Gemini 3.8 Flash (Medium)" },
-    { id: "gemini-3.8-flash-low", label: "Gemini 3.8 Flash (Low)" },
+    {
+      id: "gemini-3.8-flash",
+      label: "Gemini 3.8 Flash",
+      variants: [
+        { id: "low", label: "Low" },
+        { id: "medium", label: "Medium" },
+        { id: "high", label: "High" },
+      ],
+    },
   ],
 };
+
+/** Bots saved before the thinking-level option hold ids like `gemini-3.8-flash-medium` or `gemini-4-argon-high`;
+ * the official runtime offers only the base model with that option, so run the base at the saved level. A runtime
+ * that still offers the suffixed id, or lacks the base, or a turn that chose its own level, keeps its selection. */
+export function normalizeAntigravityTurn(turn: SendTurnInput, offeredModels: readonly string[]): SendTurnInput {
+  if (turn.variant !== undefined) return turn;
+  const match = turn.model?.match(/^(.+)-(low|medium|high)$/u);
+  return match && offeredModels.includes(match[1]) && !offeredModels.includes(match[0])
+    ? { ...turn, model: match[1], variant: match[2] }
+    : turn;
+}
 
 /** Antigravity's session modes: `yolo` for Full, `auto_edit` for auto-accept edits, `default` otherwise (it has no reviewer for Auto). */
 export function antigravityPermissionMode(fullAuto: boolean, approvalMode?: ApprovalMode): "yolo" | "auto_edit" | "default" {
@@ -60,15 +79,15 @@ const support: AcpSupport = {
   images: true,
   spawnArgs: () => [],
   selectModel: { configId: "model" },
-  // Google's server reads its new-session default from this variable (agy_acp_server 1.1.1
+  modelVariants: true,
+  normalizeSessionSelection: normalizeAntigravityTurn,
+  // Google's server reads its new-session default from this variable (agy_acp_server 1.4.3
   // model_selection.get_default_model_id); a later switch re-fetches the model list (1.3-1.8 s).
   sessionModelEnv: "AGY_ACP_DEFAULT_MODEL",
   sessionScopedApproval: true,
   resumeMethod: "resume",
   clientFileSystem: true,
-  redactStderr: true,
   sanitizeToolPayload: true,
-  resolveModelsOnCreate: false,
 
   resolveCommand: async (env, config, instanceId) => {
     const runtime = await resolveAntigravityRuntime(config.cli, env);
@@ -121,7 +140,10 @@ const support: AcpSupport = {
     }
   },
 
-  configureSession: async ({ request, sessionId, config, turn }) => {
+  configureSession: async ({ request, sessionId, config, turn, configOptions }) => {
+    if (!Array.isArray(configOptions) || !configOptions.some(option => option?.id === "mode")) {
+      return;
+    }
     const wanted = antigravityPermissionMode(config.fullAuto, turn.approvalMode);
     const result = await request("session/set_config_option", {
       sessionId,
@@ -143,7 +165,7 @@ export const AntigravityDriver: ProviderDriver<AcpConfig> = {
     const base = await AcpAntigravityDriver.create(input);
     scheduleAntigravityTempSweep(input.instanceId);
     scheduleAntigravityTempSweep(VERIFICATION_TEMP_KEY);
-    const auth = new AntigravityAuthController();
+    const auth = new AntigravityAuthController(() => void base.refreshModels?.());
     let installFailure: string | undefined;
     const runtimeAndProfile = async () => {
       // A GUI launch's raw PATH may omit the official runtime the model picker found.
@@ -160,6 +182,9 @@ export const AntigravityDriver: ProviderDriver<AcpConfig> = {
       ...base,
       get models() {
         return base.models;
+      },
+      get modelsUnconfirmed() {
+        return base.modelsUnconfirmed;
       },
       snapshot: async () => {
         const snapshot = await base.snapshot();
@@ -187,6 +212,10 @@ export const AntigravityDriver: ProviderDriver<AcpConfig> = {
       },
       completeAuthentication: async (flowId, callbackUrl) => auth.complete(flowId, callbackUrl),
       cancelAuthentication: async () => auth.cancel(),
+      signOut: async () => {
+        auth.cancel();
+        await removeAntigravitySignIn(input.instanceId);
+      },
       dispose: async () => {
         auth.cancel();
         await base.dispose();

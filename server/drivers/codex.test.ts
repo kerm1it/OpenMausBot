@@ -10,14 +10,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ProviderInstance, RuntimeEvent } from "../contracts.ts";
 import { DATA_DIR, NATIVE_DIR } from "../config.ts";
+import { flushNativeLog } from "./native.ts";
 import { ChatGptPlanAuthController } from "./chatgpt-plan-auth.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
 import { CodexDriver, codexNativeIncomingLogMessage, codexUpdateCommand } from "./codex.ts";
 import { codexCliOverrides } from "./codex-process.ts";
-import { CODEX_SIGN_IN_EXPIRED, codexNotSignedIn, codexSignInRefused, codexUserError } from "./codex-errors.ts";
+import * as codexProcess from "./codex-process.ts";
+import { CODEX_SIGN_IN_EXPIRED, codexLimitFacts, codexNotSignedIn, codexSignInRefused, codexUserError } from "./codex-errors.ts";
 import { CODEX_USAGE_LIMIT_REACHED } from "../../shared/codex-usage-limit.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { TEAM_TOOLS_FAILED } from "./team-tools.ts";
+import { unsupportedCallsNotice } from "./codex-unsupported-calls.ts";
 import { rebuiltSessionNotice } from "../resume-recovery.ts";
 import { startFakeHttpMcp, type FakeHttpMcp } from "../testing/fake-http-mcp-server.ts";
 import * as procs from "../procs.ts";
@@ -51,6 +54,9 @@ describe("CodexDriver.decodeConfig", () => {
     expect(codexUserError("provider_not_configured", "own")).toContain("Continue with ChatGPT");
     expect(codexUserError("provider_not_configured", "plan")).toContain("API billing will not be used");
     expect(codexUserError("x".repeat(500) + "subscription_sharing_usage_limit_exceeded", "plan")).toMatch(/^subscription_sharing_usage_limit_exceeded:/);
+    const refusal = "The 'gpt-6.1-sol' model is not supported when using Codex with a ChatGPT account.";
+    expect(codexUserError(refusal, "plan")).toBe("This model isn't available on your ChatGPT plan, so it's now hidden from this account's model list. Pick another model.");
+    expect(codexUserError(refusal, "own")).toBe(refusal);
     expect(() => CodexDriver.decodeConfig({ authMode: "chatgpt-plan", managed: {} })).toThrow("cannot be combined");
   });
   it("defaults to the codex binary with fullAuto off", () => {
@@ -236,6 +242,74 @@ describe("CodexDriver turns (fake app-server)", () => {
         expect(methods.indexOf("plugin/installed")).toBeLessThan(methods.indexOf(resumeCursor ? "thread/resume" : "thread/start"));
       }
     }
+  });
+
+  const startupMounts = {
+    composio: { command: process.execPath, args: ["connector-proxy.js"], env: {} },
+    agents: { command: process.execPath, args: ["agents-proxy.js"], env: {} },
+  };
+
+  it("starts a new thread's turn only once the MCP servers it mounted finished starting", async () => {
+    const dump = join(scratch, "mcp-ready.json"); process.env.FAKE_CODEX_DUMP = dump;
+    await create({ environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex"), FAKE_CODEX_MCP_READY_MS: "400", FAKE_CODEX_MCP_STAGGER: "1" } });
+    await instance.adapter.sendTurn({ threadId: "mcp-ready", text: "Fixture", integrations: startupMounts });
+    await recorder.until((event) => event.type === "turn.completed");
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.argv).toContain(`mcp_servers.openmausbot_connectors.command=${JSON.stringify(process.execPath)}`);
+    expect(seen.mcpReadyAtTurnStart).toBe(true);
+    expect(recorder.events.find((event) => event.type === "turn.completed")).toMatchObject({ ok: true });
+  });
+
+  it("does not wait for startup notifications on older Codex", async () => {
+    const dump = join(scratch, "mcp-old.json"); process.env.FAKE_CODEX_DUMP = dump;
+    await create({ environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex"), FAKE_CODEX_USER_AGENT: "codex_cli_rs/0.116.0", FAKE_CODEX_MCP_READY_MS: "600000" } });
+    await instance.adapter.sendTurn({ threadId: "mcp-old", text: "Fixture", integrations: startupMounts });
+    await recorder.until((event) => event.type === "turn.completed");
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.mcpReadyAtTurnStart).toBe(false);
+  });
+
+  it("waits for the MCP servers of a resumed thread too", async () => {
+    const dump = join(scratch, "mcp-ready-resume.json"); process.env.FAKE_CODEX_DUMP = dump;
+    await create({ mode: "resume", environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex"), FAKE_CODEX_MCP_READY_MS: "400" } });
+    await instance.adapter.sendTurn({ threadId: "mcp-ready-resume", text: "Continue", resumeCursor: "codex-thread-1", integrations: startupMounts });
+    await recorder.until((event) => event.type === "turn.completed");
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.calls.map((call: { method: string }) => call.method)).toContain("thread/resume");
+    expect(seen.mcpReadyAtTurnStart).toBe(true);
+  });
+
+  it("stops a turn still waiting for its MCP servers without starting it", async () => {
+    mkdirSync(NATIVE_DIR, { recursive: true });
+    await create({ environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex"), FAKE_CODEX_MCP_READY_MS: "600000" } });
+    await instance.adapter.sendTurn({ threadId: "mcp-stop", text: "Fixture", integrations: startupMounts });
+    await recorder.until((event) => event.type === "session.started");
+    await instance.adapter.interruptTurn("mcp-stop");
+    await recorder.until((event) => event.type === "turn.completed");
+    expect(recorder.events.find((event) => event.type === "turn.completed")).toMatchObject({ ok: false, stopReason: "interrupted" });
+    flushNativeLog("mcp-stop");
+    const sent = readFileSync(join(NATIVE_DIR, "mcp-stop.ndjson"), "utf8").trim().split("\n").map((line) => JSON.parse(line))
+      .filter((entry) => entry.dir === "out").map((entry) => entry.msg?.method);
+    expect(sent).toContain("thread/start");
+    expect(sent).not.toContain("turn/start");
+  });
+
+  it("says which tool calls codex refused as unsupported this turn, and not the ones from earlier turns", async () => {
+    const rollout = join(scratch, "rollout.jsonl");
+    // An earlier turn's refusal is already in the rollout: it was reported then.
+    writeFileSync(rollout, `${JSON.stringify({ type: "response_item", payload: { type: "function_call_output", call_id: "old", output: "unsupported call: coordinate_bots" } })}\n`);
+    await create({ environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex"), FAKE_CODEX_ROLLOUT: rollout } });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let warned: string[];
+    try {
+      await instance.adapter.sendTurn({ threadId: "unsupported-call", text: "Fixture" });
+      await recorder.until((event) => event.type === "turn.completed");
+      warned = warn.mock.calls.map((call) => String(call[0]));
+    } finally {
+      warn.mockRestore();
+    }
+    expect(recorder.events.filter((e) => e.type === "runtime.notice").map((e) => (e as { message: string }).message)).toEqual([unsupportedCallsNotice(["retry_thread"])]);
+    expect(warned).toContain("[codex] unsupported tool call (provider dropped the MCP namespace): retry_thread");
   });
 
   it("refuses native selection before a Codex prompt, including resumed Full-access turns", async () => {
@@ -1059,6 +1133,7 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     ]);
     expect(JSON.stringify(seen)).not.toContain(attachments);
 
+    flushNativeLog("t-native-input-image");
     const nativeLog = readFileSync(join(NATIVE_DIR, "t-native-input-image.ndjson"), "utf8");
     expect(nativeLog).toContain('"type":"image"');
     expect(nativeLog).toContain("[inline image omitted");
@@ -1452,6 +1527,52 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
       expect(argv).not.toContain("mcp_servers.whop.default_tools_approval_mode");
     });
 
+    it("hides a model ChatGPT refuses for this account and runs later turns on the account's next model", async () => {
+      plan();
+      vi.spyOn(ChatGptPlanAuthController.prototype, "models").mockResolvedValue({ default: "gpt-6.1-sol", options: [{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol" }, { id: "gpt-fixture", label: "Fixture" }] });
+      let refused: string[] = [];
+      vi.spyOn(ChatGptPlanAuthController.prototype, "refusedModels").mockImplementation(() => refused);
+      const refuse = vi.spyOn(ChatGptPlanAuthController.prototype, "refuseModel").mockImplementation(async (slug) => { refused = [...refused, slug]; });
+      await create({ mode: "plan-model-refused", authMode: "chatgpt-plan" });
+      const first = await instance.adapter.sendTurn({ threadId: "t-plan-refused", text: "go", model: "gpt-6.1-sol" });
+      await recorder.until((event) => event.type === "turn.completed" && event.turnId === first.turnId);
+      const errors = recorder.events.filter((event) => event.type === "runtime.error" && event.turnId === first.turnId);
+      expect(errors).toHaveLength(1);
+      expect((errors[0] as { message: string }).message).toContain("isn't available on your ChatGPT plan");
+      expect(refuse).toHaveBeenCalledExactlyOnceWith("gpt-6.1-sol");
+      const dump = join(scratch, "plan-refused.json");
+      process.env.FAKE_CODEX_DUMP = dump;
+      const next = await instance.adapter.sendTurn({ threadId: "t-plan-refused-next", text: "go", model: "gpt-6.1-sol" });
+      await recorder.until((event) => event.type === "turn.completed" && event.turnId === next.turnId);
+      const seen = JSON.parse(readFileSync(dump, "utf8"));
+      expect(seen.calls.find((call: { method: string }) => call.method === "thread/start").params.model).toBe("gpt-fixture");
+    });
+
+    it("takes the refused model off the menu at once, even when it was the account's only model", async () => {
+      plan();
+      let refused: string[] = [];
+      vi.spyOn(ChatGptPlanAuthController.prototype, "models").mockImplementation(async () => {
+        const options = [{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol" }].filter((option) => !refused.includes(option.id));
+        return { default: options[0]?.id ?? "", options };
+      });
+      vi.spyOn(ChatGptPlanAuthController.prototype, "refusedModels").mockImplementation(() => refused);
+      vi.spyOn(ChatGptPlanAuthController.prototype, "refuseModel").mockImplementation(async (slug) => { refused = [...refused, slug]; });
+      await create({ mode: "plan-model-refused", authMode: "chatgpt-plan" });
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-plan-only-refused", text: "go", model: "gpt-6.1-sol" });
+      await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId);
+      expect(instance.models).toEqual({ default: "", options: [] });
+    });
+
+    it("never hides a model for a ChatGPT plan error that isn't ChatGPT refusing that model", async () => {
+      plan();
+      const refuse = vi.spyOn(ChatGptPlanAuthController.prototype, "refuseModel").mockResolvedValue();
+      await create({ mode: "usage-limit", authMode: "chatgpt-plan" });
+      const { turnId } = await instance.adapter.sendTurn({ threadId: "t-plan-limit", text: "go", model: "gpt-6.1-sol" });
+      await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId);
+      expect(recorder.events.some((event) => event.type === "runtime.error" && event.turnId === turnId)).toBe(true);
+      expect(refuse).not.toHaveBeenCalled();
+    });
+
     it("passes the person's proxy settings to the proxy, which Codex would otherwise drop", async () => {
       vi.stubEnv("NO_PROXY", undefined);
       vi.stubEnv("no_proxy", undefined);
@@ -1680,6 +1801,7 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.argv.join(" ")).toContain("mcp_servers.agents.command");
     expect(seen.argv).toContain('mcp_servers.agents.default_tools_approval_mode="approve"');
+    expect(seen.argv).toContain("mcp_servers.agents.tool_timeout_sec=960");
     expect(seen.argv.join(" ")).toContain("/tmp/agents-proxy.js");
     expect(seen.argv.join(" ")).toContain("OMB_COMMS_TOKEN");
     expect(seen.argv.join(" ")).not.toContain("peer-comms-secret");
@@ -1810,6 +1932,29 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     ]);
     const types = recorder.events.map((e) => e.type);
     expect(types.indexOf("turn.progress")).toBeGreaterThan(types.indexOf("item.started"));
+  });
+
+  it("streams a running command's output to the bus, and names its app-server while the turn runs", async () => {
+    const gate = join(scratch, "command-done");
+    Object.assign(process.env, { FAKE_CODEX_COMMAND: "/bin/zsh -lc 'pnpm test'", FAKE_CODEX_COMMAND_OUTPUT: JSON.stringify(["RUN v3\n", " ✓ a.test.ts\n"]), FAKE_CODEX_COMMAND_GATE: gate });
+    try {
+      await create();
+      await instance.adapter.sendTurn({ threadId: "t-output", text: "run the tests" });
+      await recorder.until((e) => e.type === "item.output" && e.text.includes("a.test.ts"));
+      const pid = instance.adapter.enginePid?.("t-output");
+      expect(pid).toEqual(expect.any(Number));
+      expect(() => process.kill(pid!, 0), "the app-server running this turn").not.toThrow();
+      writeFileSync(gate, "done");
+      await recorder.until((e) => e.type === "turn.completed");
+      expect(instance.adapter.enginePid?.("t-output"), "no engine once the turn is over").toBeUndefined();
+    } finally {
+      for (const key of ["FAKE_CODEX_COMMAND", "FAKE_CODEX_COMMAND_OUTPUT", "FAKE_CODEX_COMMAND_GATE"]) delete process.env[key];
+    }
+    expect(recorder.events.filter((e) => e.type === "item.output")).toEqual([
+      expect.objectContaining({ itemType: "tool", itemId: "i1", text: "RUN v3\n" }),
+      expect.objectContaining({ itemType: "tool", itemId: "i1", text: " ✓ a.test.ts\n" }),
+    ]);
+    expect(recorder.events.find((e) => e.type === "item.started" && e.itemType === "tool")).toMatchObject({ summary: "/bin/zsh -lc 'pnpm test'" });
   });
 
   it("tries thread/resume with a cursor and reuses the thread id", async () => {
@@ -2721,6 +2866,7 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
 
     expect(recorder.events.some((event) => event.type === "request.opened")).toBe(false);
     expect(JSON.parse(readFileSync(dump, "utf8")).decision).toEqual({ action: "decline" });
+    expect(recorder.events.find((event) => event.type === "runtime.notice")?.message).toBe("example asked for input OpenMausBot can't show yet, so the request was declined.");
   });
 
   it("grants Codex additional permissions with their native response shape", async () => {
@@ -3021,6 +3167,14 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     });
   });
 
+  it("counts an API-key login as signed in", async () => {
+    await create({ mode: "api-key-configured" });
+    await expect(instance.snapshot()).resolves.toMatchObject({
+      state: "available",
+      authenticated: true,
+    });
+  });
+
   it("also accepts login status from older Codex versions that used stdout", async () => {
     await create({ mode: "logged-in-stdout" });
     await expect(instance.snapshot()).resolves.toMatchObject({
@@ -3291,6 +3445,22 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
       expect(recorder.events.some((e) => e.type === "turn.retrying")).toBe(false);
     });
 
+    it.each([
+      ["ran the turn", "api-key-configured", { FAKE_CODEX_MISSING_BEARER: "1" }],
+      ["refused turn/start", "unauthorized", {}],
+    ])("asks Codex about its login again once Codex %s without the login it reported", async (_failed, mode, failure) => {
+      const codexHome = join(scratch, ".codex");
+      mkdirSync(codexHome, { recursive: true });
+      await create({ mode, environment: { HOME: scratch, USERPROFILE: scratch, CODEX_HOME: codexHome, FAKE_CODEX_STATE: join(scratch, "launches"), ...failure } });
+      await expect(runTurn("t-login-gone")).resolves.toMatchObject({ errors: [expect.objectContaining({ message: codexNotSignedIn() })] });
+      process.env.FAKE_CODEX_MODE = "logged-out";
+      const spawn = vi.spyOn(procs, "spawnCli");
+      const { done, errors } = await runTurn("t-after-login-gone");
+      expect(errors).toEqual([expect.objectContaining({ message: codexNotSignedIn(), setup: true })]);
+      expect(done).toMatchObject({ ok: false, stopReason: "auth_required" });
+      expect(spawn).not.toHaveBeenCalled();
+    });
+
     it("runs the turn again once when Codex started without the login it has now", async () => {
       vi.stubEnv("FAKE_CODEX_RETRY_SCALE", "0.001");
       await create({ environment: { ...signedIn(), FAKE_CODEX_MISSING_BEARER: "1", FAKE_CODEX_STATE: join(scratch, "launches") } });
@@ -3349,6 +3519,13 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     expect(codexUserError("You've hit your usage limit.", "own")).not.toContain("resets at");
     expect(codexUserError("Quota reached.", "own", "usageLimitExceeded")).toContain(CODEX_USAGE_LIMIT_REACHED);
     expect(codexUserError(plus, "other")).toBe(plus);
+    expect(codexLimitFacts(plus, "own"), "the account's limit, with its reset on Codex's own sign-in").toEqual({ limit: "engine", limitResetsAt: expect.any(Number) });
+    expect(codexLimitFacts(plus, "plan")).toEqual({ limit: "engine" });
+    expect(codexLimitFacts("You've hit your usage limit for gpt-6.1-sol. Switch to another model now, or try again at Oct 17th, 2026 5:23 PM.", "own"))
+      .toEqual({ limit: "model", limitResetsAt: new Date(2026, 9, 17, 17, 23, 0).getTime() });
+    expect(codexLimitFacts("Quota reached.", "own", "usageLimitExceeded")).toEqual({ limit: "engine" });
+    expect(codexLimitFacts(`${"x".repeat(40)}subscription_sharing_usage_limit_exceeded`, "plan")).toEqual({ limit: "engine" });
+    expect(codexLimitFacts("stream disconnected before completion", "own")).toEqual({});
     const noBearer = "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses";
     expect(codexUserError(noBearer, "own")).toBe(codexNotSignedIn());
     expect(codexUserError(noBearer, "other")).toBe(noBearer);
@@ -3445,6 +3622,26 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     expect(recorder.events.some((e) => e.type === "content.delta" && e.streamKind === "assistant_text")).toBe(true);
     expect(recorder.events.some((e) => e.type === "turn.retrying")).toBe(false);
   }, 20_000);
+
+  it.each(["timeout", "error"])("does not replay a tool completed before a turn/start %s", async (reply) => {
+    const actions = join(scratch, "early-tool-actions.jsonl");
+    const rpcTimeout = codexProcess.codexRpcTimeoutMs;
+    vi.spyOn(codexProcess, "codexRpcTimeoutMs").mockImplementation((method) => method === "turn/start" ? 300 : rpcTimeout(method));
+    vi.stubEnv("FAKE_CODEX_ACTION_LOG", actions);
+    vi.stubEnv("FAKE_CODEX_RETRY_SCALE", "0.001");
+    await create({ mode: `early-tool-${reply}`, environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex") } });
+    await instance.adapter.sendTurn({ threadId: `t-early-tool-${reply}`, text: "record one action" });
+    const done = await recorder.until((event) => event.type === "turn.completed");
+
+    expect(readFileSync(actions, "utf8").trim().split("\n")).toHaveLength(1);
+    expect(done).toMatchObject({ ok: false, stopReason: "rpc_error" });
+    expect(recorder.events.filter((event) => event.type === "turn.retrying")).toHaveLength(0);
+    expect(recorder.events.filter((event) => event.type === "turn.completed")).toHaveLength(1);
+    expect(recorder.events.filter((event) => event.type === "runtime.error")).toEqual([
+      expect.objectContaining({ message: expect.stringContaining("A tool action may have run. Check its effects before trying again.") }),
+    ]);
+    expect(recorder.events.filter((event) => (event.type === "item.started" || event.type === "item.completed") && event.itemType === "tool")).toHaveLength(0);
+  });
 
   it("retries a transient app-server crash before the turn starts", async () => {
     process.env.FAKE_CODEX_LAUNCH_CRASHES = "1";

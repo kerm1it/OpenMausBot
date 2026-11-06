@@ -459,3 +459,25 @@ test("the session's teams become saved places, named and roled as the Admin says
   const saved = { environments: [{ id: "s", kind: "remote", name: "Acme (saved by hand)", origin: TEAM }], activeId: "s" };
   assert.deepEqual(env.reconcileTeams(saved, [acme()], makeId, home).state.environments, [{ id: "s", kind: "remote", name: "Acme", origin: TEAM, team: { id: "team-acme", role: "admin" } }], "a server saved by hand at the team's address becomes the team's entry");
 });
+
+test("with My Cloud as home, the menu still folds its status line into the name where menus show no sublabels", async () => {
+  const state = { activeId: "c", environments: [{ id: "c", kind: "remote", name: "My Cloud", origin: "https://me.example" }] };
+  for (const [platform, folded] of [["linux", true], ["win32", true], ["darwin", false]]) {
+    const options = await env.placesMenuOptions({ homeOrigin: "https://me.example", cloud: state.environments[0], platform, localBots: async () => { throw new Error("home lists no local bots"); } });
+    const [item] = env.workspaceMenuTemplate(state, { onSwitch() {}, sublabels: { c: "Always on" }, ...options });
+    assert.equal(item.label, folded ? "My Cloud · Always on" : "My Cloud", platform);
+  }
+});
+
+test("a Cloud or team joining the list leaves this computer's page the active place, as the window still shows it", () => {
+  const HOME = "https://home.example.test";
+  const saved = { environments: [{ id: "h", kind: "remote", name: "My Cloud", origin: HOME, home: true }], activeId: "local" };
+  const teams = env.reconcileTeams(saved, [{ id: "team-a", role: "member", name: "Acme", machine: { origin: "https://acme.example.test" } }], () => "t", HOME);
+  assert.equal(teams.state.environments.length, 2);
+  assert.equal(teams.state.activeId, "local");
+  const clouds = env.reconcileOwnClouds(saved, [{ id: "c2", role: "owner", name: "Second", origin: "https://second.example.test" }], () => "c", HOME);
+  assert.equal(clouds.environments.length, 2);
+  assert.equal(clouds.activeId, "local");
+  const gone = env.reconcileTeams({ environments: [{ id: "t", kind: "remote", name: "Acme", origin: "https://acme.example.test", team: { id: "team-a", role: "member" } }, saved.environments[0]], activeId: "t" }, [], () => "x", HOME);
+  assert.equal(gone.state.activeId, "h", "a place on screen that's gone still falls back to My Cloud");
+});

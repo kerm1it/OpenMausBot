@@ -2,8 +2,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionImportRequest, ExtensionPreparationProgress } from "../shared/extension-import.ts";
 import { extensionImportFromLink, isExtensionImportRequest } from "../shared/extension-link.mjs";
-import { defaultCursorSession } from "./cursor-session.ts";
-import { fetchGrokTemplateCard } from "./team-library.ts";
+import { grokExportBots, grokBotRecipe } from "../shared/grok-export-input.ts";
 import { fetchGrokPlugin, grokPluginSource, prepareGrokRecipe } from "./extension-grok.ts";
 import { checkPluginExtension, prepareOpenMausBot, readResourceJson } from "./extension-prepare.ts";
 import { downloadResource, extensionError, fetchExtensionSource, marketSource, resourcePath, type ExtensionSource } from "./extension-source.ts";
@@ -29,6 +28,11 @@ export function parseExtensionInput(input: unknown): ExtensionImportRequest | Re
 }
 
 export async function resolveExtension(input: unknown, stage: string, deps: ResolveExtensionDeps = {}) {
+  const exported = grokExportBots(input);
+  if (exported) {
+    if (exported.length !== 1) extensionError("Select one Bot from this Grok export before importing it");
+    input = JSON.stringify(grokBotRecipe(exported[0]!));
+  }
   const request = parseExtensionInput(input);
   if (!isExtensionImportRequest(request) && !(Object.keys(request).length === 1 && "url" in request)) {
     const raw = request as Record<string, unknown>;
@@ -55,7 +59,7 @@ export async function resolveExtension(input: unknown, stage: string, deps: Reso
   catch (error) {
     if (!typed.id || typed.source !== "grok-bot" || (error as {status?:number}).status !== 404) throw error;
     if (typed.type === "bot") {
-      const recipe = deps.fetchGrokBot ? await deps.fetchGrokBot(typed.id, deps.signal) : await defaultCursorSession().fetchRawTemplate(await fetchGrokTemplateCard(`https://x.ai/bot/${typed.id}`, deps.fetcher), deps.signal);
+      const recipe = deps.fetchGrokBot ? await deps.fetchGrokBot(typed.id, deps.signal) : extensionError("This Grok bot is not in the extension market. Import its recipe or exported JSON file instead.", 404);
       deps.signal?.throwIfAborted();
       mkdirSync(stage, { recursive: true });
       writeFileSync(join(stage, "recipe.json"), JSON.stringify(recipe));

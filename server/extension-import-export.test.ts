@@ -25,7 +25,7 @@ it("cancelling a tar-backed template removes its archive and extracted preview",
   writeFileSync(join(directory, "recipe.json"), JSON.stringify({ name: "Archive bot", instructions: "Do useful work." }));
   const stream = tar.c({ cwd: directory, gzip: true }, ["recipe.json"]);
   const chunks: Uint8Array[] = []; for await (const chunk of stream) chunks.push(chunk);
-  const host = createExtensionHost({ dataDir: root, plugins, createBot: async () => ({ botId: "created" }) });
+  const host = createExtensionHost({ dataDir: root, plugins, importBot: async () => ({ botId: "created" }) });
   const preview = await host.prepare(undefined, Buffer.concat(chunks));
   host.discard(preview.id);
   expect(readdirSync(join(root, "extension-imports"))).toEqual([]);

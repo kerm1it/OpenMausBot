@@ -19,7 +19,7 @@ vi.mock("@/state/store", async (original) => ({
   ...await original<typeof import("@/state/store")>(), api: fixture.api,
   useStore: () => ({ dispatch: fixture.dispatch, refreshInstances: fixture.refreshInstances, refreshModels: fixture.refreshModels }),
 }));
-vi.mock("@/lib/analytics", () => ({ track: fixture.track }));
+
 const { DeviceSignIn } = await import("./DeviceSignIn");
 const { AddAccount } = await import("./EngineAccounts");
 
@@ -63,7 +63,7 @@ it("starts only on request, opens the official page, and refreshes models after 
   expect(fixture.api).toHaveBeenCalledWith("/api/instances/chatgpt/auth/status?flowId=flow-one", expect.objectContaining({ signal: expect.any(AbortSignal) }));
   expect(fixture.refreshInstances).toHaveBeenCalledOnce();
   expect(fixture.refreshModels).toHaveBeenCalledWith("chatgpt");
-  expect(fixture.track.mock.calls).toEqual([["engine_signed_in", { engine: "codex", method: "browser" }]]);
+  expect(fixture.track).not.toHaveBeenCalled();
   cleanup?.();
 });
 

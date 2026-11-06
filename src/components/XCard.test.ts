@@ -11,7 +11,7 @@ const fixture = vi.hoisted(() => {
   return { api: vi.fn(), dispatch: vi.fn(), track: vi.fn(), config: {} as Record<string, unknown> };
 });
 vi.mock("@/state/store", () => ({ api: fixture.api, useStore: () => ({ state: { config: fixture.config }, dispatch: fixture.dispatch }) }));
-vi.mock("@/lib/analytics", () => ({ track: fixture.track }));
+
 
 import { XCard } from "./XCard";
 
@@ -136,7 +136,7 @@ describe("the X card in Apps", () => {
     expect(text()).toContain("Using your treg key");
     expect(text()).toContain("treg is working ✓ Balance: $4.25.");
     expect(field()).toBeNull();
-    expect(fixture.track).toHaveBeenCalledWith("api_key_saved", { provider: "treg", via: "apps", result: "ok" });
+    expect(fixture.track).not.toHaveBeenCalled();
     expect(onConnection).toHaveBeenLastCalledWith(true);
   });
 
@@ -172,7 +172,7 @@ describe("the X card in Apps", () => {
     expect(server.calls).toContainEqual(["PUT", "/api/config", { treg: { key: "" } }]);
     expect(card().dataset.xState).toBe("included");
     expect(text()).toContain("Included with your plan");
-    expect(fixture.track).toHaveBeenCalledWith("api_key_removed", { provider: "treg", via: "apps" });
+    expect(fixture.track).not.toHaveBeenCalled();
   });
 
   it("removing the only key leaves no X, and the card asks for a key again", async () => {

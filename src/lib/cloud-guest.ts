@@ -13,7 +13,8 @@ export function canWriteIn(state: SessionState | null, threadId: string): boolea
   return state.openedThreads?.includes(threadId) === true;
 }
 
-export function useCanWriteIn(threadId: string): boolean | null {
+/** False too for a team bot this person can only view. */
+export function useCanWriteIn(threadId: string, level?: string): boolean | null {
   const [allowed, setAllowed] = useState<boolean | null>(null);
   useEffect(() => {
     let alive = true;
@@ -26,7 +27,7 @@ export function useCanWriteIn(threadId: string): boolean | null {
       alive = false;
     };
   }, [threadId]);
-  return allowed;
+  return level === "view" ? false : allowed;
 }
 
 let reactor = "user";
@@ -40,6 +41,11 @@ function subscribeReactor(listener: () => void): () => void {
     for (const notify of reactorListeners) notify();
   });
   return () => reactorListeners.delete(listener);
+}
+
+/** The same key outside a render's hooks: "user" until the server's answer arrives, which useReactor asks for. */
+export function currentReactor(): string {
+  return reactor;
 }
 
 /** Whose reactions in the chat are this viewer's: "user" unless the server keys each person of a shared workspace. */

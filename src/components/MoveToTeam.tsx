@@ -63,7 +63,8 @@ export function useMoveToTeam({ blocked }: { blocked: (bot: Bot) => string | und
         <span>{t("teamMove.everyone", names)}</span>
         <span>{t("teamMove.goes", names)}</span>
         <span>{t("teamMove.private", names)}</span>
-        <span>{t("teamMove.stays", names)}</span>
+        <span>{t("teamMove.staysOnMyCloud", names)}</span>
+        <span data-team-move-final className="font-medium text-ink">{t("teamMove.noWayBack", names)}</span>
         {error && <span role="alert" className="text-danger">{error}</span>}
       </span>}
       confirmLabel={t("teamMove.confirm", names)}
@@ -82,7 +83,7 @@ export function MovedBotRows({ bots }: { bots: readonly Bot[] }) {
   return <div className="flex flex-col px-2 pb-1" data-moved-bots>
     {moved.map((bot) => <button key={bot.id} type="button" data-moved-bot={bot.id} disabled={!page?.openTeam}
       onClick={() => { void page?.openTeam?.(bot.movedTo!.team.id).catch(() => {}); }}
-      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] text-ink-secondary enabled:hover:bg-raised/70 enabled:hover:text-ink">
+      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] text-ink-secondary enabled:hover:bg-menu-hover enabled:hover:text-ink">
       <ArrowRightLeft size={14} aria-hidden="true" className="shrink-0" />
       <span className="truncate" dir="auto">{t("teamMove.pointer", { bot: bot.name, team: bot.movedTo!.team.name })}</span>
     </button>)}
@@ -102,7 +103,7 @@ export function TeamMoveLine({ move, onChange }: { move: TeamMoveView; onChange(
   };
   const close = () => { void page?.dismiss("team-move").then(() => onChange(null)).catch(() => {}); };
   const link = "font-medium text-accent-text underline underline-offset-2 hover:text-ink";
-  return <div role="status" data-cloud-send-strip={line.kind} data-team-move-line={move.phase} className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-b border-hairline/40 bg-panel px-3 py-1.5 text-[12.5px] text-ink-secondary">
+  return <div role="status" data-cloud-send-strip={line.kind} data-team-move-line={move.phase} className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 border-b border-hairline/40 bg-panel px-3 py-1.5 text-[13px] text-ink-secondary">
     {line.kind === "sending" || busy ? <Loader2 size={14} aria-hidden="true" className="animate-spin" /> : <ArrowRightLeft size={14} aria-hidden="true" />}
     <span dir="auto" data-cloud-send-strip-line>{line.text}</span>
     {line.kind === "done" && page?.openTeam && <>

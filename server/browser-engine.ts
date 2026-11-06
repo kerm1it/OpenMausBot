@@ -9,7 +9,9 @@ import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR } from "./config.ts";
 import { browserBundlePaths } from "./browser-bundle-release.ts";
 import { browserProcessesRunning, browserProcessTree, releaseBrowserProfile, stopBrowserProcesses } from "./browser-processes.ts";
-import { BROWSER_VIEWPORT_ARGS, browserRuntimeEnv, ownsBrowserViewport } from "./browser-runtime.ts";
+import { BROWSER_VIEWPORT, viewportArgs, type PageSize } from "./browser-page-size.ts";
+import { browserRuntimeEnv, ownsBrowserViewport } from "./browser-runtime.ts";
+import { spawnBotWork } from "./oom-score.ts";
 import { SIGN_IN_PROMPT } from "./system-prompt.ts";
 import { gateChromeSettings } from "./browser/egress/gate.ts";
 import {
@@ -84,7 +86,7 @@ function runBrowserCommand(binaryPath: string, env: NodeJS.ProcessEnv, args: str
     let output = "";
     const finish = (ok: boolean) => { if (!settled) { settled = true; done({ ok, output }); } };
     let child: ReturnType<typeof spawn>;
-    try { child = spawn(binaryPath, args, { env, stdio: capture ? ["ignore", "pipe", "ignore"] : "ignore", windowsHide: true }); }
+    try { child = spawnBotWork(() => spawn(binaryPath, args, { env, stdio: capture ? ["ignore", "pipe", "ignore"] : "ignore", windowsHide: true })); }
     catch { return finish(false); }
     let exited = false;
     let killTimer: NodeJS.Timeout | undefined;
@@ -166,7 +168,7 @@ async function closeOnce(binaryPath: string, env: NodeJS.ProcessEnv, session: st
 export async function startBrowserSession(binaryPath: string, env: NodeJS.ProcessEnv, timeoutMs = 30_000): Promise<boolean> {
   const session = env.AGENT_BROWSER_SESSION;
   if (!session || !/^[A-Za-z0-9_.-]{1,96}$/.test(session)) return false;
-  await releaseBrowserProfile(env.AGENT_BROWSER_PROFILE);
+  await releaseBrowserProfile(env.AGENT_BROWSER_PROFILE, binaryPath, env.AGENT_BROWSER_EXECUTABLE_PATH);
   return (await runBrowserCommand(binaryPath, env, ["open", "--json", "--no-webmcp"], Date.now() + timeoutMs)).ok;
 }
 
@@ -237,7 +239,7 @@ export async function prepareBrowserSessionState(
   const env = browserRuntimeEnv({ ...options.env, AGENT_BROWSER_SESSION: session, AGENT_BROWSER_HEADLESS: "1" });
   ensureManagedBrowserConfig(env);
   if (options.persistent === false) return;
-  await releaseBrowserProfile(env.AGENT_BROWSER_PROFILE);
+  await releaseBrowserProfile(env.AGENT_BROWSER_PROFILE, binaryPath, env.AGENT_BROWSER_EXECUTABLE_PATH);
   check();
   const directory = browserSessionsDirectory(env);
   const key = join(directory, session);
@@ -472,7 +474,7 @@ export function ensureChrome(binaryPath: string, options: { withDeps?: boolean; 
   }
   const args = ["install", ...(options.withDeps ? ["--with-deps"] : [])];
   return new Promise((done, fail) => {
-    const child = spawn(binaryPath, args, { env: options.env ?? process.env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const child = spawnBotWork(() => spawn(binaryPath, args, { env: options.env ?? process.env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true }));
     let output = "";
     const record = (chunk: Buffer) => {
       output += String(chunk);
@@ -627,11 +629,11 @@ export function agentBrowserIntegration(input: {
   return { command: input.binaryPath, args: ["mcp", "--tools", "core", "--no-webmcp"], env };
 }
 
-export function setBrowserViewport(binaryPath: string, env: NodeJS.ProcessEnv, timeoutMs = 30_000): Promise<boolean> {
+export function setBrowserViewport(binaryPath: string, env: NodeJS.ProcessEnv, size: PageSize = BROWSER_VIEWPORT, timeoutMs = 30_000): Promise<boolean> {
   if (!ownsBrowserViewport(env)) return Promise.resolve(true);
   return new Promise((settle) => {
     let child: ReturnType<typeof spawn>;
-    try { child = spawn(binaryPath, [...BROWSER_VIEWPORT_ARGS, "--json", "--no-webmcp"], { env: browserRuntimeEnv(env), stdio: ["ignore", "pipe", "ignore"], windowsHide: true }); }
+    try { child = spawnBotWork(() => spawn(binaryPath, [...viewportArgs(size), "--json", "--no-webmcp"], { env: browserRuntimeEnv(env), stdio: ["ignore", "pipe", "ignore"], windowsHide: true })); }
     catch { settle(false); return; }
     let output = "";
     let settled = false;

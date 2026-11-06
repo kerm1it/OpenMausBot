@@ -1,10 +1,11 @@
 // These tests inject the CLI runner, so they never read or change the developer's real credentials.
 import { describe, expect, it } from "vitest";
 
-import { claudeSignedIn } from "./claude-auth-status.ts";
+import { claudeAuthStatus, claudeSignedIn } from "./claude-auth-status.ts";
 import { claudeAuthFailure } from "./claude-auth-recovery.ts";
-import { claudeResultError, claudeVersionTooOld } from "./claude.ts";
-import { claudeApiErrorMessage, claudeEngineReset, claudeLimitMessage, claudeLimitRefusal, claudeUsageLimit } from "./claude-limits.ts";
+import { claudeVersionTooOld } from "./claude-limits.ts";
+import { claudeResultError } from "./claude.ts";
+import { claudeApiErrorMessage, claudeEngineReset, claudeLimitFacts, claudeLimitMessage, claudeLimitRefusal, claudeUsageLimit } from "./claude-limits.ts";
 import { classifyError } from "./retry.ts";
 
 describe("claudeSignedIn", () => {
@@ -27,16 +28,16 @@ describe("claudeSignedIn", () => {
     expect(await claudeSignedIn("claude", {}, run)).toBe(false);
   });
 
-  it("fails closed when the command has no valid status", async () => {
-    const failed = ((_cli, _args, _options, callback) => {
-      callback(new Error("auth status unavailable"), "");
-    }) satisfies typeof import("../procs.ts").execCli;
-    const malformed = ((_cli, _args, _options, callback) => {
-      callback(null, "not json");
+  it("leaves sign-in unknown, not signed out, when the command gives no readable status", async () => {
+    const answering = (error: Error | null, stdout: string) => ((_cli, _args, _options, callback) => {
+      callback(error, stdout);
     }) satisfies typeof import("../procs.ts").execCli;
 
-    expect(await claudeSignedIn("claude", {}, failed)).toBe(false);
-    expect(await claudeSignedIn("claude", {}, malformed)).toBe(false);
+    for (const [error, stdout] of [[new Error("auth status unavailable"), ""], [null, "not json"], [null, "null"], [null, "{}"], [null, '{"loggedIn":"yes"}']] as const) {
+      expect(await claudeAuthStatus("claude", {}, answering(error, stdout)), stdout).toEqual({});
+      expect(await claudeSignedIn("claude", {}, answering(error, stdout)), stdout).toBe(false);
+    }
+    expect(await claudeAuthStatus("claude", {}, answering(new Error("exit code 1"), '{"loggedIn":false}'))).toEqual({ authenticated: false });
   });
 });
 
@@ -107,6 +108,14 @@ describe("Claude usage limits", () => {
     expect(claudeEngineReset(claudeLimitRefusal(WEEKLY))).toEqual({ limitResetsAt: 1791795600_000 });
     expect(claudeEngineReset(claudeLimitRefusal({ ...WEEKLY, rateLimitType: "seven_day_overage_included" }))).toEqual({ limitResetsAt: 1791795600_000 });
     expect(claudeEngineReset(null)).toBeUndefined();
+  });
+
+  it("names what a limit refuses for the runtime error: the model's credits, its own window with that reset, or the account", () => {
+    expect(claudeLimitFacts(claudeLimitRefusal(OUT_OF_CREDITS)), "no countdown to the billing period's end").toEqual({ limit: "credits" });
+    expect(claudeLimitFacts(claudeLimitRefusal({ ...WEEKLY, rateLimitType: "seven_day_opus" }))).toEqual({ limit: "model", limitResetsAt: 1791795600_000 });
+    expect(claudeLimitFacts(claudeLimitRefusal(WEEKLY))).toEqual({ limit: "engine", limitResetsAt: 1791795600_000 });
+    expect(claudeLimitFacts(claudeLimitRefusal({ status: "rejected" }))).toEqual({ limit: "engine" });
+    expect(claudeLimitFacts(null)).toEqual({ limit: "engine" });
   });
 
   it("says a model's credits ran out, with no countdown to the billing reset", () => {

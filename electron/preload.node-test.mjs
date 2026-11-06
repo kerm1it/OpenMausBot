@@ -47,7 +47,6 @@ const subscriberCount = (channel) => listeners.get(channel)?.size ?? 0;
 test("exposes the full local-shell bridge on window.ogb", () => {
   assert.equal(exposed.name, "ogb");
   assert.equal(typeof exposed.api, "object");
-  // The settings channel is local-shell only, and this page is local (no --omb-local-origin in argv here).
   assert.equal(typeof exposed.api.onOpenAppSettings, "function");
 });
 
@@ -74,6 +73,15 @@ test("browser control forwards a separate per-device capability, not the cloud g
   ]);
 });
 
+test("the talk bridge asks main over its own channels with only what it understands", async () => {
+  const before = invocations.length;
+  await exposed.api.talkShortcut.state();
+  await exposed.api.talkShortcut.set({ enabled: false, key: "ctrl-shift-space", extra: "x" });
+  await exposed.api.callActive(true);
+  await exposed.api.callActive("yes");
+  assert.deepEqual(invocations.slice(before), [["talk-shortcut:state"], ["talk-shortcut:set", { enabled: false, key: "ctrl-shift-space" }], ["call:active", true], ["call:active", false]]);
+});
+
 test("account prepare asks for the secure address over its own channel and sends nothing from the page", async () => {
   const before = invocations.length;
   await exposed.api.companionAccount.prepare({ endpoint: "https://evil.example.test" });
@@ -96,14 +104,14 @@ test("onOpenAppSettings subscribes to the exact app:open-settings channel, forwa
   assert.equal(cbCalls.length, 2);
 });
 
-test("an organisation action arriving before React subscriptions is delivered exactly once after mount", async () => {
-  emit("app:open-settings", "organization");
+test("a workspace action arriving before React subscriptions is delivered exactly once after mount", async () => {
+  emit("app:open-settings", "workspaces");
   const calls = [];
   const unsubscribe = exposed.api.onOpenAppSettings(section => calls.push(["app", section]));
   const unsubscribePanel = exposed.api.onOpenAppSettings(section => calls.push(["panel", section]));
   assert.deepEqual(calls, []);
   await Promise.resolve();
-  assert.deepEqual(calls, [["app", "organization"], ["panel", "organization"]]);
+  assert.deepEqual(calls, [["app", "workspaces"], ["panel", "workspaces"]]);
   unsubscribe(); unsubscribePanel();
   const late = exposed.api.onOpenAppSettings(section => calls.push(["late", section]));
   await Promise.resolve();
@@ -112,21 +120,21 @@ test("an organisation action arriving before React subscriptions is delivered ex
 });
 
 test("a transient subscription cannot consume a cold-start action before the actual mount", async () => {
-  emit("app:open-settings", "organization");
+  emit("app:open-settings", "workspaces");
   const calls = [];
   exposed.api.onOpenAppSettings(section => calls.push(section))();
   await Promise.resolve();
   assert.deepEqual(calls, []);
   const unsubscribe = exposed.api.onOpenAppSettings(section => calls.push(section));
   await Promise.resolve();
-  assert.deepEqual(calls, ["organization"]);
+  assert.deepEqual(calls, ["workspaces"]);
   unsubscribe();
 });
 
-test("native Settings requests accept only the fixed organisation section, Cloud link and plain Cloud settings", () => {
+test("native Settings requests accept only the fixed workspace section", () => {
   const calls = [];
   const unsubscribe = exposed.api.onOpenAppSettings(section => calls.push(section));
-  emit("app:open-settings", "organization");
+  emit("app:open-settings", "workspaces");
   emit("app:open-settings", "cloud");
   emit("app:open-settings", "cloud-settings");
   emit("app:open-settings", "https://other.example");
@@ -134,21 +142,21 @@ test("native Settings requests accept only the fixed organisation section, Cloud
   emit("app:open-settings", "openmausbot://cloud");
   emit("app:open-settings", { section: "organization", url: "https://other.example" });
   emit("app:open-settings", ["cloud"]);
-  assert.deepEqual(calls, ["organization", "cloud", "cloud-settings", undefined, undefined, undefined, undefined, undefined]);
+  assert.deepEqual(calls, ["workspaces", undefined, undefined, undefined, undefined, undefined, undefined, undefined]);
   unsubscribe();
 });
 
-test("a Cloud link arriving before React subscriptions is delivered exactly once after mount", async () => {
+test("a workspace link arriving before React subscriptions is delivered exactly once after mount", async () => {
   emit("app:open-settings", "https://other.example");
-  emit("app:open-settings", "cloud");
+  emit("app:open-settings", "workspaces");
   const calls = [];
   const unsubscribe = exposed.api.onOpenAppSettings(section => calls.push(section));
   await Promise.resolve();
-  assert.deepEqual(calls, ["cloud"]);
+  assert.deepEqual(calls, ["workspaces"]);
   unsubscribe();
   const late = exposed.api.onOpenAppSettings(section => calls.push(section));
   await Promise.resolve();
-  assert.deepEqual(calls, ["cloud"], "later subscriptions must not reopen Settings");
+  assert.deepEqual(calls, ["workspaces"], "later subscriptions must not reopen Settings");
   late();
 });
 

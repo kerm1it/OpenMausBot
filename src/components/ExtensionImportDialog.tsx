@@ -7,6 +7,8 @@ import { prepareExtension, prepareExtensionFile, discardExtension, importExtensi
 import type { ExtensionInput } from "@/lib/extension-events";
 import type { ExtensionFilePreview, ExtensionImportOptions, ExtensionImportPreview, ExtensionImportResult, ExtensionPreparationProgress } from "../../shared/extension-import";
 import { ExtensionDialogShell, extensionButtonClass, extensionFieldClass } from "./ExtensionDialogShell";
+import { grokExportBots, grokBotRecipe } from "../../shared/grok-export-input";
+import type { GrokBot } from "../../shared/grok-import";
 
 function FileList({ files, previewId }: { files: ExtensionFilePreview[]; previewId: string }) {
   return <div className="max-h-60 overflow-y-auto rounded-lg border border-hairline p-3 text-[12px]">
@@ -28,6 +30,7 @@ export function ExtensionImportDialog({ initialInput, onClose, onImported }: {
   const { state } = useStore();
   const [input, setInput] = useState(typeof initialInput === "string" ? initialInput : "");
   const [preview, setPreview] = useState<ExtensionImportPreview | null>(null);
+  const [grokBots, setGrokBots] = useState<GrokBot[]>([]);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<ExtensionPreparationProgress>({ stage: "template" });
   const [elapsed, setElapsed] = useState(0);
@@ -58,6 +61,14 @@ export function ExtensionImportDialog({ initialInput, onClose, onImported }: {
     setBusy(true); setError(""); setProgress({ stage: "template" }); setElapsed(0);
     const controller = new AbortController(); request.current = controller;
     try {
+      const text = value instanceof File && !value.name.toLowerCase().endsWith(".zip") ? await value.text() : value;
+      const bots = grokExportBots(text);
+      if (bots && bots.length > 1) {
+        if (alive.current && current === generation.current) setGrokBots(bots);
+        return;
+      }
+      if (bots) value = JSON.stringify(grokBotRecipe(bots[0]!));
+      setGrokBots([]);
       const updateProgress = (next: ExtensionPreparationProgress) => { if (alive.current && current === generation.current) setProgress(next); };
       const result = value instanceof File ? await prepareExtensionFile(value, controller.signal, updateProgress) : await prepareExtension(value, controller.signal, updateProgress);
       if (!alive.current || current !== generation.current) { void discardExtension(result.id); return; }
@@ -91,6 +102,7 @@ export function ExtensionImportDialog({ initialInput, onClose, onImported }: {
     {!preview ? <div className="space-y-4">
       <p className="text-[13px] text-ink-secondary">{t("extension.inputHelp")}</p>
       <textarea className={`${extensionFieldClass} min-h-28`} aria-label={t("extension.source")} value={input} onChange={event => setInput(event.target.value)} placeholder="https://… / openmausbot://… / grokbot://…" disabled={busy} />
+      {grokBots.length > 0 && <div className="space-y-2"><p>{t("extension.chooseBot")}</p>{grokBots.map((bot, index) => <button key={index} className={extensionButtonClass} disabled={busy} onClick={() => void prepare(JSON.stringify(grokBotRecipe(bot)))}>{bot.name}</button>)}</div>}
       <div className="flex items-center gap-3"><button className={extensionButtonClass} disabled={busy || !input.trim()} onClick={() => void prepare(input)}>{busy ? t("extension.preparing") : t("extension.preview")}</button>
         <label className="cursor-pointer text-[13px] text-accent">{t("extension.chooseFile")}<input className="sr-only" type="file" accept=".zip,.json" disabled={busy} onChange={event => { const file = event.target.files?.[0]; if (file) void prepare(file); }} /></label></div>
       {busy && <div role="status" aria-live="polite" className="space-y-2 rounded-lg bg-control p-3 text-[13px]">

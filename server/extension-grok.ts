@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import type { ExtensionPreparationProgress } from "../shared/extension-import.ts";
 import { parseDocument } from "yaml";
 import { botTemplateProfileSchema, botTemplateRoutineSchema } from "../shared/bot-template-format.ts";
-import { grokExportFromRecipe, parseGrokExport } from "../shared/grok-import.ts";
+import { grokExportFromRecipe, parseGrokExport } from "../shared/grok-recipe.ts";
 import { isSkillName, parseSkillMd, yamlFrontmatterValue } from "../shared/skill-md.ts";
 import { cleanSchedule } from "./routine-schedules.ts";
 import type { PreparedBotTemplate } from "./extension-model.ts";
@@ -123,6 +123,14 @@ export async function prepareGrokRecipe(raw: unknown, root: string, source: stri
     ...(legacy.color ? { color: legacy.color } : {}),
   }, requirements: legacy.plugins.map(plugin => ({ kind: "app", name: plugin.name, description: plugin.note })) });
   const draft: PreparedBotTemplate = { root, source, profile, skills: [], memory: [], routines: [], pluginReferences: [], warnings: [] };
+  for (const app of list(recipe.apps)) {
+    if (!record(app)) continue;
+    const name = text(app.name) ?? "MCP server";
+    const url = text(app.mcpUrl, app.mcp_url);
+    draft.profile.requirements ??= [];
+    draft.profile.requirements.push({ kind: url ? "mcp-server" : "app", name, description: url });
+    draft.warnings.push(`${name} needs to be connected in Apps or MCP settings. Credentials are not imported.`);
+  }
   const rawSkills = list(recipe.skills).length ? list(recipe.skills) : legacy.skills;
   onProgress?.({ stage: "skills", completed: 0, total: rawSkills.length });
   for (const input of rawSkills) {

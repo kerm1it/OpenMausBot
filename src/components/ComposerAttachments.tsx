@@ -5,6 +5,8 @@ import {
   attachmentImageUrl,
   intakeFiles,
   formatSize,
+  imageBytesLeft,
+  imageSlotsLeft,
   pasteSummary,
   type Attachment,
   type PasteAttachment,
@@ -45,8 +47,11 @@ export function ComposerAttachments({
   const [preview, setPreview] = useState<PreviewImage | null>(null);
   // dragenter/dragleave fire once per element crossed, so the overlay tracks depth.
   const depth = useRef(0);
-  const callbacks = useRef({ onAdd, onNotice, onPendingChange, allowImages, uploadImage });
-  callbacks.current = { onAdd, onNotice, onPendingChange, allowImages, uploadImage };
+  // A drop past the images the message can still take is left out with a notice.
+  const imageSlots = imageSlotsLeft(items);
+  const imageBytes = imageBytesLeft(items);
+  const callbacks = useRef({ onAdd, onNotice, onPendingChange, allowImages, imageSlots, imageBytes, uploadImage });
+  callbacks.current = { onAdd, onNotice, onPendingChange, allowImages, imageSlots, imageBytes, uploadImage };
   const pendingDrops = useRef(new Set<symbol>());
 
   useEffect(() => {
@@ -80,6 +85,8 @@ export function ComposerAttachments({
           allowImages: callbacks.current.allowImages,
           getPath: pathForFile,
           uploadImage: callbacks.current.uploadImage,
+          imageSlots: callbacks.current.imageSlots,
+          imageBytes: callbacks.current.imageBytes,
         });
         if (attachments.length) callbacks.current.onAdd(attachments);
         if (message) callbacks.current.onNotice(message);
@@ -141,16 +148,16 @@ export function ComposerAttachments({
                 onRemove={() => onRemove(a.id)}
               >
                 <div className="relative h-[76px] overflow-hidden">
-                  <pre className="whitespace-pre-wrap break-words font-mono text-[10.5px] leading-[1.45] text-ink-secondary">
+                  <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-[1.45] text-ink-secondary">
                     {a.text.slice(0, 400)}
                   </pre>
                   <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-b from-transparent to-raised" />
                 </div>
-                <div className="mt-1 text-[10.5px] text-ink-tertiary">{pasteSummary(a)}</div>
+                <div className="mt-1 text-[11px] text-ink-tertiary">{pasteSummary(a)}</div>
                 <button
                   type="button"
                   onClick={() => onDisplayInChatBox(a)}
-                  className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-accent/25 bg-accent/5 px-2 py-1.5 text-[10.5px] font-medium text-accent-text transition-colors hover:border-accent/50 hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/60"
+                  className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-accent/25 bg-accent/5 px-2 py-1.5 text-[11px] font-medium text-accent-text transition-colors hover:border-accent/50 hover:bg-accent/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/60"
                   aria-label="Display pasted text in chat box"
                   title="Display in chat box"
                 >
@@ -185,7 +192,7 @@ export function ComposerAttachments({
                     </span>
                   )}
                 </button>
-                <div className="mt-1 truncate text-[10.5px] text-ink-tertiary">
+                <div className="mt-1 truncate text-[11px] text-ink-tertiary">
                   {a.uploading ? "Uploading…" : formatSize(a.size)}
                 </div>
               </Chip>
@@ -195,7 +202,7 @@ export function ComposerAttachments({
                   <FileIcon size={16} className="shrink-0 text-ink-secondary" />
                   <div className="min-w-0">
                     <div className="truncate text-[12px] text-ink">{a.name}</div>
-                    <div className="text-[10.5px] text-ink-tertiary">{formatSize(a.size)}</div>
+                    <div className="text-[11px] text-ink-tertiary">{formatSize(a.size)}</div>
                   </div>
                 </div>
               </Chip>
@@ -231,7 +238,7 @@ function Chip({
       {children}
       <div className="mt-1 flex items-center gap-1">
         <Icon size={11} className="text-ink-tertiary" />
-        <span className="rounded border border-hairline/60 px-1 py-px text-[9.5px] font-medium tracking-wide text-ink-secondary">
+        <span className="rounded border border-hairline/60 px-1 py-px text-[10px] font-medium tracking-wide text-ink-secondary">
           {label}
         </span>
       </div>

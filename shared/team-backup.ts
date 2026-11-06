@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { mascotFaceColorSchema } from "./bot-avatar.ts";
 
 import { CONNECTOR_SLUG_PATTERN, CONNECTOR_TOOL_NAME_PATTERN, MAUS_COLOR_NAMES } from "./wire.ts";
 import { parseToolScope, type ToolScope } from "./tool-scope.ts";
@@ -30,11 +31,13 @@ const task = z.object({
   // Travels only when the first message already named this task, so a
   // restore cannot re-arm one generated title on a row that used it.
   titleFromFirstMessage: z.literal(true).optional(),
+  /** Work from outside reached this conversation: it stays confined after a restore. */
+  outside: z.literal(true).optional(),
   openedBy: z.object({ botId: key, name, at: timestamp, kind: z.enum(["pair", "work"]).optional() }).optional(),
   closedBy: z.object({ botId: key, name, at: timestamp }).optional(),
   /** Only true travels; absence is unpinned. */
   pinned: z.literal(true).optional(),
-  /** A conversation's own turn ceiling. Absence keeps the group default. */
+  /** A conversation's own turn limit, in minutes without progress. Absence keeps the group default. */
   turnTimeoutMinutes: z.number().int().min(1).max(1_440).optional(),
   activeLeafId: key.nullable(),
   messages: z.array(message).max(100_000),
@@ -106,6 +109,7 @@ const backupSchema = z.object({
     color,
     mascotExpression: z.string().max(80).optional(),
     mascotBody: z.string().max(40).optional(),
+    mascotFaceColor: mascotFaceColorSchema.optional(),
     chiefOfStaff: z.boolean(),
     hidden: z.boolean(),
     playbooks: z.array(playbook).max(200),
@@ -182,7 +186,7 @@ export function parseTeamBackup(input: unknown): TeamBackup {
     if (routine.target === "room-goal") {
       if (routine.runOn !== "maus") throw new Error("Invalid backup: room goals must run on this computer");
       const group = backup.groups.find((candidate) => candidate.key === routine.groupId);
-      if (!groups.has(routine.groupId ?? "") || !group || group.dm || !group.memberIds.includes(routine.botId)) {
+      if (routine.groupId !== undefined && (!groups.has(routine.groupId) || !group || group.dm || !group.memberIds.includes(routine.botId))) {
         throw new Error("Invalid backup: unknown routine room or coordinator");
       }
     }

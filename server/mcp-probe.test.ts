@@ -1,11 +1,13 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MAX_REMOTE_MCP_BYTES } from "./mcp-http.ts";
-import { probeMcpServer } from "./mcp-probe.ts";
+import { probeMcpServer, SIGN_IN_CHECK_TOOL } from "./mcp-probe.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 import { startFakeHttpMcp } from "./testing/fake-http-mcp-server.ts";
 import { startFakeOAuth } from "./testing/fake-oauth-server.ts";
@@ -20,6 +22,12 @@ function whopSizedCatalog() {
   expect(bytes).toBeLessThan(1_300_000);
   return tools;
 }
+
+const spawned = vi.hoisted(() => [] as Array<{ opts: { cwd?: unknown; box?: unknown } }>);
+vi.mock("./procs.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./procs.ts")>();
+  return { ...actual, spawnCli: (...args: Parameters<typeof actual.spawnCli>) => { spawned.push({ opts: args[2] }); return actual.spawnCli(...args); } };
+});
 
 const fakeServer = fileURLToPath(new URL("./testing/fake-mcp-server.ts", import.meta.url));
 
@@ -53,13 +61,32 @@ describe("custom MCP probe", () => {
     });
   });
 
+  it("starts a command as a bot's turn would: in the box, its configured environment vouched for, and from the bot's folder when it is one bot's", async () => {
+    const server = { command: process.execPath, args: ["--experimental-strip-types", fakeServer], env: { OP_SERVICE_ACCOUNT_TOKEN: "ops_synthetic" }, enabled: false };
+    const opts = async (options: Parameters<typeof probeMcpServer>[3]) => {
+      spawned.length = 0;
+      await expect(probeMcpServer(server, 5_000, undefined, options)).resolves.toMatchObject({ ok: true });
+      return spawned[0]!.opts;
+    };
+    const anyBot = await opts({ asBot: {} });
+    expect(anyBot.box).toEqual({ allowEnv: ["OP_SERVICE_ACCOUNT_TOKEN"] });
+    expect(anyBot).not.toHaveProperty("cwd");
+    const folder = mkdtempSync(join(tmpdir(), "omb-probe-bot-"));
+    try {
+      expect(await opts({ asBot: { id: "ada", cwd: folder } })).toMatchObject({ cwd: folder, box: { botId: "ada", allowEnv: ["OP_SERVICE_ACCOUNT_TOKEN"] } });
+    } finally { await removeTempDir(folder); }
+    const plain = await opts({});
+    expect(plain).not.toHaveProperty("box");
+    expect(plain.cwd).toBe(process.cwd());
+  });
+
   it("times out a server that never completes initialization", async () => {
     await expect(probeMcpServer({
       command: process.execPath,
       args: ["--experimental-strip-types", fakeServer],
       env: { FAKE_MCP_MODE: "silent" },
       enabled: false,
-    }, 100)).resolves.toEqual({ ok: false, error: "The server did not answer in time." });
+    }, 100)).resolves.toEqual({ ok: false, error: "The server did not answer in time.", reason: "timeout" });
   });
 
   it("lists a command's Whop-sized catalog and says how many tools it has", async () => {
@@ -87,7 +114,7 @@ describe("custom MCP probe", () => {
     expect(probe.done).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     await untilReal(() => probe.done);
-    expect(probe.value).toEqual({ ok: false, error: "The server did not answer in time." });
+    expect(probe.value).toEqual({ ok: false, error: "The server did not answer in time.", reason: "timeout" });
   });
 
   it("stops a probe when its caller disconnects", async () => {
@@ -163,14 +190,37 @@ describe("remote MCP probe", () => {
     }
   });
 
-  it("reports the status of a refusal without echoing the header value", async () => {
+  it("says the keys were refused, with the status, on a 401 or 403 that offers no sign-in, never echoing a value", async () => {
     const fake = await startFakeHttpMcp({ requireHeader: { name: "Authorization", value: "Bearer right" } });
+    const gateway = await startFakeHttpMcp({ requireHeaders: { "CF-Access-Client-Id": "id", "CF-Access-Client-Secret": "right" } });
     try {
       const result = await probeMcpServer({ type: "http", url: fake.url, headers: { Authorization: "Bearer wrong-token" }, enabled: false }, 2_000);
-      expect(result).toEqual({ ok: false, error: "The server answered HTTP 401. Check the address and headers." });
+      expect(result).toEqual({ ok: false, error: "The server didn't accept the keys (HTTP 401). Check the header values.", reason: "keys", status: 401 });
       expect(JSON.stringify(result)).not.toContain("wrong-token");
+      const gated = await probeMcpServer({ type: "http", url: gateway.url, headers: { "CF-Access-Client-Id": "id", "CF-Access-Client-Secret": "wrong-secret" }, enabled: false }, 2_000);
+      expect(gated).toEqual({ ok: false, error: "The server didn't accept the keys (HTTP 403). Check the header values.", reason: "keys", status: 403 });
+      expect(JSON.stringify(gated)).not.toContain("wrong-secret");
     } finally {
       await fake.close();
+      await gateway.close();
+    }
+  });
+
+  it("says the keys were refused when a server answers an MCP unauthorized error with HTTP 200", async () => {
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => { body += chunk; }).on("end", () => {
+        const id = (JSON.parse(body) as { id?: unknown }).id;
+        res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32001, message: "Unauthorized: invalid API key" } }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`;
+      await expect(probeMcpServer({ type: "http", url, headers: { "X-Api-Key": "k" }, enabled: false }, 2_000))
+        .resolves.toEqual({ ok: false, error: "The server didn't accept the keys. Check the header values.", reason: "keys" });
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
     }
   });
 
@@ -188,11 +238,180 @@ describe("remote MCP probe", () => {
     }
   });
 
+  describe("a server that lists tools before anyone signs in", () => {
+    const buy = { name: "buy", description: "Buy something" };
+    const anonymous = (url: string) => ({ type: "http" as const, url, headers: {}, enabled: false });
+    const protectedResource = (issuer: string) => ({ resource: "unused", authorization_servers: [issuer] });
+    const openidOnly = (origin: string) => ({
+      issuer: origin,
+      authorization_endpoint: `${origin}/authorize`,
+      token_endpoint: `${origin}/token`,
+      code_challenge_methods_supported: ["S256"],
+    });
+
+    it("needs a sign-in when it refuses tool calls behind a protected-resource document, and runs no real tool", async () => {
+      const oauth = await startFakeOAuth();
+      const fake = await startFakeHttpMcp({ guard: "tools/call", acceptBearer: oauth.isValid, wwwAuthenticate: oauth.challenge, tools: [buy] });
+      try {
+        await expect(probeMcpServer(anonymous(fake.url), 8_000))
+          .resolves.toEqual({ ok: false, auth: "required", error: "This server needs you to sign in." });
+        expect(fake.refusedCalls).toEqual([{ name: SIGN_IN_CHECK_TOOL, arguments: {} }]);
+        expect(fake.calls).toEqual([]);
+      } finally {
+        await fake.close();
+        await oauth.close();
+      }
+    });
+
+    it("finds the protected-resource document without a www-authenticate hint", async () => {
+      const oauth = await startFakeOAuth();
+      const fake = await startFakeHttpMcp({
+        guard: "tools/call", acceptBearer: oauth.isValid, tools: [buy],
+        wellKnown: { "/.well-known/oauth-protected-resource/mcp": protectedResource(oauth.issuer) },
+      });
+      try {
+        await expect(probeMcpServer(anonymous(fake.url), 8_000)).resolves.toMatchObject({ ok: false, auth: "required" });
+      } finally {
+        await fake.close();
+        await oauth.close();
+      }
+    });
+
+    it("is not flagged at the call stage by a host that only serves openid-configuration", async () => {
+      const fake = await startFakeHttpMcp({
+        guard: "tools/call", acceptBearer: () => false, tools: [buy],
+        wellKnown: { "/.well-known/openid-configuration": openidOnly },
+      });
+      try {
+        await expect(probeMcpServer(anonymous(fake.url), 8_000)).resolves.toEqual({ ok: true, tools: [buy] });
+      } finally {
+        await fake.close();
+      }
+    });
+
+    it("still asks for a sign-in when that same host refuses initialize", async () => {
+      const fake = await startFakeHttpMcp({
+        guard: "every-request", acceptBearer: () => false, tools: [buy],
+        wellKnown: { "/.well-known/openid-configuration": openidOnly },
+      });
+      try {
+        await expect(probeMcpServer(anonymous(fake.url), 8_000)).resolves.toMatchObject({ ok: false, auth: "required" });
+      } finally {
+        await fake.close();
+      }
+    });
+
+    it("stays connected when sign-in is optional and the unknown tool is a JSON-RPC error", async () => {
+      const oauth = await startFakeOAuth();
+      const fake = await startFakeHttpMcp({
+        tools: [buy],
+        wellKnown: { "/.well-known/oauth-protected-resource/mcp": protectedResource(oauth.issuer) },
+        callError: () => ({ code: -32602, message: `Tool ${SIGN_IN_CHECK_TOOL} not found` }),
+      });
+      try {
+        await expect(probeMcpServer(anonymous(fake.url), 8_000)).resolves.toEqual({ ok: true, tools: [buy] });
+      } finally {
+        await fake.close();
+        await oauth.close();
+      }
+    });
+
+    it.each([
+      ["a Bearer", { Authorization: "Bearer valid" }],
+      ["an API key", { "X-Api-Key": "k" }],
+    ])("sends no check and looks up no sign-in when the probe carries %s", async (_label, headers) => {
+      const oauth = await startFakeOAuth();
+      const fake = await startFakeHttpMcp({
+        guard: "tools/call", acceptBearer: (authorization) => authorization === "Bearer valid", wwwAuthenticate: oauth.challenge, tools: [buy],
+      });
+      try {
+        await expect(probeMcpServer({ type: "http", url: fake.url, headers, enabled: false }, 8_000)).resolves.toEqual({ ok: true, tools: [buy] });
+        expect(fake.refusedCalls).toEqual([]);
+        expect(fake.calls).toEqual([]);
+        expect(fake.seenPaths.filter((path) => path.startsWith("/.well-known/"))).toEqual([]);
+      } finally {
+        await fake.close();
+        await oauth.close();
+      }
+    });
+
+    it("counts an empty header value as no credentials", async () => {
+      const oauth = await startFakeOAuth();
+      const fake = await startFakeHttpMcp({ guard: "tools/call", acceptBearer: oauth.isValid, wwwAuthenticate: oauth.challenge, tools: [buy] });
+      try {
+        await expect(probeMcpServer({ type: "http", url: fake.url, headers: { Authorization: "" }, enabled: false }, 8_000))
+          .resolves.toMatchObject({ ok: false, auth: "required" });
+      } finally {
+        await fake.close();
+        await oauth.close();
+      }
+    });
+
+    it("stays connected when the check is held past its bound", async () => {
+      const oauth = await startFakeOAuth();
+      const fake = await startFakeHttpMcp({ tools: [buy], callDelayMs: 8_000, wwwAuthenticate: oauth.challenge });
+      try {
+        const started = Date.now();
+        await expect(probeMcpServer(anonymous(fake.url), 30_000)).resolves.toEqual({ ok: true, tools: [buy] });
+        expect(Date.now() - started).toBeLessThan(7_000);
+      } finally {
+        await fake.close();
+        await oauth.close();
+      }
+    }, 15_000);
+
+    it("stays connected when a gateway answers the check with 403", async () => {
+      const fake = await startFakeHttpMcp({ guard: "tools/call", requireHeaders: { "x-gate": "open" }, tools: [buy] });
+      try {
+        await expect(probeMcpServer(anonymous(fake.url), 8_000)).resolves.toEqual({ ok: true, tools: [buy] });
+      } finally {
+        await fake.close();
+      }
+    });
+
+    it("stays connected when the server answers the check with HTTP 400", async () => {
+      const server = createServer((req, res) => {
+        let body = "";
+        req.on("data", (chunk) => { body += chunk; }).on("end", () => {
+          const frame = JSON.parse(body || "{}") as { id?: unknown; method?: string };
+          if (frame.method === "tools/call") return void res.writeHead(400).end("bad request");
+          if (frame.method === undefined) return void res.writeHead(202).end();
+          const result = frame.method === "initialize"
+            ? { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "raw", version: "1" } }
+            : { tools: [buy] };
+          res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ jsonrpc: "2.0", id: frame.id, result }));
+        });
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      try {
+        await expect(probeMcpServer(anonymous(`http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`), 8_000))
+          .resolves.toEqual({ ok: true, tools: [buy] });
+      } finally {
+        await new Promise((resolve) => server.close(resolve));
+      }
+    });
+
+    it("never calls a tool the server really lists under the check's name", async () => {
+      const oauth = await startFakeOAuth();
+      const fake = await startFakeHttpMcp({
+        guard: "tools/call", acceptBearer: oauth.isValid, wwwAuthenticate: oauth.challenge, tools: [buy, { name: SIGN_IN_CHECK_TOOL }],
+      });
+      try {
+        await expect(probeMcpServer(anonymous(fake.url), 8_000)).resolves.toMatchObject({ ok: true });
+        expect(fake.refusedCalls).toEqual([]);
+        expect(fake.calls).toEqual([]);
+      } finally {
+        await fake.close();
+        await oauth.close();
+      }
+    });
+  });
+
   it("times out a server that never lists its tools", async () => {
     const fake = await startFakeHttpMcp({ silentTools: true });
     try {
       await expect(probeMcpServer({ type: "http", url: fake.url, headers: {}, enabled: false }, 300))
-        .resolves.toEqual({ ok: false, error: "The server did not answer in time." });
+        .resolves.toEqual({ ok: false, error: "The server did not answer in time.", reason: "timeout" });
     } finally {
       await fake.close();
     }
@@ -223,7 +442,7 @@ describe("remote MCP probe", () => {
       expect(probe.done).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       await untilReal(() => probe.done);
-      expect(probe.value).toEqual({ ok: false, error: "The server did not answer in time." });
+      expect(probe.value).toEqual({ ok: false, error: "The server did not answer in time.", reason: "timeout" });
     } finally {
       await fake.close();
     }
@@ -266,7 +485,7 @@ describe("remote MCP probe", () => {
 
   it("says when the address cannot be reached", async () => {
     await expect(probeMcpServer({ type: "http", url: "http://127.0.0.1:9/mcp", headers: {}, enabled: false }, 2_000))
-      .resolves.toEqual({ ok: false, error: "Could not reach this address. Check the URL and your network." });
+      .resolves.toEqual({ ok: false, error: "Could not reach this address. Check the URL and your network.", reason: "unreachable" });
   });
 
   it("redacts a header value a server echoes in tool metadata", async () => {

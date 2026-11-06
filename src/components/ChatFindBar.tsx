@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 
 import { landOnSearchHit } from "@/lib/focus-message";
 import { t } from "@/lib/i18n";
+import { imeComposing } from "@/lib/send-key";
 import type { SearchHit } from "@/lib/search-hit";
 import { useShowThreads } from "@/lib/thread-preferences";
 import { api, useStore } from "@/state/store";
@@ -79,6 +80,7 @@ export function ChatFindBar({ threadId, onClose }: { threadId: string; onClose: 
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={(event) => {
+            if (imeComposing(event.nativeEvent)) { event.stopPropagation(); return; }
             if (event.key === "Escape") {
               event.preventDefault();
               onClose();
@@ -91,7 +93,7 @@ export function ChatFindBar({ threadId, onClose }: { threadId: string; onClose: 
           aria-label={t("chat.find.placeholder")}
           className="min-w-0 flex-1 bg-transparent px-1 text-[13px] text-ink outline-none placeholder:text-ink-tertiary"
         />
-        <span className="min-w-[58px] text-right text-[11.5px] tabular-nums text-ink-secondary">
+        <span className="min-w-[58px] text-right text-[12px] tabular-nums text-ink-secondary">
           {loading
             ? t("chat.find.searching")
             : query.trim()

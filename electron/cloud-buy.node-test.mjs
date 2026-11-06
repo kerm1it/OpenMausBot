@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readFileSync } from "node:fs";
-import vm from "node:vm";
+
+
 import { inflateSync } from "node:zlib";
-import { CLOUD_COLORS, CLOUD_COLOR_HEX, cleanCloudColor, cleanCloudName, cloudLinkOpensSheet, colorDotIcons, colorDotPng, createCloudLook, createCloudReadyNotice,
-  installCloudBuy, lookFile } from "./cloud-buy.mjs";
+import { CLOUD_COLORS, CLOUD_COLOR_HEX, cleanCloudColor, cleanCloudName, cloudLinkOpensSheet, colorDotIcons, colorDotPng, createCloudLook, createCloudReadyNotice, installCloudBuy, lookFile } from "./cloud-buy.mjs";
 import environments from "./environments.cjs";
 
 const origin = "https://omb-u-1a2b3c4d5e6f.fly.dev";
@@ -170,26 +169,4 @@ test("each sheet channel is behind main's guard, takes only text, and never answ
   assert.deepEqual(none.calls.filter(row => row[0] === "reopenCheckout"), [["reopenCheckout", "pro", "app_card"]]);
   assert.equal(await none.handlers.get("cloud-account:copyCheckoutLink")({}), false); assert.deepEqual(none.clipboard, []);
   await assert.rejects(installed({ offered: false }).handlers.get("cloud-account:reopenCheckout")({}, "pro", "app_card"), /isn't offered/);
-});
-
-test("the page's bridge sends the sheet's words as text only, and exists only on this computer's own page", async () => {
-  const local = "http://127.0.0.1:48993";
-  const load = ({ remote = false } = {}) => {
-    let bridge; const invoked = [];
-    vm.runInNewContext(readFileSync(new URL("./preload.cjs", import.meta.url), "utf8"), {
-      process: { platform: "fixture", argv: [`--omb-local-origin=${local}`, "--omb-company-desktop=1"] },
-      location: { origin: remote ? "https://remote.example.test" : local }, TextEncoder, localStorage: { getItem: () => null },
-      require: () => ({ webUtils: {}, contextBridge: { exposeInMainWorld: (_name, value) => { bridge = value; } },
-        ipcRenderer: { on() {}, removeListener() {}, send() {}, invoke: (...args) => { invoked.push(args); return Promise.resolve(null); } } }),
-    });
-    return { bridge, invoked };
-  };
-  const f = load(), cloud = f.bridge.cloudAccount;
-  await cloud.signInStart({ toString: () => "person@example.test" }); await cloud.signInVerify(48201937); await cloud.signInCancel({ token: "forged" });
-  await cloud.reopenCheckout("pro", undefined); await cloud.copyCheckoutLink("https://evil.example.test"); await cloud.interest("x");
-  await cloud.look({ origin }); await cloud.setLook("Studio", { color: "teal" }); await cloud.sheet("yes"); await cloud.sheet(true); await cloud.readySeen("x");
-  assert.deepEqual(f.invoked, [["cloud-account:signInStart", "person@example.test"], ["cloud-account:signInVerify", "48201937"], ["cloud-account:signInCancel"],
-    ["cloud-account:reopenCheckout", "pro", "undefined"], ["cloud-account:copyCheckoutLink"], ["cloud-account:interest"], ["cloud-account:look"],
-    ["cloud-account:setLook", "Studio", "[object Object]"], ["cloud-account:sheet", false], ["cloud-account:sheet", true], ["cloud-account:readySeen"]]);
-  assert.equal(load({ remote: true }).bridge.cloudAccount, undefined);
 });

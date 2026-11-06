@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { track } from "@/lib/analytics";
+
 import { useStore } from "@/state/store";
 import { t } from "@/lib/i18n";
 import { BotPickerList } from "./BotPickerList";
@@ -26,7 +26,6 @@ export function NewRoomPanel({ onClose }: { onClose: () => void }) {
       name: name.trim() || undefined,
       section: section.trim() || undefined,
     });
-    track("room_created", { members: picked.size, context: Boolean(section.trim()) });
     onClose();
   };
   return (
@@ -45,6 +44,7 @@ export function NewRoomPanel({ onClose }: { onClose: () => void }) {
             if (e.key === "Enter") create();
             if (e.key === "Escape") onClose();
           }}
+          aria-label={t("sidebar.newChannel.nameLabel")}
           placeholder={t("sidebar.newChannel.name")}
           className="mb-3 w-full rounded-lg bg-raised/70 px-3 py-2 text-[14px] text-ink placeholder:text-ink-secondary focus:outline-none"
         />

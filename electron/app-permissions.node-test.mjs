@@ -2,12 +2,24 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { readFileSync } from "node:fs";
-import { appPermissionAllowed, appPermissionHandlers, externalWebUrl, remoteClipboardWriteAllowed } from "./app-permissions.mjs";
+import { appPermissionAllowed, appPermissionHandlers, emailDraftUrl, externalLinkUrl, externalWebUrl, remoteClipboardWriteAllowed } from "./app-permissions.mjs";
+
 import { cloudPlanSnapshot, createCloudAccountClient } from "./cloud-account.mjs";
 import { myCloudOrigin, rememberedCloudHome } from "./cloud-home.mjs";
 
 const LOCAL_ORIGIN = "http://127.0.0.1:5199";
 const LOCAL_PAGE = "http://127.0.0.1:5199/chat?botId=bot-1";
+
+test("local and self-hosted permission checks work without a managed Cloud client", () => {
+  const origin = "https://bots.example.test";
+  const contents = { getURL: () => `${origin}/` };
+  const handlers = appPermissionHandlers({ rendererOrigin: () => LOCAL_ORIGIN, mainContents: () => contents,
+    activeRemoteOrigin: () => origin, activeRemoteMicrophone: () => true });
+  assert.equal(handlers.check(contents, "notifications", origin, { isMainFrame: true }), true);
+  assert.equal(handlers.check(contents, "media", origin, { isMainFrame: true, mediaTypes: ["audio"] }), true);
+  assert.equal(handlers.check(contents, "media", origin, { isMainFrame: true, mediaTypes: ["video"] }), false);
+  assert.equal(handlers.check(contents, "notifications", "https://other.example.test", { isMainFrame: true }), false);
+});
 
 test("grants notifications, clipboard, and fullscreen to the local renderer page", () => {
   for (const permission of ["notifications", "clipboard-read", "clipboard-sanitized-write", "fullscreen"]) {
@@ -76,11 +88,31 @@ test("web links reject embedded credentials and non-web schemes", () => {
     assert.throws(() => externalWebUrl(url), /web address/);
 });
 
+test("an email link opens only as a draft to one address with a subject and a body", () => {
+  const draft = "mailto:support@example.com?subject=Hello%20there&body=Line%20one%0D%0ALine%20two";
+  assert.equal(emailDraftUrl(draft), draft);
+  assert.equal(externalLinkUrl(draft), draft);
+  assert.equal(externalLinkUrl("MAILTO:support@example.com?Subject=Hi"), "mailto:support@example.com?Subject=Hi");
+  assert.equal(externalLinkUrl("https://example.com/help"), "https://example.com/help");
+  for (const url of ["mailto:a@example.com,b@example.com", "mailto:a%2Cb@example.com", "mailto:?to=a@example.com", "mailto:", "mailto:nobody"])
+    assert.throws(() => externalLinkUrl(url), /one address/, url);
+  for (const url of ["mailto:a@example.com?attach=/etc/passwd", "mailto:a@example.com?subject=Hi&cc=b@example.com", "mailto:a@example.com?bcc=b@example.com",
+    "mailto:a@example.com?to=b@example.com", "mailto:a@example.com?Attachment=~/.ssh/id_rsa"])
+    assert.throws(() => externalLinkUrl(url), /only a subject and a body/, url);
+  assert.throws(() => emailDraftUrl("mailto:a%E0%A4%A@example.com"), /invalid/);
+  assert.throws(() => emailDraftUrl("https://example.com"), /Only email links/);
+  for (const url of ["file:///tmp/test", "javascript:alert(1)", "data:text/html,test", "tel:+15555550100", "sms:+15555550100"])
+    assert.throws(() => externalLinkUrl(url), /Only web/, url);
+  for (const url of [null, 123, "not a url"])
+    assert.throws(() => externalLinkUrl(url), /web address/);
+});
+
 test("both external-link entry points use the policy and IPC retains the local-origin gate", () => {
   const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8");
   assert.match(main, /ipcMain\.handle\("desktop:open-external", localOnly\("desktop:open-external"/);
-  assert.match(main, /shell\.openExternal\(externalWebUrl\(rawUrl\)\)/);
-  assert.match(main, /shell\.openExternal\(externalWebUrl\(url\)\)/);
+  assert.match(main, /shell\.openExternal\(externalLinkUrl\(rawUrl\)\)/);
+  assert.match(main, /shell\.openExternal\(externalLinkUrl\(url\)\)/);
+  assert.doesNotMatch(main, /shell\.openExternal\(externalWebUrl\(/);
 });
 
 test("fails closed on unparsable or opaque origins", () => {
@@ -197,7 +229,7 @@ test("the verified Cloud open in this window may write the clipboard, by the rem
   assert.equal(ask(write, onCloud(), { getURL: () => `${CLOUD}/` }), false, "the main window is gone");
 });
 
-test("once My Cloud is home its page may show notifications, in the main window's main frame only; any other page still may not", () => {
+test("once My Cloud is home its page may show notifications and go fullscreen, in the main window's main frame only; any other page still may not", () => {
   const state = { home: null, main: { getURL: () => `${CLOUD}/chat` } };
   const handlers = appPermissionHandlers({ rendererOrigin: () => LOCAL_ORIGIN, mainContents: () => state.main, cloudHomeOrigin: () => CLOUD, homeOrigin: () => state.home });
   const ask = (details, contents = state.main) => { let granted; handlers.request(contents, "notifications", (value) => { granted = value; }, details); return granted; };
@@ -210,7 +242,9 @@ test("once My Cloud is home its page may show notifications, in the main window'
   assert.equal(check(CLOUD, {}), false, "a frame it cannot vouch for");
   assert.equal(ask(onCloud(), { getURL: () => `${CLOUD}/` }), false, "another window");
   assert.equal(ask({ requestingUrl: "https://bots.example.test/", isMainFrame: true }), false, "another server");
-  for (const permission of ["geolocation", "camera", "clipboard-read", "fullscreen"]) {
+  let fullscreen; handlers.request(state.main, "fullscreen", (value) => { fullscreen = value; }, onCloud());
+  assert.equal(fullscreen, true, "a chat video's fullscreen button");
+  for (const permission of ["geolocation", "camera", "clipboard-read"]) {
     let granted; handlers.request(state.main, permission, (value) => { granted = value; }, onCloud());
     assert.equal(granted, false, permission);
   }
@@ -229,24 +263,6 @@ test("this computer's own page keeps its permissions through the same handlers",
   assert.equal(ask("notifications", {}, local), true);
   assert.equal(check("clipboard-read", "", { isMainFrame: true }, local), true);
   assert.equal(check("clipboard-read", "https://other.example", { isMainFrame: true }, local), false);
-});
-
-test("the app installs these handlers, with its one rule for My Cloud and a wait for the saved sign-in", () => {
-  const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8").replace(/\r\n/g, "\n");
-  assert.match(main, /setPermissionRequestHandler\(appPermissions\.request\)/);
-  assert.match(main, /setPermissionCheckHandler\(appPermissions\.check\)/);
-  assert.match(main, /ipcMain\.handle\("perm:status", \(event\) => \(\{[^}]*pageMic: appPermissions\?\.pageMicrophone\(event\) \?\? "refused",/s);
-  assert.match(main, /^let appPermissions = null;$/m);
-  assert.match(main, /^  appPermissions = appPermissionHandlers\(\{$/m);
-  assert.doesNotMatch(main, /(const|let|var) appPermissions = appPermissionHandlers/);
-  assert.match(main, /cloudHomeOrigin: myCloud,\n/);
-  assert.match(main, /homeOrigin: \(\) => homeWindow\.placeOrigin\(\),\n/, "notifications on the page the window shows: My Cloud's, or a team's Cloud's");
-  assert.match(main, /cloudHomeRestoring: \(\) => cloudAccountRestoring \? cloudAccountRestored\(\) : null,\n/);
-  assert.equal(main.match(/myCloudOrigin\(/g)?.length, 1);
-  assert.match(main, /cloudPageSenderAllowed\(event, \{ contents, homeOrigin: myCloud\(\),/);
-  assert.doesNotMatch(main, /rememberedHome\??\.accountId/);
-  assert.doesNotMatch(main, /remembered: true/);
-  assert.match(main, /cloudAccountRestoring = true;\n\s+cloudAccountStarted = ensureCloudAccount\(\)\.start\(\)\.catch\(\(\) => \{\}\)\.finally\(\(\) => \{ cloudAccountRestoring = false; \}\);/);
 });
 
 const ADMIN = "http://127.0.0.1:9";
@@ -499,4 +515,32 @@ test("the base policy itself still grants a remote origin nothing", () => {
   for (const permission of ["clipboard-sanitized-write", "clipboard-read", "notifications", "fullscreen"]) {
     assert.equal(appPermissionAllowed(permission, REMOTE, LOCAL_ORIGIN, { isMainFrame: true }), false, permission);
   }
+});
+
+test("the active remote server's page may show notifications and go fullscreen, in the main window's main frame only", () => {
+  const state = { remote: REMOTE, main: { getURL: () => `${REMOTE}/chat` } };
+  const handlers = appPermissionHandlers({ rendererOrigin: () => LOCAL_ORIGIN, mainContents: () => state.main, cloudHomeOrigin: () => null,
+    activeRemoteOrigin: () => state.remote });
+  const onRemote = (extra = {}) => ({ requestingUrl: `${REMOTE}/settings`, isMainFrame: true, ...extra });
+  const ask = (details, contents = state.main, permission = "notifications") => {
+    let granted; handlers.request(contents, permission, (value) => { granted = value; }, details); return granted;
+  };
+  assert.equal(ask(onRemote()), true);
+  assert.equal(handlers.check(state.main, "notifications", REMOTE, { isMainFrame: true }), true);
+  assert.equal(ask(onRemote({ isMainFrame: false })), false, "a frame inside it");
+  assert.equal(handlers.check(state.main, "notifications", REMOTE, {}), false, "a frame it cannot vouch for");
+  assert.equal(ask(onRemote(), { getURL: () => `${REMOTE}/` }), false, "another window");
+  assert.equal(ask(onRemote({ requestingUrl: "https://other.tail1.ts.net:9444/" })), false, "another server");
+  assert.equal(ask(onRemote(), state.main, "fullscreen"), true, "a chat video's fullscreen button");
+  assert.equal(handlers.check(state.main, "fullscreen", REMOTE, { isMainFrame: true }), true);
+  assert.equal(ask(onRemote({ isMainFrame: false }), state.main, "fullscreen"), false, "fullscreen from a frame inside it");
+  assert.equal(ask(onRemote({ requestingUrl: "https://other.tail1.ts.net:9444/" }), state.main, "fullscreen"), false, "fullscreen for another server");
+  assert.equal(ask(onRemote(), { getURL: () => `${REMOTE}/` }, "fullscreen"), false, "fullscreen in another window");
+  for (const permission of ["geolocation", "camera", "clipboard-read"]) {
+    assert.equal(ask(onRemote(), state.main, permission), false, permission);
+  }
+  state.remote = null;
+  assert.equal(ask(onRemote()), false, "no active remote: at once");
+  assert.equal(ask(onRemote(), state.main, "fullscreen"), false, "no active remote: no fullscreen");
+  for (const requesting of ["about:blank", "data:text/html,x", ""]) assert.equal(ask(onRemote({ requestingUrl: requesting })), false, `${requesting || "(empty)"}`);
 });

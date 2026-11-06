@@ -29,6 +29,8 @@ export interface LiveMediaState {
   busyWith: LiveCallState | null;
   action: LiveCallAction | null;
   hangingUp: boolean;
+  /** The notice is the computer refusing the microphone: it comes with Open System Settings. */
+  micSettings?: boolean;
 }
 
 export interface LiveMediaDeps {
@@ -163,11 +165,12 @@ function inWebBrowser(capabilities: DesktopCapabilities): boolean {
   return capabilities.dictation.reasonCode === "desktop-app-required";
 }
 
-function micBlocked(capabilities: DesktopCapabilities, pageMic: "allowed" | "refused" | undefined): { notice: string; action: LiveCallAction } {
+function micBlocked(capabilities: DesktopCapabilities, pageMic: "allowed" | "refused" | undefined): { notice: string; action: LiveCallAction; micSettings?: true } {
   if (pageMic === "refused" || (pageMic === undefined && capabilities.dictation.reasonCode === "remote-server")) {
     return { notice: t("call.live.micAppRefused"), action: "open-in-browser" };
   }
-  return { notice: t(inWebBrowser(capabilities) ? "call.live.micBlockedBrowser" : "call.live.micBlocked"), action: "retry" };
+  return inWebBrowser(capabilities) ? { notice: t("call.live.micBlockedBrowser"), action: "retry" }
+    : { notice: t("call.live.micBlocked"), action: "retry", micSettings: true };
 }
 
 function liveClient(capabilities: DesktopCapabilities): "desktop" | "web" {
@@ -252,7 +255,7 @@ export async function startLiveCall(target: { botId: string; threadId: string })
       if (mine !== generation) return;
       return set({ ...failed, ...micBlocked(deps.capabilities(), pageMic) });
     }
-    const hopeless = error instanceof LiveUnsupportedError || (error instanceof ApiError && error.status === 401);
+    const hopeless = error instanceof LiveUnsupportedError || (error instanceof ApiError && (error.status === 401 || error.status === 403));
     set({ ...failed, action: hopeless ? null : "retry", notice: error instanceof Error ? error.message : String(error) });
   }
 }
