@@ -2,7 +2,6 @@ import { chmodSync, lstatSync, mkdirSync, readdirSync, writeFileSync } from "nod
 import { copyFile, mkdir } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { gunzipSync } from "node:zlib";
-import * as tar from "tar";
 import { unzipSync } from "fflate";
 
 const MAX_BYTES = 64 * 1024 * 1024;
@@ -82,6 +81,7 @@ export async function extractResourceArchive(bytes: Buffer, target: string, arch
       else { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, data); chmodSync(path, 0o644 | ((modes.get(name) ?? 0) & 0o111)); }
     }
   } else {
+    const tar = await import("tar");
     const expanded = bytes[0] === 0x1f && bytes[1] === 0x8b ? gunzipSync(bytes, { maxOutputLength: subdirectory === undefined ? MAX_BYTES : 4 * MAX_BYTES }) : bytes;
     writeFileSync(archive, expanded);
     // Inspect the complete archive before extraction; neither links nor device entries are installed.
