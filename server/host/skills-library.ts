@@ -319,16 +319,17 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
       const mentioned = skillCalls(text, typed, ownStart);
       if (!mentioned.length) return text;
       const pinned = turns.get(turnKey(bot.id, threadId));
-      if (pinned) return skillCommandTurnText(text, new Map([...pinned.files].filter(([name]) => mentioned.includes(name))), typed, ownStart);
       const assigned = skillsLibraryEnabled(cfg) ? liveAssigned(bot) : undefined;
-      const files = enabledSkillFiles(bot.id, mentioned, assigned);
+      const files = pinned
+        ? new Map([...pinned.files].filter(([name]) => mentioned.includes(name)))
+        : enabledSkillFiles(bot.id, mentioned, assigned);
       const add = (skills: readonly ImportedSkillView[]) => {
         for (const skill of skills) if (mentioned.includes(skill.name) && !files.has(skill.name)) files.set(skill.name, skill.file);
       };
       if (files.size < mentioned.length) add(importsFor(bot, assigned, instance));
       if (files.size < mentioned.length) {
         // A skill switched off on the Skills page stays off, even when the engine holds one of the same name.
-        const switched = new Set([...resolveBotSkills(bot.id, assigned), ...importedSkillListings(bot.id, new Set())]
+        const switched = new Set([...(pinned?.skills ?? resolveBotSkills(bot.id, assigned)), ...importedSkillListings(bot.id, new Set())]
           .filter((skill) => !skill.enabled).map((skill) => skill.name));
         add(nativesFor(bot, threadId, instance).filter((skill) => !switched.has(skill.name)));
       }

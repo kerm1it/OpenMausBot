@@ -2,7 +2,7 @@ export const NATIVE_PLUGIN_TOOLS = [
   {
     name: "install_plugin",
     description: "Install a shared plugin from an HTTP/HTTPS archive or GitHub URL; no local paths. Returns its ID for a bot's plugins selection. Components stay native.",
-    inputSchema: { type: "object", additionalProperties: false, properties: { source: { type: "string", maxLength: 4096, pattern: "^[hH][tT][tT][pP][sS]?://", description: "HTTP/HTTPS archive or GitHub URL; no local paths." } }, required: ["source"] },
+    inputSchema: { type: "object", additionalProperties: false, properties: { source: { type: "string", maxLength: 4096, description: "HTTP/HTTPS archive or GitHub URL; no local paths." } }, required: ["source"] },
   },
   {
     name: "uninstall_plugin",
