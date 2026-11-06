@@ -42,6 +42,20 @@ import { ensureTaskWorkspaceWithSkills, syncTaskSkillLinks } from "./skill-task-
 import { buildSystemPrompt } from "./system-prompt.ts";
 import { ensureTaskWorkspace, TASK_WORKSPACES_DIR, workspaceDir } from "./workspace.ts";
 
+const nativeFixtureRoot = (botId: string) => ensureTaskWorkspace(botId, "native-fixture");
+function syncNativeFixture(botId: string, options: Parameters<typeof syncSkillLinks>[1] = {}) {
+  syncSkillLinks(botId, { ...options, task: { threadId: "native-fixture", folder: nativeFixtureRoot(botId) } });
+}
+function setEnabledForNativeFixture(...args: Parameters<typeof setSkillEnabled>) {
+  const result = setSkillEnabled(...args); syncNativeFixture(args[0]); return result;
+}
+function applyForNativeFixture(...args: Parameters<typeof applyStagedSkillWrite>) {
+  const result = applyStagedSkillWrite(...args); syncNativeFixture(args[0]); return result;
+}
+function removeForNativeFixture(...args: Parameters<typeof removeSkill>) {
+  const result = removeSkill(...args); syncNativeFixture(args[0]); return result;
+}
+
 // skills.ts reads OMB_DATA_DIR at import time, so tests isolate by a unique botId each.
 const SKILL = (name: string, description = "Reviews a PR the way this team reviews PRs.") =>
   `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n\nDo the thing.\n`;
@@ -234,42 +248,44 @@ describe("install → review → enable lifecycle", () => {
     ]);
     expect(installed).toMatchObject({ name: "code-review", enabled: false });
     expect(installed).toMatchObject({ editable: false });
+    syncNativeFixture(bot);
     expect(skillsSystemPrompt(bot)).toBe("");
 
-    const enabled = setSkillEnabled(bot, "code-review", true);
+    const enabled = setEnabledForNativeFixture(bot, "code-review", true);
     expect(enabled).toMatchObject({ enabled: true });
     const prompt = skillsSystemPrompt(bot);
     expect(prompt).toContain("- code-review:");
     expect(prompt).toContain("never override");
 
     for (const dir of [".claude/skills", ".agents/skills", ".grok/skills"]) {
-      const path = join(workspaceDir(bot), dir, "code-review");
+      const path = join(nativeFixtureRoot(bot), dir, "code-review");
       expect(existsSync(path), `${dir} link should exist`).toBe(true);
       expect(lstatSync(path).isSymbolicLink()).toBe(true);
     }
 
-    setSkillEnabled(bot, "code-review", false);
+    setEnabledForNativeFixture(bot, "code-review", false);
+    syncNativeFixture(bot);
     expect(skillsSystemPrompt(bot)).toBe("");
   });
 
   it("rewrites the managed-link record only when the set of links changes", () => {
     installSkill(bot, "src", [{ path: "SKILL.md", content: SKILL("steady-links") }]);
-    setSkillEnabled(bot, "steady-links", true);
-    const record = join(DATA_DIR, "skill-state", bot, "managed-links.json");
+    setEnabledForNativeFixture(bot, "steady-links", true);
+    const record = join(DATA_DIR, "skill-state", bot, "task-links", "native-fixture.json");
     const saved = statSync(record).ino;
 
-    syncSkillLinks(bot);
-    syncSkillLinks(bot);
+    syncNativeFixture(bot);
+    syncNativeFixture(bot);
     expect(statSync(record).ino).toBe(saved);
 
-    setSkillEnabled(bot, "steady-links", false);
+    setEnabledForNativeFixture(bot, "steady-links", false);
     expect(statSync(record).ino).not.toBe(saved);
     expect(JSON.parse(readFileSync(record, "utf8"))).toEqual([]);
   });
 
   it("links enabled skills into the thread's own task folder and revokes them on disable", () => {
     installSkill(bot, "src", [{ path: "SKILL.md", content: SKILL("task-skill") }]);
-    setSkillEnabled(bot, "task-skill", true);
+    setEnabledForNativeFixture(bot, "task-skill", true);
     const thread = "thread-a";
     const taskDir = ensureTaskWorkspace(bot, thread);
     try {
@@ -282,7 +298,7 @@ describe("install → review → enable lifecycle", () => {
       const record = join(DATA_DIR, "skill-state", bot, "task-links", `${thread}.json`);
       expect(JSON.parse(readFileSync(record, "utf8"))).toEqual(["task-skill"]);
 
-      setSkillEnabled(bot, "task-skill", false);
+      setEnabledForNativeFixture(bot, "task-skill", false);
       syncTaskSkillLinks(bot, thread);
       for (const dir of [".claude/skills", ".agents/skills", ".grok/skills"]) {
         expect(existsSync(join(taskDir, dir, "task-skill"))).toBe(false);
@@ -295,7 +311,7 @@ describe("install → review → enable lifecycle", () => {
 
   it("never replaces a same-name folder the bot made in its task folder", () => {
     installSkill(bot, "src", [{ path: "SKILL.md", content: SKILL("own-skill") }]);
-    setSkillEnabled(bot, "own-skill", true);
+    setEnabledForNativeFixture(bot, "own-skill", true);
     const thread = "thread-b";
     const taskDir = ensureTaskWorkspace(bot, thread);
     try {
@@ -307,7 +323,7 @@ describe("install → review → enable lifecycle", () => {
       expect(readFileSync(join(own, "SKILL.md"), "utf8")).toBe("mine");
       expect(lstatSync(join(taskDir, ".agents", "skills", "own-skill")).isSymbolicLink()).toBe(true);
 
-      setSkillEnabled(bot, "own-skill", false);
+      setEnabledForNativeFixture(bot, "own-skill", false);
       syncTaskSkillLinks(bot, thread);
       expect(readFileSync(join(own, "SKILL.md"), "utf8")).toBe("mine");
       expect(existsSync(join(taskDir, ".agents", "skills", "own-skill"))).toBe(false);
@@ -318,7 +334,7 @@ describe("install → review → enable lifecycle", () => {
 
   it("hands a turn its task folder with the enabled skills already linked", () => {
     installSkill(bot, "src", [{ path: "SKILL.md", content: SKILL("turn-skill") }]);
-    setSkillEnabled(bot, "turn-skill", true);
+    setEnabledForNativeFixture(bot, "turn-skill", true);
     try {
       const folder = ensureTaskWorkspaceWithSkills(bot, "thread-c");
       expect(folder).toBe(ensureTaskWorkspace(bot, "thread-c"));
@@ -328,7 +344,7 @@ describe("install → review → enable lifecycle", () => {
     }
   });
 
-  it("stores only the reviewed SKILL.md and reports every supporting file", () => {
+  it("stores the complete reviewed Skill directory", () => {
     const installed = installSkill(bot, "src", [
       { path: "SKILL.md", content: SKILL("deploy-helper") },
       { path: "reference.md", content: "private instructions that were not shown in review" },
@@ -336,17 +352,14 @@ describe("install → review → enable lifecycle", () => {
     ]);
     expect(installed).toMatchObject({
       name: "deploy-helper",
-      skippedFiles: ["reference.md", "scripts/run.sh"],
-      warnings: [
-        expect.stringContaining("reference.md"),
-        expect.stringContaining("scripts/run.sh"),
-      ],
+      skippedFiles: [],
+      directorySha256: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
-    expect(existsSync(join(workspaceDir(bot), "skills", "deploy-helper", "reference.md"))).toBe(false);
-    expect(existsSync(join(workspaceDir(bot), "skills", "deploy-helper", "scripts", "run.sh"))).toBe(false);
+    expect(existsSync(join(workspaceDir(bot), "skills", "deploy-helper", "reference.md"))).toBe(true);
+    expect(existsSync(join(workspaceDir(bot), "skills", "deploy-helper", "scripts", "run.sh"))).toBe(true);
     expect(readSkillFile(bot, "deploy-helper")).toBe(SKILL("deploy-helper"));
 
-    const enabled = setSkillEnabled(bot, "deploy-helper", true);
+    const enabled = setEnabledForNativeFixture(bot, "deploy-helper", true);
     expect(enabled).toMatchObject({ enabled: true });
     expect(skillsSystemPrompt(bot)).not.toContain("private instructions");
 
@@ -386,33 +399,30 @@ describe("install → review → enable lifecycle", () => {
     expect(readSkillFile(bot, "gated")).toBe(source);
   });
 
-  it("reports non-markdown siblings and subfolders in skippedFiles, not an empty list", () => {
+  it("retains empty supporting files in nested directories", () => {
     const installed = installSkill(bot, "src", [
       { path: "SKILL.md", content: SKILL("solo-markdown") },
       { path: "run.sh", content: "" },
-      { path: "scripts/", content: "" },
+      { path: "scripts/empty", content: "" },
     ]);
     expect(installed).toMatchObject({
       name: "solo-markdown",
-      skippedFiles: ["run.sh", "scripts/"],
-      warnings: [
-        expect.stringContaining("run.sh"),
-        expect.stringContaining("scripts/"),
-      ],
+      skippedFiles: [],
+      warnings: [],
     });
   });
 
   it("removes cleanly", () => {
     installSkill(bot, "src", [{ path: "SKILL.md", content: SKILL("temp-skill") }]);
-    expect(removeSkill(bot, "temp-skill")).toEqual({ removed: true });
+    expect(removeForNativeFixture(bot, "temp-skill")).toEqual({ removed: true });
     expect(listSkills(bot)).toEqual([]);
-    expect("error" in removeSkill(bot, "temp-skill")).toBe(true);
+    expect("error" in removeForNativeFixture(bot, "temp-skill")).toBe(true);
   });
 
   it("migrates workspace manifests disabled and adopts only old app-owned native links", () => {
     const content = SKILL("legacy-skill");
     installSkill(bot, "legacy:test", [{ path: "SKILL.md", content }]);
-    setSkillEnabled(bot, "legacy-skill", true);
+    setEnabledForNativeFixture(bot, "legacy-skill", true);
 
     const stateDir = join(DATA_DIR, "skill-state", bot);
     const secureManifest = readFileSync(join(stateDir, "skills.json"), "utf8");
@@ -422,7 +432,7 @@ describe("install → review → enable lifecycle", () => {
 
     const external = join(scratch, "user-skill");
     mkdirSync(external, { recursive: true });
-    const userLink = join(workspaceDir(bot), ".claude", "skills", "user-owned");
+    const userLink = join(nativeFixtureRoot(bot), ".claude", "skills", "user-owned");
     symlinkSync(external, userLink, process.platform === "win32" ? "junction" : "dir");
 
     expect(listSkills(bot)).toMatchObject([{ name: "legacy-skill", enabled: false }]);
@@ -430,9 +440,10 @@ describe("install → review → enable lifecycle", () => {
     expect(existsSync(legacyManifest)).toBe(false);
     expect(JSON.parse(readFileSync(join(stateDir, "skills.json"), "utf8"))["legacy-skill"].enabled).toBe(false);
 
+    syncNativeFixture(bot);
     expect(skillsSystemPrompt(bot)).toBe("");
     for (const dir of [".claude/skills", ".agents/skills", ".grok/skills"]) {
-      expect(existsSync(join(workspaceDir(bot), dir, "legacy-skill"))).toBe(false);
+      expect(existsSync(join(nativeFixtureRoot(bot), dir, "legacy-skill"))).toBe(false);
     }
     expect(realpathSync(userLink)).toBe(realpathSync(external));
   });
@@ -451,25 +462,27 @@ describe("install → review → enable lifecycle", () => {
     writeFileSync(join(stateDir, "skills.json"), "not valid JSON");
 
     expect(listSkills(bot)).toEqual([]);
+    syncNativeFixture(bot);
     expect(skillsSystemPrompt(bot)).toBe("");
   });
 
   it("cleans broken app links but preserves a same-name symlink a user replaced", () => {
     installSkill(bot, "src", [{ path: "SKILL.md", content: SKILL("link-safety") }]);
-    setSkillEnabled(bot, "link-safety", true);
+    setEnabledForNativeFixture(bot, "link-safety", true);
     const root = workspaceDir(bot);
     const userTarget = join(scratch, "replacement");
     mkdirSync(userTarget, { recursive: true });
-    const replaced = join(root, ".claude", "skills", "link-safety");
+    const replaced = join(nativeFixtureRoot(bot), ".claude", "skills", "link-safety");
     // Node 24 on macOS reports a directory symlink as EISDIR unless recursive removal is on; rm still only unlinks it.
     rmSync(replaced, { recursive: true, force: true });
     symlinkSync(userTarget, replaced, process.platform === "win32" ? "junction" : "dir");
 
     rmSync(join(root, "skills", "link-safety"), { recursive: true, force: true });
+    syncNativeFixture(bot);
     expect(skillsSystemPrompt(bot)).toBe("");
     expect(realpathSync(replaced)).toBe(realpathSync(userTarget));
     for (const dir of [".agents/skills", ".grok/skills"]) {
-      expect(() => lstatSync(join(root, dir, "link-safety"))).toThrow();
+      expect(() => lstatSync(join(nativeFixtureRoot(bot), dir, "link-safety"))).toThrow();
     }
   });
 
@@ -499,14 +512,14 @@ describe("install → review → enable lifecycle", () => {
     }));
 
     expect(readSkillFile(bot, "linked-skill")).toBeNull();
-    expect(setSkillEnabled(bot, "linked-skill", true)).toMatchObject({
+    expect(setEnabledForNativeFixture(bot, "linked-skill", true)).toMatchObject({
       error: expect.stringContaining("changed after review"),
     });
   });
 
   it("revokes app-owned native links when the skills root is replaced", () => {
     installSkill(bot, "src", [{ path: "SKILL.md", content: SKILL("root-replaced") }]);
-    setSkillEnabled(bot, "root-replaced", true);
+    setEnabledForNativeFixture(bot, "root-replaced", true);
     const root = workspaceDir(bot);
     const skillsRoot = join(root, "skills");
     const outsideRoot = join(scratch, "replacement-skills");
@@ -518,23 +531,24 @@ describe("install → review → enable lifecycle", () => {
     symlinkSync(outsideRoot, skillsRoot, process.platform === "win32" ? "junction" : "dir");
 
     for (const dir of [".claude/skills", ".agents/skills", ".grok/skills"]) {
-      expect(realpathSync(join(root, dir, "root-replaced"))).toBe(realpathSync(outsideSkill));
+      expect(realpathSync(join(nativeFixtureRoot(bot), dir, "root-replaced"))).toBe(realpathSync(outsideSkill));
     }
 
+    syncNativeFixture(bot);
     expect(skillsSystemPrompt(bot)).toBe("");
     expect(lstatSync(skillsRoot).isSymbolicLink()).toBe(true);
     for (const dir of [".claude/skills", ".agents/skills", ".grok/skills"]) {
-      expect(() => lstatSync(join(root, dir, "root-replaced"))).toThrow();
+      expect(() => lstatSync(join(nativeFixtureRoot(bot), dir, "root-replaced"))).toThrow();
     }
   });
 
   it("preserves a user-replaced native link while revoking the other app links", () => {
     installSkill(bot, "src", [{ path: "SKILL.md", content: SKILL("root-replaced-user-link") }]);
-    setSkillEnabled(bot, "root-replaced-user-link", true);
+    setEnabledForNativeFixture(bot, "root-replaced-user-link", true);
     const root = workspaceDir(bot);
     const userTarget = join(scratch, "user-native-target");
     mkdirSync(userTarget, { recursive: true });
-    const userLink = join(root, ".claude", "skills", "root-replaced-user-link");
+    const userLink = join(nativeFixtureRoot(bot), ".claude", "skills", "root-replaced-user-link");
     rmSync(userLink, { recursive: true, force: true });
     symlinkSync(userTarget, userLink, process.platform === "win32" ? "junction" : "dir");
 
@@ -543,25 +557,26 @@ describe("install → review → enable lifecycle", () => {
     rmSync(join(root, "skills"), { recursive: true, force: true });
     symlinkSync(outsideRoot, join(root, "skills"), process.platform === "win32" ? "junction" : "dir");
 
+    syncNativeFixture(bot);
     expect(skillsSystemPrompt(bot)).toBe("");
     expect(realpathSync(userLink)).toBe(realpathSync(userTarget));
     for (const dir of [".agents/skills", ".grok/skills"]) {
-      expect(() => lstatSync(join(root, dir, "root-replaced-user-link"))).toThrow();
+      expect(() => lstatSync(join(nativeFixtureRoot(bot), dir, "root-replaced-user-link"))).toThrow();
     }
   });
 
   it("does not unlink a regular file swapped in during unsafe-root cleanup", () => {
     installSkill(bot, "src", [{ path: "SKILL.md", content: SKILL("unsafe-root-race") }]);
-    setSkillEnabled(bot, "unsafe-root-race", true);
+    setEnabledForNativeFixture(bot, "unsafe-root-race", true);
     const root = workspaceDir(bot);
-    const racedLink = join(root, ".agents", "skills", "unsafe-root-race");
+    const racedLink = join(nativeFixtureRoot(bot), ".agents", "skills", "unsafe-root-race");
     const outsideRoot = join(scratch, "unsafe-root-race-skills");
     mkdirSync(join(outsideRoot, "unsafe-root-race"), { recursive: true });
     rmSync(join(root, "skills"), { recursive: true, force: true });
     symlinkSync(outsideRoot, join(root, "skills"), process.platform === "win32" ? "junction" : "dir");
 
     let swapped = false;
-    syncSkillLinks(bot, {
+    syncNativeFixture(bot, {
       beforeRemove: (link) => {
         if (link !== racedLink || swapped) return;
         swapped = true;
@@ -576,18 +591,17 @@ describe("install → review → enable lifecycle", () => {
 
   it("skips a native discovery directory that is a symlink", () => {
     installSkill(bot, "src", [{ path: "SKILL.md", content: SKILL("native-boundary") }]);
-    const root = workspaceDir(bot);
     const outside = join(scratch, "outside-native");
     mkdirSync(outside, { recursive: true });
-    mkdirSync(join(root, ".claude"), { recursive: true });
-    const discovery = join(root, ".claude", "skills");
+    mkdirSync(join(nativeFixtureRoot(bot), ".claude"), { recursive: true });
+    const discovery = join(nativeFixtureRoot(bot), ".claude", "skills");
     symlinkSync(outside, discovery, process.platform === "win32" ? "junction" : "dir");
 
-    expect(setSkillEnabled(bot, "native-boundary", true)).toMatchObject({ enabled: true });
+    expect(setEnabledForNativeFixture(bot, "native-boundary", true)).toMatchObject({ enabled: true });
     expect(lstatSync(discovery).isSymbolicLink()).toBe(true);
     expect(realpathSync(discovery)).toBe(realpathSync(outside));
     expect(existsSync(join(outside, "native-boundary"))).toBe(false);
-    expect(existsSync(join(root, ".agents", "skills", "native-boundary"))).toBe(true);
+    expect(existsSync(join(nativeFixtureRoot(bot), ".agents", "skills", "native-boundary"))).toBe(true);
   });
 });
 
@@ -602,10 +616,11 @@ describe("staged skill writes", () => {
     expect(staged).toMatchObject({ name: "file-expense", action: "create" });
     if ("error" in staged) throw new Error(staged.error);
     expect(listSkills(bot)).toEqual([]);
+    syncNativeFixture(bot);
     expect(skillsSystemPrompt(bot)).toBe("");
     expect(listStagedSkillWrites(bot).map((entry) => entry.id)).toEqual([staged.id]);
 
-    const applied = applyStagedSkillWrite(bot, staged.id, { expectedSha256: staged.sha256 });
+    const applied = applyForNativeFixture(bot, staged.id, { expectedSha256: staged.sha256 });
     expect(applied).toMatchObject({
       name: "file-expense",
       enabled: true,
@@ -622,7 +637,7 @@ describe("staged skill writes", () => {
       files: [{ path: "SKILL.md", content: SKILL("kept-current", "Original instructions.") }],
     });
     if ("error" in created) throw new Error(created.error);
-    expect(applyStagedSkillWrite(bot, created.id, { expectedSha256: created.sha256 }))
+    expect(applyForNativeFixture(bot, created.id, { expectedSha256: created.sha256 }))
       .toMatchObject({ enabled: true });
 
     const proposed = SKILL("kept-current", "Updated and reviewed instructions.");
@@ -635,9 +650,9 @@ describe("staged skill writes", () => {
     expect(staged).toMatchObject({ action: "update", name: "kept-current", baseSha256: created.sha256 });
     if ("error" in staged) throw new Error(staged.error);
     expect(readSkillFile(bot, "kept-current")).not.toBe(proposed);
-    expect(setSkillEnabled(bot, "kept-current", false)).toMatchObject({ enabled: false });
+    expect(setEnabledForNativeFixture(bot, "kept-current", false)).toMatchObject({ enabled: false });
 
-    const applied = applyStagedSkillWrite(bot, staged.id, { expectedSha256: staged.sha256 });
+    const applied = applyForNativeFixture(bot, staged.id, { expectedSha256: staged.sha256 });
     expect(applied).toMatchObject({
       name: "kept-current",
       description: "Updated and reviewed instructions.",
@@ -674,7 +689,7 @@ describe("staged skill writes", () => {
       files: [{ path: "SKILL.md", content: SKILL("exact-target", "Original.") }],
     });
     if ("error" in created) throw new Error(created.error);
-    expect(applyStagedSkillWrite(bot, created.id)).toMatchObject({ name: "exact-target" });
+    expect(applyForNativeFixture(bot, created.id)).toMatchObject({ name: "exact-target" });
 
     expect(stageSkillWrite(bot, {
       action: "update",
@@ -699,7 +714,7 @@ describe("staged skill writes", () => {
       files: [{ path: "SKILL.md", content: original }],
     });
     if ("error" in created) throw new Error(created.error);
-    expect(applyStagedSkillWrite(bot, created.id)).toMatchObject({ name: "denied-update" });
+    expect(applyForNativeFixture(bot, created.id)).toMatchObject({ name: "denied-update" });
     const staged = stageSkillWrite(bot, {
       action: "update",
       targetName: "denied-update",
@@ -718,7 +733,7 @@ describe("staged skill writes", () => {
       files: [{ path: "SKILL.md", content: original }],
     });
     if ("error" in created) throw new Error(created.error);
-    expect(applyStagedSkillWrite(bot, created.id)).toMatchObject({ name: "recreated-update" });
+    expect(applyForNativeFixture(bot, created.id)).toMatchObject({ name: "recreated-update" });
     const stale = stageSkillWrite(bot, {
       action: "update",
       targetName: "recreated-update",
@@ -727,17 +742,17 @@ describe("staged skill writes", () => {
     if ("error" in stale) throw new Error(stale.error);
 
     expect(rejectStagedSkillWrite(bot, stale.id)).toEqual({ rejected: true });
-    expect(removeSkill(bot, "recreated-update")).toEqual({ removed: true });
+    expect(removeForNativeFixture(bot, "recreated-update")).toEqual({ removed: true });
     const recreated = stageSkillWrite(bot, {
       action: "create",
       files: [{ path: "SKILL.md", content: original }],
     });
     if ("error" in recreated) throw new Error(recreated.error);
-    expect(applyStagedSkillWrite(bot, recreated.id)).toMatchObject({ name: "recreated-update" });
+    expect(applyForNativeFixture(bot, recreated.id)).toMatchObject({ name: "recreated-update" });
 
     const stagedPath = join(DATA_DIR, "skill-state", bot, "staged.json");
     writeFileSync(stagedPath, `${JSON.stringify({ writes: { [stale.id]: stale } }, null, 2)}\n`);
-    expect(applyStagedSkillWrite(bot, stale.id, { expectedSha256: stale.sha256 })).toMatchObject({
+    expect(applyForNativeFixture(bot, stale.id, { expectedSha256: stale.sha256 })).toMatchObject({
       error: expect.stringContaining("changed after this update was proposed"),
     });
     expect(readSkillFile(bot, "recreated-update")).toBe(original);
@@ -749,7 +764,7 @@ describe("staged skill writes", () => {
       files: [{ path: "SKILL.md", content: SKILL("crash-recovery", "Original.") }],
     });
     if ("error" in created) throw new Error(created.error);
-    expect(applyStagedSkillWrite(bot, created.id)).toMatchObject({ name: "crash-recovery" });
+    expect(applyForNativeFixture(bot, created.id)).toMatchObject({ name: "crash-recovery" });
     const proposed = SKILL("crash-recovery", "Reviewed replacement.");
     const staged = stageSkillWrite(bot, {
       action: "update",
@@ -759,12 +774,12 @@ describe("staged skill writes", () => {
     if ("error" in staged) throw new Error(staged.error);
     const originalPath = join(workspaceDir(bot), "skills", "crash-recovery", "SKILL.md");
     expect(readFileSync(originalPath, "utf8")).toBe(SKILL("crash-recovery", "Original."));
-    expect(applyStagedSkillWrite(bot, staged.id, { expectedSha256: staged.sha256 }))
+    expect(applyForNativeFixture(bot, staged.id, { expectedSha256: staged.sha256 }))
       .toMatchObject({ name: "crash-recovery", description: "Reviewed replacement." });
     expect(readSkillFile(bot, "crash-recovery")).toBe(proposed);
     expect(existsSync(originalPath)).toBe(false);
 
-    const firstRevision = realpathSync(join(workspaceDir(bot), ".agents", "skills", "crash-recovery"));
+    const firstRevision = realpathSync(join(nativeFixtureRoot(bot), ".agents", "skills", "crash-recovery"));
     expect(firstRevision).toContain(`${join("skills", ".revisions")}`);
     expect(readFileSync(join(firstRevision, "SKILL.md"), "utf8")).toBe(proposed);
 
@@ -775,8 +790,8 @@ describe("staged skill writes", () => {
       files: [{ path: "SKILL.md", content: secondProposal }],
     });
     if ("error" in second) throw new Error(second.error);
-    expect(applyStagedSkillWrite(bot, second.id)).toMatchObject({ description: "Second reviewed replacement." });
-    const secondRevision = realpathSync(join(workspaceDir(bot), ".agents", "skills", "crash-recovery"));
+    expect(applyForNativeFixture(bot, second.id)).toMatchObject({ description: "Second reviewed replacement." });
+    const secondRevision = realpathSync(join(nativeFixtureRoot(bot), ".agents", "skills", "crash-recovery"));
     expect(secondRevision).not.toBe(firstRevision);
     expect(existsSync(firstRevision)).toBe(false);
     expect(readSkillFile(bot, "crash-recovery")).toBe(secondProposal);
@@ -784,7 +799,7 @@ describe("staged skill writes", () => {
     expect(prompt).toContain(createHash("sha256").update(second.id).digest("hex"));
     expect(prompt).not.toContain(originalPath);
     for (const dir of [".claude/skills", ".agents/skills", ".grok/skills"]) {
-      expect(realpathSync(join(workspaceDir(bot), dir, "crash-recovery"))).toBe(secondRevision);
+      expect(realpathSync(join(nativeFixtureRoot(bot), dir, "crash-recovery"))).toBe(secondRevision);
     }
   });
 
@@ -795,7 +810,7 @@ describe("staged skill writes", () => {
       files: [{ path: "SKILL.md", content: original }],
     });
     if ("error" in created) throw new Error(created.error);
-    expect(applyStagedSkillWrite(bot, created.id)).toMatchObject({ name: "linked-update" });
+    expect(applyForNativeFixture(bot, created.id)).toMatchObject({ name: "linked-update" });
     const staged = stageSkillWrite(bot, {
       action: "update",
       targetName: "linked-update",
@@ -810,7 +825,7 @@ describe("staged skill writes", () => {
     rmSync(directory, { recursive: true, force: true });
     symlinkSync(outside, directory, process.platform === "win32" ? "junction" : "dir");
 
-    expect(applyStagedSkillWrite(bot, staged.id, { expectedSha256: staged.sha256 })).toMatchObject({
+    expect(applyForNativeFixture(bot, staged.id, { expectedSha256: staged.sha256 })).toMatchObject({
       error: expect.stringContaining("changed after this update was proposed"),
     });
     expect(readFileSync(join(outside, "SKILL.md"), "utf8")).toBe(original);
@@ -823,7 +838,7 @@ describe("staged skill writes", () => {
       files: [{ path: "SKILL.md", content: original }],
     });
     if ("error" in created) throw new Error(created.error);
-    expect(applyStagedSkillWrite(bot, created.id)).toMatchObject({ name: "revision-boundary" });
+    expect(applyForNativeFixture(bot, created.id)).toMatchObject({ name: "revision-boundary" });
     const staged = stageSkillWrite(bot, {
       action: "update",
       targetName: "revision-boundary",
@@ -839,7 +854,7 @@ describe("staged skill writes", () => {
       process.platform === "win32" ? "junction" : "dir",
     );
 
-    expect(applyStagedSkillWrite(bot, staged.id)).toMatchObject({
+    expect(applyForNativeFixture(bot, staged.id)).toMatchObject({
       error: expect.stringContaining("revisions path is not a real directory"),
     });
     expect(readSkillFile(bot, "revision-boundary")).toBe(original);
@@ -853,7 +868,7 @@ describe("staged skill writes", () => {
       files: [{ path: "SKILL.md", content: original }],
     });
     if ("error" in created) throw new Error(created.error);
-    expect(applyStagedSkillWrite(bot, created.id)).toMatchObject({ name: "revision-target" });
+    expect(applyForNativeFixture(bot, created.id)).toMatchObject({ name: "revision-target" });
     const staged = stageSkillWrite(bot, {
       action: "update",
       targetName: "revision-target",
@@ -873,7 +888,7 @@ describe("staged skill writes", () => {
       process.platform === "win32" ? "junction" : "dir",
     );
 
-    expect(applyStagedSkillWrite(bot, staged.id)).toMatchObject({
+    expect(applyForNativeFixture(bot, staged.id)).toMatchObject({
       error: expect.stringContaining("already exists with different content"),
     });
     expect(readFileSync(marker, "utf8")).toBe("outside stays untouched");
@@ -886,11 +901,11 @@ describe("staged skill writes", () => {
       files: [{ path: "SKILL.md", content: SKILL("link-owner", "Original.") }],
     });
     if ("error" in created) throw new Error(created.error);
-    expect(applyStagedSkillWrite(bot, created.id)).toMatchObject({ name: "link-owner" });
+    expect(applyForNativeFixture(bot, created.id)).toMatchObject({ name: "link-owner" });
 
     const userDirectory = join(scratch, "user-owned-link");
     mkdirSync(userDirectory);
-    const claudeLink = join(workspaceDir(bot), ".claude", "skills", "link-owner");
+    const claudeLink = join(nativeFixtureRoot(bot), ".claude", "skills", "link-owner");
     rmSync(claudeLink, { recursive: true, force: true });
     symlinkSync(userDirectory, claudeLink, process.platform === "win32" ? "junction" : "dir");
 
@@ -900,24 +915,24 @@ describe("staged skill writes", () => {
       files: [{ path: "SKILL.md", content: SKILL("link-owner", "Reviewed replacement.") }],
     });
     if ("error" in staged) throw new Error(staged.error);
-    expect(applyStagedSkillWrite(bot, staged.id)).toMatchObject({ description: "Reviewed replacement." });
+    expect(applyForNativeFixture(bot, staged.id)).toMatchObject({ description: "Reviewed replacement." });
     expect(realpathSync(claudeLink)).toBe(realpathSync(userDirectory));
-    expect(realpathSync(join(workspaceDir(bot), ".agents", "skills", "link-owner")))
+    expect(realpathSync(join(nativeFixtureRoot(bot), ".agents", "skills", "link-owner")))
       .toContain(join("skills", ".revisions"));
   });
 
   it("does not unlink a regular file swapped in during ordinary link cleanup", () => {
     installSkill(bot, "src", [{ path: "SKILL.md", content: SKILL("link-cleanup-race") }]);
-    setSkillEnabled(bot, "link-cleanup-race", true);
+    setEnabledForNativeFixture(bot, "link-cleanup-race", true);
     const root = workspaceDir(bot);
-    const racedLink = join(root, ".agents", "skills", "link-cleanup-race");
+    const racedLink = join(nativeFixtureRoot(bot), ".agents", "skills", "link-cleanup-race");
     writeFileSync(
       join(root, "skills", "link-cleanup-race", "SKILL.md"),
       SKILL("link-cleanup-race", "Changed after review."),
     );
 
     let swapped = false;
-    syncSkillLinks(bot, {
+    syncNativeFixture(bot, {
       beforeRemove: (link) => {
         if (link !== racedLink || swapped) return;
         swapped = true;
@@ -936,7 +951,7 @@ describe("staged skill writes", () => {
       files: [{ path: "SKILL.md", content: SKILL("stale-update", "Original.") }],
     });
     if ("error" in created) throw new Error(created.error);
-    expect(applyStagedSkillWrite(bot, created.id, { expectedSha256: created.sha256 }))
+    expect(applyForNativeFixture(bot, created.id, { expectedSha256: created.sha256 }))
       .toMatchObject({ enabled: true });
     const staged = stageSkillWrite(bot, {
       action: "update",
@@ -947,7 +962,7 @@ describe("staged skill writes", () => {
     const changed = SKILL("stale-update", "Changed after staging.");
     writeFileSync(join(workspaceDir(bot), "skills", "stale-update", "SKILL.md"), changed);
 
-    expect(applyStagedSkillWrite(bot, staged.id, { expectedSha256: staged.sha256 })).toMatchObject({
+    expect(applyForNativeFixture(bot, staged.id, { expectedSha256: staged.sha256 })).toMatchObject({
       error: expect.stringContaining("changed after this update was proposed"),
     });
     expect(readFileSync(join(workspaceDir(bot), "skills", "stale-update", "SKILL.md"), "utf8")).toBe(changed);
@@ -960,7 +975,7 @@ describe("staged skill writes", () => {
       files: [{ path: "SKILL.md", content: SKILL("replay-update", "Original.") }],
     });
     if ("error" in created) throw new Error(created.error);
-    expect(applyStagedSkillWrite(bot, created.id, { expectedSha256: created.sha256 }))
+    expect(applyForNativeFixture(bot, created.id, { expectedSha256: created.sha256 }))
       .toMatchObject({ enabled: true });
     const proposed = SKILL("replay-update", "Reviewed replacement.");
     const staged = stageSkillWrite(bot, {
@@ -970,7 +985,7 @@ describe("staged skill writes", () => {
     });
     if ("error" in staged) throw new Error(staged.error);
 
-    expect(() => applyStagedSkillWrite(bot, staged.id, {
+    expect(() => applyForNativeFixture(bot, staged.id, {
       expectedSha256: staged.sha256,
       onApplied: () => {
         throw new Error("simulated card write failure");
@@ -978,7 +993,7 @@ describe("staged skill writes", () => {
     })).toThrow("simulated card write failure");
     expect(readSkillFile(bot, "replay-update")).toBe(proposed);
 
-    expect(applyStagedSkillWrite(bot, staged.id, { expectedSha256: staged.sha256 }))
+    expect(applyForNativeFixture(bot, staged.id, { expectedSha256: staged.sha256 }))
       .toMatchObject({ name: "replay-update", enabled: true });
     expect(listStagedSkillWrites(bot)).toEqual([]);
   });
@@ -989,7 +1004,7 @@ describe("staged skill writes", () => {
       files: [{ path: "SKILL.md", content: SKILL("next-update", "Original.") }],
     });
     if ("error" in created) throw new Error(created.error);
-    expect(applyStagedSkillWrite(bot, created.id)).toMatchObject({ name: "next-update" });
+    expect(applyForNativeFixture(bot, created.id)).toMatchObject({ name: "next-update" });
     const applied = stageSkillWrite(bot, {
       action: "update",
       targetName: "next-update",
@@ -997,7 +1012,7 @@ describe("staged skill writes", () => {
     });
     if ("error" in applied) throw new Error(applied.error);
 
-    expect(() => applyStagedSkillWrite(bot, applied.id, {
+    expect(() => applyForNativeFixture(bot, applied.id, {
       onApplied: () => {
         throw new Error("simulated card write failure");
       },
@@ -1021,20 +1036,20 @@ describe("staged skill writes", () => {
       files: [{ path: "SKILL.md", content: SKILL("remove-updated", "Original.") }],
     });
     if ("error" in created) throw new Error(created.error);
-    expect(applyStagedSkillWrite(bot, created.id)).toMatchObject({ name: "remove-updated" });
+    expect(applyForNativeFixture(bot, created.id)).toMatchObject({ name: "remove-updated" });
     const staged = stageSkillWrite(bot, {
       action: "update",
       targetName: "remove-updated",
       files: [{ path: "SKILL.md", content: SKILL("remove-updated", "Replacement.") }],
     });
     if ("error" in staged) throw new Error(staged.error);
-    expect(applyStagedSkillWrite(bot, staged.id)).toMatchObject({ description: "Replacement." });
-    const revision = realpathSync(join(workspaceDir(bot), ".agents", "skills", "remove-updated"));
+    expect(applyForNativeFixture(bot, staged.id)).toMatchObject({ description: "Replacement." });
+    const revision = realpathSync(join(nativeFixtureRoot(bot), ".agents", "skills", "remove-updated"));
     const laterDirectory = join(workspaceDir(bot), "skills", "remove-updated");
     mkdirSync(laterDirectory, { recursive: true });
     writeFileSync(join(laterDirectory, "owner.txt"), "user-owned\n");
 
-    expect(removeSkill(bot, "remove-updated")).toEqual({ removed: true });
+    expect(removeForNativeFixture(bot, "remove-updated")).toEqual({ removed: true });
     expect(existsSync(revision)).toBe(false);
     expect(readFileSync(join(laterDirectory, "owner.txt"), "utf8")).toBe("user-owned\n");
   });
@@ -1045,10 +1060,10 @@ describe("staged skill writes", () => {
       files: [{ path: "SKILL.md", content: SKILL("remove-revision-link", "Original.") }],
     });
     if ("error" in created) throw new Error(created.error);
-    expect(applyStagedSkillWrite(bot, created.id)).toMatchObject({ name: "remove-revision-link" });
+    expect(applyForNativeFixture(bot, created.id)).toMatchObject({ name: "remove-revision-link" });
 
     const root = workspaceDir(bot);
-    const activeLink = join(root, ".agents", "skills", "remove-revision-link");
+    const activeLink = join(nativeFixtureRoot(bot), ".agents", "skills", "remove-revision-link");
     const revision = basename(realpathSync(activeLink));
     const revisions = join(root, "skills", ".revisions");
     rmSync(revisions, { recursive: true, force: true });
@@ -1058,7 +1073,7 @@ describe("staged skill writes", () => {
     writeFileSync(join(outsideRevision, "marker.txt"), "must survive\n");
     symlinkSync(outside, revisions, process.platform === "win32" ? "junction" : "dir");
 
-    expect(removeSkill(bot, "remove-revision-link")).toEqual({ removed: true });
+    expect(removeForNativeFixture(bot, "remove-revision-link")).toEqual({ removed: true });
     expect(readFileSync(join(outsideRevision, "marker.txt"), "utf8")).toBe("must survive\n");
     expect(listSkills(bot)).toEqual([]);
   });
@@ -1152,7 +1167,7 @@ describe("staged skill writes", () => {
     raw.writes[staged.id].files.push({ path: "SKILL.md", content: SKILL("single-file", "Unreviewed replacement.") });
     writeFileSync(path, JSON.stringify(raw));
 
-    expect(applyStagedSkillWrite(bot, staged.id, { expectedSha256: staged.sha256 })).toMatchObject({
+    expect(applyForNativeFixture(bot, staged.id, { expectedSha256: staged.sha256 })).toMatchObject({
       error: expect.stringContaining("exactly one SKILL.md"),
     });
     expect(listSkills(bot)).toEqual([]);
@@ -1164,7 +1179,7 @@ describe("staged skill writes", () => {
       files: [{ path: "SKILL.md", content: SKILL("hash-bound") }],
     });
     if ("error" in staged) throw new Error(staged.error);
-    const applied = applyStagedSkillWrite(bot, staged.id, { expectedSha256: "0".repeat(64) });
+    const applied = applyForNativeFixture(bot, staged.id, { expectedSha256: "0".repeat(64) });
     expect(applied).toMatchObject({ error: expect.stringContaining("changed after review") });
     expect(listSkills(bot)).toEqual([]);
     expect(listStagedSkillWrites(bot)).toHaveLength(1);
@@ -1220,7 +1235,7 @@ describe("staged skill writes", () => {
     });
     if ("error" in staged) throw new Error(staged.error);
     expect(() =>
-      applyStagedSkillWrite(bot, staged.id, {
+      applyForNativeFixture(bot, staged.id, {
         expectedSha256: staged.sha256,
         onApplied: () => {
           throw new Error("simulated card write failure");
@@ -1229,7 +1244,7 @@ describe("staged skill writes", () => {
     ).toThrow("simulated card write failure");
     expect(listSkills(bot)).toMatchObject([{ name: "replay-safe", enabled: true }]);
 
-    const replayed = applyStagedSkillWrite(bot, staged.id, { expectedSha256: staged.sha256 });
+    const replayed = applyForNativeFixture(bot, staged.id, { expectedSha256: staged.sha256 });
     expect(replayed).toMatchObject({ name: "replay-safe", enabled: true });
     expect(listStagedSkillWrites(bot)).toEqual([]);
   });
@@ -1241,7 +1256,7 @@ describe("staged skill writes", () => {
     });
     if ("error" in staged) throw new Error(staged.error);
     expect(() =>
-      applyStagedSkillWrite(bot, staged.id, {
+      applyForNativeFixture(bot, staged.id, {
         expectedSha256: staged.sha256,
         onApplied: () => {
           throw new Error("simulated card write failure");
@@ -1261,7 +1276,7 @@ describe("staged skill writes", () => {
     });
     expect(later).toMatchObject({ name: "later-stage" });
 
-    expect(applyStagedSkillWrite(bot, staged.id, { expectedSha256: staged.sha256 })).toMatchObject({
+    expect(applyForNativeFixture(bot, staged.id, { expectedSha256: staged.sha256 })).toMatchObject({
       name: "replay-after-later-stage",
       enabled: true,
     });
@@ -1277,7 +1292,7 @@ describe("staged skill writes", () => {
     mkdirSync(target, { recursive: true });
     writeFileSync(join(target, "SKILL.md"), staged.files[0]!.content);
 
-    const applied = applyStagedSkillWrite(bot, staged.id, { expectedSha256: staged.sha256 });
+    const applied = applyForNativeFixture(bot, staged.id, { expectedSha256: staged.sha256 });
     expect(applied).toMatchObject({ name: "crash-recovery", enabled: true });
     expect(skillsSystemPrompt(bot)).toContain("- crash-recovery:");
   });
@@ -1288,13 +1303,14 @@ describe("staged skill writes", () => {
       files: [{ path: "SKILL.md", content: SKILL("integrity-check") }],
     });
     if ("error" in staged) throw new Error(staged.error);
-    expect(applyStagedSkillWrite(bot, staged.id, { expectedSha256: staged.sha256 })).toMatchObject({ enabled: true });
+    expect(applyForNativeFixture(bot, staged.id, { expectedSha256: staged.sha256 })).toMatchObject({ enabled: true });
     writeFileSync(join(workspaceDir(bot), "skills", "integrity-check", "SKILL.md"), SKILL("integrity-check", "Changed later."));
 
+    syncNativeFixture(bot);
     expect(skillsSystemPrompt(bot)).toBe("");
     expect(listSkills(bot)[0]).toMatchObject({ enabled: false, warnings: [expect.stringContaining("changed after review")] });
     for (const dir of [".claude/skills", ".agents/skills", ".grok/skills"]) {
-      expect(existsSync(join(workspaceDir(bot), dir, "integrity-check"))).toBe(false);
+      expect(existsSync(join(nativeFixtureRoot(bot), dir, "integrity-check"))).toBe(false);
     }
   });
 });
@@ -1404,13 +1420,13 @@ describe("learned skill references", () => {
       files: [{ path: "SKILL.md", content: SKILL("file-expense") }, ref("edge-cases")],
     });
     if ("error" in staged) throw new Error(staged.error);
-    expect(applyStagedSkillWrite(bot, staged.id, { expectedSha256: staged.sha256, expectedReferencesSha256: null }))
+    expect(applyForNativeFixture(bot, staged.id, { expectedSha256: staged.sha256, expectedReferencesSha256: null }))
       .toMatchObject({ error: expect.stringContaining("changed after review") });
     const path = join(DATA_DIR, "skill-state", bot, "staged.json");
     const raw = JSON.parse(readFileSync(path, "utf8"));
     raw.writes[staged.id].files[1].content = "Unreviewed.";
     writeFileSync(path, JSON.stringify(raw));
-    expect(applyStagedSkillWrite(bot, staged.id, { expectedSha256: staged.sha256 }))
+    expect(applyForNativeFixture(bot, staged.id, { expectedSha256: staged.sha256 }))
       .toMatchObject({ error: expect.stringContaining("changed after review") });
     expect(listSkills(bot)).toEqual([]);
   });

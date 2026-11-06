@@ -1,3 +1,5 @@
+import { chatgptPlanCodexArgs } from "./codex-plan-config.ts";
+export { chatgptPlanCodexArgs } from "./codex-plan-config.ts";
 import { codexNativeLogMessage, codexNativeIncomingLogMessage } from "./codex-native-log.ts";
 export { codexNativeIncomingLogMessage } from "./codex-native-log.ts";
 import { assertCodexPluginSelection, prepareCodexPlugins } from "./codex-plugins.ts";
@@ -39,7 +41,7 @@ import type {
 import { newEventId, newId } from "../contracts.ts";
 import { decodeCodexSelection, OFFICIAL_CODEX_PROVIDER, readCodexModelCatalog, STATIC_CODEX_MODELS } from "./codex-catalog.ts";
 import { codexLocalProviderArgs } from "./local-inject.ts";
-import { codexBackgroundModel, runCodexOneShot } from "./codex-background-text.ts";
+import { codexBackgroundRoute, runCodexBackgroundRoute, runCodexOneShot } from "./codex-background-text.ts";
 import { augmentedPath, splitCliString } from "../env-path.ts";
 import { classifyError, computeBackoff, interruptibleDelay, RETRY_MAX_ATTEMPTS } from "./retry.ts";
 import { appendNative } from "./native.ts";
@@ -54,7 +56,7 @@ import { CODEX_MISSING_CREDENTIALS, CODEX_SIGN_IN_EXPIRED, codexLimitFacts, code
 import { codexLoginCheck, codexLoginStatus, storedCodexLogin } from "./codex-login.ts";
 import { keyRejected, noteKeyAccepted, noteKeyRejected } from "../key-rejections.ts";
 import { classifyResumeFailure, mayReplay, rebuiltSessionNotice, recoveryPromptFor } from "../resume-recovery.ts";
-import { extractMcpImages } from "../mcp-tool-images.ts";
+import { extractMcpImages } from "../mcp-tool-images.ts"; import { codexImageInputs } from "./codex-images.ts";
 import { parseProtocolAskQuestions, questionChoices } from "../../shared/ask-question.ts";
 import { codexQuestionReply, openAsyncQuestion, type CodexAsk } from "./codex-questions.ts";
 import { codexVersionBehind, readLatestCodexRelease } from "./codex-release.ts";
@@ -130,23 +132,6 @@ function decodeConfig(raw: unknown): CodexConfig {
   };
 }
 
-/** The token-sharing Responses bridge carries no hosted tool_search (Codex 0.159.0 sends none), so
- * a plan turn's MCP tools load up front. */
-export function chatgptPlanCodexArgs(): string[] {
-  return [
-    "-c", 'model_provider="openai_chatgpt_plan"',
-    "-c", 'model_providers.openai_chatgpt_plan.name="ChatGPT plan"',
-    "-c", 'model_providers.openai_chatgpt_plan.base_url="https://api.openai.com/v1"',
-    "-c", 'model_providers.openai_chatgpt_plan.env_key="OPENMAUSBOT_CHATGPT_TOKEN"',
-    "-c", 'model_providers.openai_chatgpt_plan.wire_api="responses"',
-    "-c", "model_providers.openai_chatgpt_plan.requires_openai_auth=false",
-    "-c", "model_providers.openai_chatgpt_plan.supports_websockets=false",
-    "-c", 'cli_auth_credentials_store="ephemeral"',
-    "-c", "features.tool_search=false",
-    "-c", "shell_environment_policy.ignore_default_excludes=false",
-    // OPENMAUSBOT_CHATGPT_TOKEN is excluded via extendShellExclusions: a `-c exclude` here would replace the lower layers' list.
-  ];
-}
 
 function decodeManagedCodex(raw: object): NonNullable<CodexConfig["managed"]> {
   const value = raw as { url?: unknown; models?: unknown };
@@ -565,6 +550,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       } catch { return null; }
       return [`codex-login:${home}`, stored];
     };
+    const smallModelsUsable = () => !plan && loginMark() === null;
     const loginRefused = () => { const mark = loginMark(); if (mark) noteKeyRejected(...mark); };
     const loginAccepted = (mark = loginMark()) => { if (mark) noteKeyAccepted(...mark); };
     const loginRejected = () => { const mark = loginMark(); return mark !== null && keyRejected(...mark); };
@@ -1085,11 +1071,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           }
           emit({ ...base(threadId, turnId), type: "request.resolved", requestId, behavior, source });
         };
-        const timer = setTimeout(
-          () => finish("deny", isQuestion ? undefined : DENY_TIMEOUT_NOTE, "timeout"),
-          15 * 60_000,
-        );
-        timer.unref?.();
+        const timer = isQuestion ? undefined : setTimeout(() => finish("deny", DENY_TIMEOUT_NOTE, "timeout"), 15 * 60_000);
+        timer?.unref?.();
         asks.set(requestId, finish);
         emit({
           ...base(threadId, turnId),
@@ -1538,6 +1521,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         let resumedNativeThread = false;
         let rebuiltFromReplay = false;
         let promptText = turn.text;
+        if (turn.taskSkillsDir) await request("skills/extraRoots/set", { extraRoots: [join(turn.taskSkillsDir, ".agents", "skills")] });
         if (cursor) {
           const resumeThread = () => request("thread/resume", {
             ...selectionConfig,
@@ -1621,7 +1605,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         if (rebuiltFromReplay) emit({ ...base(threadId, turnId), type: "runtime.notice", message: rebuiltSessionNotice("Codex") });
         const turnInput = [
           ...(promptText ? [{ type: "text" as const, text: promptText }] : []),
-          ...(turn.images ?? []).map((image) => ({ type: "localImage" as const, path: image.path })),
+          ...await codexImageInputs(turn.images),
         ];
         const startTurn = () => {
           promptSubmitted = true;
@@ -1733,22 +1717,18 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       }
       providerArgs = managedCodexArgs(config.managed);
     }
-    const id = codexBackgroundModel(models);
-    if (!id) throw new Error("Codex lists no model for background calls. Refresh models in Settings → Model providers → Codex.");
-    const selection = planAuth || config.managed ? { model: id, modelProvider: null } : decodeCodexSelection(id);
-    if (!planAuth && !config.managed) providerArgs = codexLocalProviderArgs(env, id);
-    return runCodexOneShot({
-      spawn: spawnCli,
-      kill: killCliTree,
-      cli: config.cli,
-      env,
-      prompt,
-      model: selection.model ?? id,
-      modelProvider: selection.modelProvider,
-      providerArgs,
-      options,
-      describeError: (message) => codexUserError(message, planAuth ? "plan" : selection.modelProvider === OFFICIAL_CODEX_PROVIDER ? "own" : "other"),
-    });
+    const route = codexBackgroundRoute(models, smallModelsUsable(), options.fallback);
+    if (!route) throw new Error("Codex lists no model for background calls. Refresh models in Settings → Model providers → Codex.");
+    return runCodexBackgroundRoute(route, (id) => {
+      const selection = planAuth || config.managed ? { model: id, modelProvider: null } : decodeCodexSelection(id);
+      return runCodexOneShot({
+        spawn: spawnCli, kill: killCliTree, cli: config.cli, env, prompt, options,
+        model: selection.model ?? id,
+        modelProvider: selection.modelProvider,
+        providerArgs: planAuth || config.managed ? providerArgs : codexLocalProviderArgs(env, id),
+        describeError: (message) => codexUserError(message, planAuth ? "plan" : selection.modelProvider === OFFICIAL_CODEX_PROVIDER ? "own" : "other"),
+      });
+    }, options);
   };
 
   return {
@@ -1759,6 +1739,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     get models() {
       return models;
     },
+    quickModelsUsable: smallModelsUsable,
     refreshModels,
     ...(startupModelRefresh ? { startupModelRefresh } : {}),
     generateMemoryText,

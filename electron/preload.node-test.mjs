@@ -151,3 +151,25 @@ test("a Cloud link arriving before React subscriptions is delivered exactly once
   assert.deepEqual(calls, ["cloud"], "later subscriptions must not reopen Settings");
   late();
 });
+
+test("typed package imports survive cold subscriptions, deliver warm requests and are consumed once", async () => {
+  const cold = { type: "bot", source: "openmausbot", id: "research" };
+  const warm = { type: "plugin", source: "grok-bot", id: "123" };
+  emit("package:install", cold);
+  const calls = [];
+  exposed.api.onPackageInstall(input => calls.push(input))();
+  await Promise.resolve();
+  assert.deepEqual(calls, []);
+  const dispose = exposed.api.onPackageInstall(input => calls.push(input));
+  await Promise.resolve();
+  assert.deepEqual(calls, [cold]);
+  emit("package:install", warm);
+  assert.deepEqual(calls, [cold, warm]);
+  dispose();
+  const late = exposed.api.onPackageInstall(input => calls.push(input));
+  await Promise.resolve();
+  assert.deepEqual(calls, [cold, warm]);
+  emit("package:install", { type: "script", source: "unknown" });
+  assert.equal(calls.length, 2);
+  late();
+});

@@ -1,4 +1,4 @@
-import { pluginLibrary, type PluginLibrary } from "./plugins.ts";
+import { pluginLibrary, type PluginLibrary, type PreparedPlugin } from "./plugins.ts";
 import type { Store } from "./store.ts";
 import type { NewBotDefaults } from "./new-bot-defaults.ts";
 import type { UninstalledPlugin } from "../shared/plugins.ts";
@@ -31,6 +31,12 @@ export function createPluginService(deps: {
   };
   return {
     list: () => library.list(),
+    prepare: (source: string, directory?: string, fetcher?: typeof fetch) => library.prepare(source, directory, fetcher),
+    discard: (prepared: PreparedPlugin) => library.discard(prepared),
+    commit: (prepared: PreparedPlugin, requireActive?: () => void) => library.commit(prepared, (plugin, replacing) => {
+      if (replacing) requireIdle(plugin.id, requireActive);
+      else requireActive?.();
+    }),
     install: (source: string, requireActive?: () => void) => library.install(source, (plugin, replacing) => {
       if (replacing) requireIdle(plugin.id, requireActive);
       else requireActive?.();

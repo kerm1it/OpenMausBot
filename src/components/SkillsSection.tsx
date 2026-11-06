@@ -1,4 +1,5 @@
-// Security: local browse only, with no registry and no network fetch, so an import is exactly the bytes pasted here.
+import type { SkillDirectoryReviewWire } from "../../shared/skill-directory";
+import { SkillDirectoryPreview } from "./SkillDirectoryPreview";
 import { Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { t } from "@/lib/i18n";
@@ -41,7 +42,7 @@ export function SkillsSection() {
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [activeTag, setActiveTag] = useState<string | null>(null);
-  const [viewing, setViewing] = useState<{ skill: SkillsLibrarySkillWire; text: string; review: boolean } | null>(null);
+  const [viewing, setViewing] = useState<({ skill: SkillsLibrarySkillWire; text: string; review: boolean } & SkillDirectoryReviewWire) | null>(null);
   const [working, setWorking] = useState("");
   const [importText, setImportText] = useState("");
   const [importing, setImporting] = useState(false);
@@ -129,7 +130,7 @@ export function SkillsSection() {
       const response = await fetch(`/api/skills-library/${encodeURIComponent(skill.name)}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ enabled: !skill.enabled }),
+        body: JSON.stringify({ enabled: !skill.enabled, directorySha256: reviewed ? viewing?.directorySha256 : undefined }),
       });
       const body = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(body.error ?? "Could not update this skill.");
@@ -147,10 +148,10 @@ export function SkillsSection() {
     setError("");
     try {
       const response = await fetch(`/api/skills-library/${encodeURIComponent(skill.name)}`);
-      const body = (await response.json()) as { text?: string; error?: string };
+      const body = (await response.json()) as { text?: string; error?: string } & SkillDirectoryReviewWire;
       if (!response.ok) throw new Error(body.error ?? "Could not load this skill.");
       if (!body.text) throw new Error("The skill contents are unavailable; import it again.");
-      setViewing({ skill, text: body.text, review });
+      setViewing({ skill, text: body.text, review, files: body.files, directorySha256: body.directorySha256 });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load this skill.");
     }
@@ -166,7 +167,7 @@ export function SkillsSection() {
       const response = await fetch("/api/skills-library", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify(/^(https?:\/\/|[\w.-]+\/[\w.-]+$)/.test(text) ? { source: text } : { text }),
       });
       const body = (await response.json()) as { skill?: { name: string }; error?: string };
       if (!response.ok) throw new Error(body.error ?? "Could not import that skill.");
@@ -341,7 +342,7 @@ export function SkillsSection() {
 }
 
 function SkillSourceDialog({ viewing, error, working, onClose, onEnable }: {
-  viewing: { skill: SkillsLibrarySkillWire; text: string; review: boolean };
+  viewing: { skill: SkillsLibrarySkillWire; text: string; review: boolean } & SkillDirectoryReviewWire;
   error: string;
   working: boolean;
   onClose: () => void;
@@ -379,6 +380,7 @@ function SkillSourceDialog({ viewing, error, working, onClose, onEnable }: {
             >
               {viewing.text}
             </pre>
+            <div className="max-h-64 overflow-auto"><SkillDirectoryPreview files={viewing.files?.filter(file => file.path !== "SKILL.md")} /></div>
             {error && <div role="alert" className="mt-2 text-[12px] text-danger">{error}</div>}
             {viewing.review && <button type="button" disabled={working} onClick={onEnable} className="mt-4 self-end rounded-lg bg-accent px-4 py-2 text-[13px] font-semibold text-white disabled:opacity-40">Enable reviewed skill</button>}
           </div>

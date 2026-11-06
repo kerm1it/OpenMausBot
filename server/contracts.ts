@@ -185,6 +185,8 @@ export interface SendTurnInput {
   mcpFromUserConfig?: boolean;
   /** Claude Code loads the person's own `~/.claude/skills` from this folder's `.claude/skills` (`--add-dir`). */
   userSkillsDir?: string;
+  /** A turn's stable workspace whose native skill links target its captured directory revisions. */
+  taskSkillsDir?: string;
   /** Per-call ceiling (ms) for this turn's MCP tools; absent is the driver's default (10 min). */
   mcpCallTimeoutMs?: number;
   /** Times an API-model turn that answers after a failed tool call is sent back to re-run it (`loopGuard.correctiveRounds`); never after a denial. */
@@ -420,6 +422,16 @@ export interface TextGenerationOptions {
   model?: string;
   /** How long the caller will wait; drivers with their own process timer use it instead of their default. */
   timeoutMs?: number;
+  /** For a bot's own engine whose driver picks a small model of its own. */
+  fallback?: SmallModelFallback;
+}
+
+export interface SmallModelFallback {
+  /** The bot's own model on this instance: used instead of a small model the sign-in cannot use, and once more when the provider refuses the small one. */
+  model?: string;
+  /** Small models this instance refused before: never picked. */
+  refused: ReadonlySet<string>;
+  onRefused: (model: string) => void;
 }
 
 export interface ProviderInstance {
@@ -428,6 +440,8 @@ export interface ProviderInstance {
   readonly displayName: string | undefined;
   readonly enabled: boolean;
   readonly models: ModelCatalog;
+  /** False while the sign-in can refuse a model its catalog lists (Codex on a ChatGPT account): a short message and background text then stay on the bot's own model. */
+  readonly quickModelsUsable?: () => boolean;
   /** Refresh a live catalog without recreating the provider instance. */
   readonly refreshModels?: () => Promise<void>;
   /** Set while the last run's catalog is still refreshing; a turn awaits it, listen does not. */

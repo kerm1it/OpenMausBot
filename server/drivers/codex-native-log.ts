@@ -1,7 +1,9 @@
+import { withoutInlineImages } from "./codex-images.ts";
+
 /** Native instructions and private host paths stay out of diagnostics; the provider still gets the unmodified request. */
 export function codexNativeLogMessage(message: unknown): unknown {
   if (!message || typeof message !== "object" || Array.isArray(message)) return message;
-  const record = message as Record<string, unknown>;
+  const record = withoutInlineImages(message) as Record<string, unknown>;
   const params = record.params;
   if (!params || typeof params !== "object" || Array.isArray(params)) return message;
   if (record.method === "thread/start" || record.method === "thread/resume") {
@@ -10,9 +12,9 @@ export function codexNativeLogMessage(message: unknown): unknown {
   if (record.method === "thread/inject_items") {
     return { ...record, params: { ...params, items: "[developer instruction update omitted]" } };
   }
-  if (record.method !== "turn/start") return message;
+  if (record.method !== "turn/start") return record;
   const input = (params as Record<string, unknown>).input;
-  if (!Array.isArray(input)) return message;
+  if (!Array.isArray(input)) return record;
   return {
     ...record,
     params: {
@@ -55,5 +57,5 @@ export function codexNativeIncomingLogMessage(
       },
     };
   }
-  return message;
+  return withoutInlineImages(message);
 }

@@ -5,12 +5,14 @@ import type { AppConfig } from "../config.ts";
 import { importedSkillListings, setImportedSkillEnabled } from "../imported-skills.ts";
 import { botSkillTemplateSchema } from "../new-bot-defaults.ts";
 import { fetchSkillFromSource } from "../skill-fetch.ts";
-import { installLibrarySkill, listLibrarySkills, readLibrarySkillFile, readSkillLibraryIndex, setLibrarySkillReviewState, skillsLibraryEnabled } from "../skill-library.ts";
+import { installLibrarySkill, listLibrarySkills, readLibrarySkillFile, readLibrarySkillRevision, readLegacyLibrarySkillDirectoryForReview, readLibrarySkillDirectory, readSkillLibraryIndex, setLibrarySkillReviewState, skillsLibraryEnabled } from "../skill-library.ts";
 import {
-  installSkill, listBotSkillsWithOrigin, listStagedSkillWrites, parseSkillMd, removeSkill, scanSkillText, setSkillEnabled,
+  getStagedSkillWrite, readStagedSkillFiles, installSkill, readLegacySkillDirectoryForReview, readSkillDirectory, listBotSkillsWithOrigin, listStagedSkillWrites, parseSkillMd, removeSkill, scanSkillText, setSkillEnabled,
   type SkillListing, type StagedSkillWrite,
 } from "../skills.ts";
 import type { BotRecord, Store } from "../store.ts";
+import { readSkillDirectoryFiles, skillFileBytes } from "../skill-files.ts";
+import { skillDirectoryReview } from "../skill-directory-review.ts";
 import { PASS, type RouteHandler } from "./table.ts";
 
 export interface BotSkillsRouteDeps {
@@ -25,6 +27,24 @@ export function createBotSkillsRoutes(deps: BotSkillsRouteDeps): RouteHandler {
   const { store, cfg, listBotSkills, readBotSkillFile, stagedSkillListing } = deps;
   return async ({ req, res, path, method, json, readBody }) => {
     let m: RegExpMatchArray | null = null;
+    const fileMatch = path.match(/^\/api\/(?:bots\/([\w-]+)\/(skills|staged-skills)\/([\w-]+)|skills-library\/([a-z0-9-]+))\/files$/);
+    if (fileMatch && method === "GET") {
+      const [, botId, kind, name, libraryName] = fileMatch;
+      const bot = botId ? store.bot(botId) : undefined;
+      const own = bot && name ? readSkillDirectory(bot.id, name) ?? readLegacySkillDirectoryForReview(bot.id, name) : null;
+      const shared = libraryName && skillsLibraryEnabled(cfg) ? readLibrarySkillDirectory(libraryName) ?? readLegacyLibrarySkillDirectoryForReview(libraryName) :
+        bot && name && skillsLibraryEnabled(cfg) && bot.assignedSkills?.includes(name) ? readLibrarySkillDirectory(name) : null;
+      const staged = kind === "staged-skills" && bot && name ? getStagedSkillWrite(bot.id, name) : null;
+      const revision = new URL(req.url!, "http://localhost").searchParams.get("revision");
+      const historical = libraryName && skillsLibraryEnabled(cfg) && revision ? readLibrarySkillRevision(libraryName, revision) : null;
+      const files = historical ?? staged?.files ?? (kind === "staged-skills" && bot && name ? readStagedSkillFiles(bot.id, name) ?? [] : own || shared ? readSkillDirectoryFiles((own ?? shared)!.directory) : []);
+      const selected = files.find(file => file.path === new URL(req.url!, "http://localhost").searchParams.get("path"));
+      if (!selected) return json(res, 404, { error: "no such Skill file" });
+      res.writeHead(200, { "content-type": "application/octet-stream", "content-disposition": "attachment",
+        "x-content-type-options": "nosniff", "content-security-policy": "sandbox" });
+      res.end(skillFileBytes(selected));
+      return;
+    }
     // Imports land DISABLED: a person enables one after reading SKILL.md and its scan warnings.
     m = path.match(/^\/api\/bots\/([\w-]+)\/skill-template$/);
     if (m && method === "POST") {
@@ -74,12 +94,14 @@ export function createBotSkillsRoutes(deps: BotSkillsRouteDeps): RouteHandler {
     m = path.match(/^\/api\/bots\/([\w-]+)\/skills\/([a-z0-9-]+)$/);
     if (m && method === "GET") {
       const bot = store.bot(m[1]);
-      const text = bot ? readBotSkillFile(bot, m[2]!) : null;
+      const legacy = bot ? readLegacySkillDirectoryForReview(bot.id, m[2]!) : null;
+      const text = bot ? readBotSkillFile(bot, m[2]!) ?? (legacy ? readSkillDirectoryFiles(legacy.directory)[0]!.content : null) : null;
       if (text === null) return json(res, 404, { error: "no such skill" });
-      return json(res, 200, { text });
+      const directory = bot ? readSkillDirectory(bot.id, m[2]!) ?? legacy ?? (skillsLibraryEnabled(cfg) && bot.assignedSkills?.includes(m[2]!) ? readLibrarySkillDirectory(m[2]!) : null) : null;
+      return json(res, 200, { text, ...(directory ? skillDirectoryReview(readSkillDirectoryFiles(directory.directory), path) : {}) });
     }
     if (m && method === "PATCH") {
-      const parsed = z.object({ enabled: z.boolean() }).safeParse(await readBody(req));
+      const parsed = z.object({ enabled: z.boolean(), directorySha256: z.string().regex(/^[a-f0-9]{64}$/).optional() }).safeParse(await readBody(req));
       if (!parsed.success) return json(res, 400, { error: "enabled must be true or false" });
       const bot = store.bot(m[1]);
       // A skill from this computer that none of the bot's own or library skills shadows: this bot's switch for it.
@@ -88,7 +110,9 @@ export function createBotSkillsRoutes(deps: BotSkillsRouteDeps): RouteHandler {
         if ("error" in result) return json(res, 409, { error: result.error });
         return json(res, 200, { skill: result });
       }
-      const result = setSkillEnabled(m[1]!, m[2]!, parsed.data.enabled);
+      const directory = readSkillDirectory(m[1]!, m[2]!) ?? readLegacySkillDirectoryForReview(m[1]!, m[2]!);
+      if (parsed.data.enabled && parsed.data.directorySha256 && directory?.digest !== parsed.data.directorySha256) return json(res, 409, { error: "Skill changed after review; review it again" });
+      const result = setSkillEnabled(m[1]!, m[2]!, parsed.data.enabled, parsed.data.directorySha256);
       if ("error" in result) return json(res, 404, { error: result.error });
       return json(res, 200, { skill: result });
     }
@@ -123,18 +147,32 @@ export function createBotSkillsRoutes(deps: BotSkillsRouteDeps): RouteHandler {
     }
     if (m && method === "POST") {
       if (!skillsLibraryEnabled(cfg)) return json(res, 404, { error: "skills library is not enabled" });
-      const parsed = z.object({ text: z.string().min(1) }).safeParse(await readBody(req));
-      if (!parsed.success) return json(res, 400, { error: "text must be the SKILL.md contents to import" });
-      const skill = parseSkillMd(parsed.data.text);
+      const parsed = z.object({ text: z.string().min(1).optional(), source: z.string().min(1).max(2000).optional() }).safeParse(await readBody(req));
+      if (!parsed.success || (!parsed.data.text && !parsed.data.source)) return json(res, 400, { error: "Paste a GitHub or skills.sh URL, or the SKILL.md contents" });
+      if (parsed.data.source) {
+        const fetched = await fetchSkillFromSource(parsed.data.source);
+        if ("error" in fetched) return json(res, 422, fetched);
+        const results = fetched.skills.map(fetched => {
+          const instructions = fetched.files.find(file => file.path === "SKILL.md")?.content ?? "";
+          const skill = parseSkillMd(instructions);
+          return "error" in skill ? skill : installLibrarySkill({ name: skill.name, instructions, files: fetched.files,
+            source: fetched.source, license: skill.license, compatibility: skill.compatibility, tags: skill.tags, reviewState: "disabled" });
+        });
+        const installed = results.filter(result => !("error" in result));
+        const errors = results.flatMap(result => "error" in result ? [result.error] : []);
+        if (!installed.length) return json(res, 422, { error: errors.join("; ") || "No importable Skills" });
+        return json(res, 201, { skill: installed[0], installed, errors });
+      }
+      const skill = parseSkillMd(parsed.data.text!);
       if ("error" in skill) return json(res, 400, { error: skill.error });
       const installed = installLibrarySkill({
         name: skill.name,
-        instructions: parsed.data.text,
+        instructions: parsed.data.text!,
         source: "local-import",
         license: skill.license,
         compatibility: skill.compatibility,
         tags: skill.tags,
-        warnings: scanSkillText(parsed.data.text),
+        warnings: scanSkillText(parsed.data.text!),
         reviewState: "disabled",
       });
       if ("error" in installed) return json(res, 422, { error: installed.error });
@@ -143,15 +181,19 @@ export function createBotSkillsRoutes(deps: BotSkillsRouteDeps): RouteHandler {
     m = path.match(/^\/api\/skills-library\/([a-z0-9-]+)$/);
     if (m && method === "GET") {
       if (!skillsLibraryEnabled(cfg)) return json(res, 404, { error: "skills library is not enabled" });
-      const text = readLibrarySkillFile(m[1]!);
+      const legacy = readLegacyLibrarySkillDirectoryForReview(m[1]!);
+      const text = readLibrarySkillFile(m[1]!) ?? (legacy ? readSkillDirectoryFiles(legacy.directory)[0]!.content : null);
       if (text === null) return json(res, 404, { error: "no such skill" });
-      return json(res, 200, { text });
+      const directory = readLibrarySkillDirectory(m[1]!) ?? legacy;
+      return json(res, 200, { text, ...(directory ? skillDirectoryReview(readSkillDirectoryFiles(directory.directory), path) : {}) });
     }
     if (m && method === "PATCH") {
       if (!skillsLibraryEnabled(cfg)) return json(res, 404, { error: "skills library is not enabled" });
-      const parsed = z.object({ enabled: z.boolean() }).safeParse(await readBody(req));
+      const parsed = z.object({ enabled: z.boolean(), directorySha256: z.string().regex(/^[a-f0-9]{64}$/).optional() }).safeParse(await readBody(req));
       if (!parsed.success) return json(res, 400, { error: "enabled must be true or false" });
-      const result = setLibrarySkillReviewState(m[1]!, parsed.data.enabled ? "approved" : "disabled");
+      const directory = readLibrarySkillDirectory(m[1]!) ?? readLegacyLibrarySkillDirectoryForReview(m[1]!);
+      if (parsed.data.enabled && parsed.data.directorySha256 && directory?.digest !== parsed.data.directorySha256) return json(res, 409, { error: "Skill changed after review; review it again" });
+      const result = setLibrarySkillReviewState(m[1]!, parsed.data.enabled ? "approved" : "disabled", undefined, parsed.data.directorySha256);
       if ("error" in result) return json(res, 404, { error: result.error });
       return json(res, 200, { skill: result });
     }

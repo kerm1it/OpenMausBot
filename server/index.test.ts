@@ -11207,14 +11207,14 @@ describe("harness HTTP API", () => {
       const card = await latestCard();
       expect(card.skillRequest.references).toEqual([{ path: "references/edge-cases.md", content: "# Edge cases\n\n- one more rule\n" }]);
       expect(card.skillRequest.referencesSha256).toMatch(/^[a-f0-9]{64}$/);
-      expect(card.subtitle).toContain("1 reference file");
-      const reference = join(home, ".openmausbot", "workspaces", bot.id, ".agents", "skills", "expense-rules", "references", "edge-cases.md");
-      expect(readFileSync(reference, "utf8")).toContain("one more rule");
+      expect(card.subtitle).toContain("1 supporting file");
+      const reference = () => fetch(`${BASE}/api/bots/${bot.id}/skills/expense-rules/files?path=references%2Fedge-cases.md`);
+      expect(await (await reference()).text()).toContain("one more rule");
 
       // Undo puts back the version without references.
       expect(await api("POST", `/api/threads/${bot.threadId}/undo`, { requestId: card.requestId }))
         .toMatchObject({ status: 200, body: { undone: true } });
-      expect(existsSync(reference)).toBe(false);
+      expect((await reference()).status).toBe(404);
 
       expect((await post({ action: "update", skill_name: "expense-rules", skill_md: skillMd("x\n"), references: "nope" })).status).toBe(400);
     } finally {
@@ -11301,7 +11301,8 @@ describe("harness HTTP API", () => {
       expect(await undo(updated.requestId)).toMatchObject({ status: 200, body: { alreadyUndone: true } });
 
       const edited = await stage("reviewed-skill-one", "This version is edited by hand next.\n", "update", "A version edited by hand.");
-      const skillPath = join(home, ".openmausbot", "workspaces", bot.id, ".agents", "skills", "reviewed-skill-one", "SKILL.md");
+      const manifest = JSON.parse(readFileSync(join(home, ".openmausbot", "skill-state", bot.id, "skills.json"), "utf8"));
+      const skillPath = join(home, ".openmausbot", "workspaces", bot.id, "skills", ".revisions", manifest["reviewed-skill-one"].storageRevision, "SKILL.md");
       const handEdit = edited.skillRequest.preview.replace("edited by hand next", "changed by hand");
       writeFileSync(skillPath, handEdit);
       expect(await undo(edited.requestId)).toMatchObject({ status: 409, body: { code: "changed-since" } });

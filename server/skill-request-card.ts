@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 
 import { redactSecretsInText } from "./redact.ts";
-import { listSkills, readSkillFile, readSkillReferences } from "./skills.ts";
+import { listSkills, readSkillFile, readSkillReferences, retainSkillUndoDirectory } from "./skills.ts";
+import { skillFileDescriptor, type SkillFile } from "./skill-files.ts";
 import type { SkillRequestCardData } from "../shared/skill-request.ts";
 
-type SkillFile = { path: string; content: string };
 
 export function skillCardCopy(staged: {
   action: "create" | "update";
@@ -15,7 +15,7 @@ export function skillCardCopy(staged: {
 }): { title: string; subtitle: string; tool: string } {
   const warnings = staged.warnings.length ? `\n\nWarnings:\n- ${staged.warnings.join("\n- ")}` : "";
   const references = (staged.files ?? []).filter((file) => file.path !== "SKILL.md").length;
-  const referenceNote = references ? ` It keeps ${references} reference file${references === 1 ? "" : "s"} the bot reads when needed.` : "";
+  const referenceNote = references ? ` It keeps ${references} supporting file${references === 1 ? "" : "s"} the bot reads or runs when needed.` : "";
   return {
     title: staged.action === "create"
       ? `Enable skill "${staged.name}"?`
@@ -32,12 +32,13 @@ export function previousSkillVersion(botId: string, staged: { action: "create" |
   const references = readSkillReferences(botId, staged.name);
   const source = listSkills(botId).find((skill) => skill.name === staged.name)?.source;
   if (preview === null || references === null || !source) return undefined;
-  return { preview, source, ...(references.length ? { references } : {}) };
+  const directoryRevision = retainSkillUndoDirectory(botId, staged.name);
+  return { preview, source, ...(references.length ? { references } : {}), ...(directoryRevision ? { directoryRevision } : {}) };
 }
 
-export function skillRequestReferences(staged: { files: SkillFile[]; referencesSha256?: string }): Pick<SkillRequestCardData, "references" | "referencesSha256"> {
-  if (!staged.referencesSha256) return {};
-  return { references: staged.files.filter((file) => file.path !== "SKILL.md"), referencesSha256: staged.referencesSha256 };
+export function skillRequestReferences(staged: { files: SkillFile[]; referencesSha256?: string; directorySha256?: string }): Pick<SkillRequestCardData, "references" | "referencesSha256" | "directorySha256" | "files"> {
+  return { ...(staged.referencesSha256 ? { references: staged.files.filter((file) => file.path !== "SKILL.md" && !file.encoding), referencesSha256: staged.referencesSha256 } : {}),
+    ...(staged.directorySha256 ? { directorySha256: staged.directorySha256, files: staged.files.map(skillFileDescriptor) } : {}) };
 }
 
 export function parseSkillManageReferences(value: unknown): SkillFile[] | { error: string } {

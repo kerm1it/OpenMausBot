@@ -108,7 +108,13 @@ jobs:
         # Electron lazily downloads its runtime on first import. Resolve it
         # before Vitest starts so a cold download cannot consume the fixture
         # timeout.
-        run: node --input-type=commonjs -e "require('electron')"
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if node --input-type=commonjs -e "require('electron')"; then exit 0; fi
+            if [ "$attempt" -lt 3 ]; then sleep "$((attempt * 5))"; fi
+          done
+          exit 1
       - name: Run tests
         # The github-actions reporter turns each failure into an annotation
         # on the PR, so the failing test and its assertion are readable
@@ -242,7 +248,13 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Prepare Electron test runtime
-        run: node --input-type=commonjs -e "require('electron')"
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if node --input-type=commonjs -e "require('electron')"; then exit 0; fi
+            if [ "$attempt" -lt 3 ]; then sleep "$((attempt * 5))"; fi
+          done
+          exit 1
       - name: Packaged server smoke (macOS)
         # Builds dist-server/ and runs a copy of it outside the repo; the
         # phone-relay smoke below forks the same dist-server/index.js.

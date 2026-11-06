@@ -1,3 +1,4 @@
+import { openExtensionImport } from "@/lib/extension-events";
 import { track } from "@/lib/analytics";
 import { cn } from "@/lib/cn";
 import { t } from "@/lib/i18n";
@@ -565,6 +566,7 @@ export function TeamLibraryPanel({
           </>
         ) : (
           <>
+            <div className="px-6 pt-4 sm:px-8"><button className="text-[13px] font-medium text-accent" onClick={() => { onClose(); openExtensionImport(); }}>{t("extension.importTitle")}</button></div>
             <div className="flex flex-col gap-3 px-6 pb-4 pt-5 sm:flex-row sm:items-center sm:justify-between sm:px-8">
               <div className="flex w-fit rounded-xl bg-raised/70 p-1" role="tablist" aria-label={t("templates.source") }>
                 {orgListing?.organization && (

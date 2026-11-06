@@ -1,3 +1,4 @@
+import { openExtensionImport, EXTENSION_INSTALLED_EVENT } from "@/lib/extension-events";
 import { useEffect, useState } from "react";
 import { api, type Bot } from "@/state/store";
 import { pluginSourceSchema, PLUGIN_SOURCE_ERROR, type InstalledPlugin } from "../../shared/plugins";
@@ -23,13 +24,14 @@ export function NativePluginsSettings({ bot, patch }: { bot?: Bot; patch?: (valu
     if (!source.trim() || working) return;
     const parsed = pluginSourceSchema.safeParse(source);
     if (!parsed.success) { setError(PLUGIN_SOURCE_ERROR); return; }
-    setWorking(true); setError("");
-    try {
-      await api("/api/plugins/install", { method: "POST", body: JSON.stringify({ source: parsed.data }) });
-      setSource(""); setRevision(value => value + 1);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setWorking(false); }
+    setError("");
+    openExtensionImport({ type: "plugin", source: "openmausbot", url: parsed.data });
   };
+  useEffect(() => {
+    const refresh = () => setRevision(value => value + 1);
+    window.addEventListener(EXTENSION_INSTALLED_EVENT, refresh);
+    return () => window.removeEventListener(EXTENSION_INSTALLED_EVENT, refresh);
+  }, []);
   const ids = [...new Set([...plugins.map(plugin => plugin.id), ...(bot?.plugins ?? [])])];
   const uninstall = async () => {
     if (!uninstallId || working) return;
@@ -49,6 +51,7 @@ export function NativePluginsSettings({ bot, patch }: { bot?: Bot; patch?: (valu
       <input className="min-w-0 flex-1 rounded-lg border border-hairline bg-control px-3 py-2 text-[13px] text-ink" aria-label="Plugin source" placeholder="HTTP or HTTPS plugin URL" inputMode="url" value={source} onChange={event => setSource(event.target.value)} disabled={working} />
       <button className="rounded-lg bg-accent px-3 py-2 text-[13px] text-white disabled:opacity-40" disabled={working || !source.trim()}>{working ? "Installing…" : "Install"}</button>
     </form>}
+    {!bot && <button type="button" className="mt-3 text-[13px] text-accent" onClick={() => openExtensionImport()}>{t("extension.importFileOrLink")}</button>}
     <div className="mt-3 divide-y divide-hairline/40">
       {ids.map(id => {
         const installed = plugins.find(plugin => plugin.id === id);

@@ -1,0 +1,33 @@
+import { act, createElement } from "react";
+import type { Root } from "react-dom/client";
+import { Window } from "happy-dom";
+import { zipSync, strToU8 } from "fflate";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { Bot } from "@/state/store";
+const { exportTemplate, saveArchive } = vi.hoisted(() => ({ exportTemplate: vi.fn(), saveArchive: vi.fn() }));
+vi.mock("@/lib/extension-client", () => ({ exportBotTemplate: exportTemplate, saveExtensionArchive: saveArchive }));
+import { BotTemplateExportDialog } from "./BotTemplateExportDialog";
+let root: Root;
+beforeEach(async () => {
+  const browser = new Window();
+  for (const key of ["window", "document", "navigator", "HTMLElement", "Event"] as const) vi.stubGlobal(key, key === "window" ? browser : browser[key]);
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const { createRoot } = await import("react-dom/client"); root = createRoot(document.createElement("div"));
+  exportTemplate.mockReset(); saveArchive.mockReset();
+});
+afterEach(async () => { await act(async () => root.unmount()); vi.unstubAllGlobals(); });
+it("prepares a ZIP for review before saving the same bytes and excludes memory by default", async () => {
+  const archive = new Blob([new Uint8Array(zipSync({ "extension.json": strToU8("{}"), "skills/report/scripts/run.sh": strToU8("echo report") }))]);
+  exportTemplate.mockResolvedValue(archive);
+  const closed = vi.fn();
+  await act(async () => root.render(createElement(BotTemplateExportDialog, { bot: { id: "bot", name: "Report Bot", description: "Reports" } as Bot, onClose: closed })));
+  const button = (text: string) => Array.from(document.querySelectorAll("button")).find(value => value.textContent === text)!;
+  await act(async () => button("Preview").click());
+  expect(exportTemplate).toHaveBeenCalledWith("bot", expect.objectContaining({ includeMemory: false, includeRoutines: false }));
+  expect(document.body.textContent).toContain("skills/report/scripts/run.sh");
+  expect(saveArchive).not.toHaveBeenCalled();
+  await act(async () => button("Save ZIP").click());
+  expect(saveArchive).toHaveBeenCalledWith(archive, "report-bot.zip");
+  expect(exportTemplate).toHaveBeenCalledTimes(1);
+  expect(closed).toHaveBeenCalledTimes(1);
+});

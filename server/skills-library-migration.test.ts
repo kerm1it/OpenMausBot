@@ -39,10 +39,10 @@ describe("skills library migration", () => {
     } finally { rmSync(directory, { recursive: true, force: true }); }
   });
 
-  it("keeps multi-file skills private so scripts and references remain usable", () => {
+  it("refuses unreviewed supporting files added to a previously approved Skill", () => {
     const name = "auxiliary-files";
     skills.installSkill(botA, "private:test", [{ path: "SKILL.md", content: SKILL(name, "Run scripts/probe.js and read references/notes.md.") }]);
-    // Imports skip supporting files, but an owner's file tools can still add them to an existing workspace.
+    // Added bytes are outside the approved digest.
     const directory = join(workspaceDir(botA), "skills", name);
     mkdirSync(join(directory, "scripts"));
     mkdirSync(join(directory, "references"));
@@ -50,9 +50,9 @@ describe("skills library migration", () => {
     writeFileSync(join(directory, "references", "notes.md"), "Fixture reference.");
     skills.setSkillEnabled(botA, name, true);
     const report = migration.migrateBotSkillsToLibrary(botA);
-    expect(report.outcomes).toEqual([expect.objectContaining({ outcome: "skipped", detail: expect.stringContaining("auxiliary") })]);
+    expect(report.outcomes).toEqual([expect.objectContaining({ outcome: "skipped", detail: expect.stringContaining("changed after review") })]);
     expect(readFileSync(join(workspaceDir(botA), "skills", name, "scripts", "probe.js"), "utf8")).toContain("fixture");
-    expect(skills.listSkills(botA).find((skill) => skill.name === name)?.enabled).toBe(true);
+    expect(skills.listSkills(botA).find((skill) => skill.name === name)?.enabled).toBe(false);
     expect(library.readSkillLibraryIndex()[name]).toBeUndefined();
   });
 

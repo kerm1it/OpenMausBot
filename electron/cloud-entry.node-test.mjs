@@ -128,7 +128,7 @@ test("main takes the link from launch arguments, open-url and a second instance"
   assert.match(between('app.on("open-url"', "});"), /!queueOrganizationEntry\(url\) && !cloudEntry\.fromUrl\(url\) && !queuePackageInstall\(url\)/);
   const secondInstance = between('app.on("second-instance"', "\n});");
   assert.ok(secondInstance.indexOf("if (cloudEntry.fromArgs(commandLine)) return;") > secondInstance.indexOf("takeOrganizationDeepLink(commandLine)"));
-  assert.ok(secondInstance.indexOf("if (cloudEntry.fromArgs(commandLine)) return;") < secondInstance.indexOf("packageUrlFromCommandLine(commandLine)"));
+  assert.ok(secondInstance.indexOf("if (cloudEntry.fromArgs(commandLine)) return;") < secondInstance.indexOf("packageInstallFromCommandLine(commandLine)"));
 });
 
 test("startup delivers a pending Cloud link before default navigation", () => {

@@ -58,6 +58,8 @@ import { nextRename } from "@/lib/rename";
 import { useDesktopCapabilities } from "./DesktopCapabilities";
 import { MIN_QUERY, SearchResults } from "./SearchResults";
 import { TeamLibraryPanel } from "./TeamLibraryPanel";
+import { ExtensionHost } from "./ExtensionHost";
+import { openBotTemplateExport, openExtensionImport } from "@/lib/extension-events";
 import { SidebarNewChatPanel } from "./SidebarNewChatPanel";
 import { openCommandPalette } from "./CommandPalette";
 import { ShareTeamDialog } from "./ShareTeamDialog";
@@ -112,13 +114,10 @@ import {
 } from "@/lib/sidebar-layout";
 import { sidebarSectionAttention } from "@/lib/sidebar-attention";
 import { botListItemPointerIntent } from "@/lib/sidebar-selection";
-import { phoneSettingsAction, SidebarPhoneButton } from "./SidebarPhoneButton";
-import { SidebarBottomButtons, SidebarFooterNav } from "./SidebarFooterNav";
+import { SidebarFooter } from "./SidebarFooter";
 import { GlassBar, GlassScrollFrame, GlassScroller } from "./GlassScrollFrame";
 import { DesktopWorkspaceSwitcher } from "./DesktopWorkspaceSwitcher";
 import { useCloudOwner } from "./CloudOwner";
-import { SidebarProfileMenu } from "./SidebarProfileMenu";
-import { UpdateIndicator } from "./UpdateIndicator";
 import { SidebarSectionHeader } from "./SidebarSectionHeader";
 import { NeedsYouButton, OwnerFace, OwnerPickerHost, departmentOwner, ownerMenuLabel, pickOwnerOf } from "./TeamOwner";
 import { showWhoReportsToWhom, TeamMenuItems } from "./SidebarTeamMenu";
@@ -717,6 +716,7 @@ export function BotContextMenu({
         item(<Copy size={16} className="text-ink-secondary" />, t("sidebar.bot.duplicate"), () =>
           dispatch({ type: "duplicateBot", botId: bot.id }),
         ),
+        item(<Copy size={16} className="text-ink-secondary" />, t("extension.exportTitle"), () => openBotTemplateExport(bot.id)),
         divider("d2"),
         item(<ClipboardCopy size={16} className="text-ink-secondary" />, t("sidebar.copyConversationId"), () => {
           void copyText(bot.threadId);
@@ -1330,15 +1330,6 @@ export function Sidebar({ open, onClose, collapseToIcons = false }: {
   const plusMenuRef = useRef<HTMLDivElement>(null);
   usePopoverDismiss(attentionOpen, attentionMenuRef, () => setAttentionOpen(false));
   usePopoverDismiss(plusOpen, plusMenuRef, () => setPlusOpen(false));
-
-  useEffect(() => {
-    if (remoteClient) return;
-    return window.ogb?.onPackageInstall?.((url) => {
-      setTeamInstallUrl(url);
-      setTeamLibraryOpen(true);
-    });
-  }, [remoteClient]);
-
   useEffect(() => {
     if (!teamFeedback) return;
     const timer = window.setTimeout(() => setTeamFeedback(null), 5000);
@@ -1565,6 +1556,7 @@ export function Sidebar({ open, onClose, collapseToIcons = false }: {
             <Library size={16} className="text-ink-secondary" />
             {t("sidebar.teamLibrary")}
           </button>}
+          <button onClick={() => { setPlusOpen(false); openExtensionImport(); }} className="flex w-full items-center gap-3 px-3.5 py-2 text-left text-[14px] text-ink hover:bg-raised/70"><Library size={16} className="text-ink-secondary" />{t("extension.importTitle")}</button>
           {archivedBots.length > 0 && (
             <button
               onClick={() => {
@@ -1934,32 +1926,7 @@ export function Sidebar({ open, onClose, collapseToIcons = false }: {
         }}
         plus={plusControl}
         server={<DesktopWorkspaceSwitcher rail cloudHome={state.config?.cloudHome === true} owner={cloudOwner} howTo={state.cloudHowTo} onMenuClosed={endHowTo} />}
-      /> : <div className={cn("pb-3 pt-2", density === "icons" ? "flex flex-col items-center gap-1 px-2" : "px-3")}>
-        <SidebarFooterNav
-          density={density}
-          collapsed={sectionCollapsed(TOOLS_SECTION_ID)}
-          onToggleCollapsed={layoutInteractive ? () => toggleSection(TOOLS_SECTION_ID) : undefined}
-        />
-        {density === "icons" && (
-          <SidebarPhoneButton
-            density={density}
-            onOpen={() => dispatch(phoneSettingsAction())}
-          />
-        )}
-        {density === "icons" ? (
-          <div className="flex flex-col items-center justify-center gap-1">
-            <UpdateIndicator />
-            <SidebarProfileMenu iconOnly />
-          </div>
-        ) : (
-          <div className="flex items-center gap-1 not-first:mt-3">
-            <div className="min-w-0 flex-1">
-              <SidebarProfileMenu />
-            </div>
-            <SidebarBottomButtons />
-          </div>
-        )}
-      </div>}
+      /> : <SidebarFooter density={density} toolsCollapsed={sectionCollapsed(TOOLS_SECTION_ID)} onToggleTools={layoutInteractive ? () => toggleSection(TOOLS_SECTION_ID) : undefined} />}
       </GlassBar>
       </GlassScrollFrame>
 
@@ -2149,6 +2116,7 @@ export function Sidebar({ open, onClose, collapseToIcons = false }: {
           </div>,
           document.body,
         )}
+      <ExtensionHost disabled={remoteClient} onLegacyPackage={url => { setTeamInstallUrl(url); setTeamLibraryOpen(true); }} />
     </aside>
   );
 }

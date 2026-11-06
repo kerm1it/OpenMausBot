@@ -1,3 +1,5 @@
+import type { SkillDirectoryReviewWire } from "../../../shared/skill-directory";
+import { SkillDirectoryPreview } from "../SkillDirectoryPreview";
 import { BookOpen, Trash2 } from "lucide-react";
 import { t } from "@/lib/i18n";
 import { useEffect, useRef, useState } from "react";
@@ -42,7 +44,7 @@ export function useManagedSkills(bot: Bot) {
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState("");
   const [error, setError] = useState("");
-  const [reviewing, setReviewing] = useState<{ skill: ManagedSkill; text: string } | null>(null);
+  const [reviewing, setReviewing] = useState<({ skill: ManagedSkill; text: string } & SkillDirectoryReviewWire) | null>(null);
   const assignmentBusy = useRef(false);
 
   const refresh = async (cancelled?: () => boolean) => {
@@ -119,9 +121,9 @@ export function useManagedSkills(bot: Bot) {
       if (!skill.enabled) {
         // Security: a disabled import has not necessarily been reviewed; its integrity-checked bytes need one explicit
         // review before they reach the prompt.
-        const result = (await api(skill.origin === "library" ? `/api/skills-library/${encodeURIComponent(skill.name)}` : `/api/bots/${bot.id}/skills/${encodeURIComponent(skill.name)}`)) as { text?: string };
+        const result = (await api(skill.origin === "library" ? `/api/skills-library/${encodeURIComponent(skill.name)}` : `/api/bots/${bot.id}/skills/${encodeURIComponent(skill.name)}`)) as { text?: string } & SkillDirectoryReviewWire;
         if (!result.text) throw new Error("The skill contents are unavailable; remove and import or learn it again.");
-        setReviewing({ skill, text: result.text });
+        setReviewing({ skill, text: result.text, files: result.files, directorySha256: result.directorySha256 });
         return;
       }
       await api(`/api/bots/${bot.id}/skills/${encodeURIComponent(skill.name)}`, {
@@ -144,7 +146,7 @@ export function useManagedSkills(bot: Bot) {
     try {
       await api(skill.origin === "library" ? `/api/skills-library/${encodeURIComponent(skill.name)}` : `/api/bots/${bot.id}/skills/${encodeURIComponent(skill.name)}`, {
         method: "PATCH",
-        body: JSON.stringify({ enabled: true }),
+        body: JSON.stringify({ enabled: true, directorySha256: reviewing.directorySha256 }),
       });
       setReviewing(null);
       await refresh();
@@ -164,6 +166,7 @@ export function useManagedSkills(bot: Bot) {
 export function SkillReviewDialog({
   skill,
   text,
+  files,
   error,
   working,
   onCancel,
@@ -171,6 +174,7 @@ export function SkillReviewDialog({
 }: {
   skill: ManagedSkill;
   text: string;
+  files?: SkillDirectoryReviewWire["files"];
   error: string;
   working: boolean;
   onCancel: () => void;
@@ -239,6 +243,7 @@ export function SkillReviewDialog({
         >
           {text}
         </pre>
+        <div className="max-h-64 overflow-auto"><SkillDirectoryPreview files={files?.filter(file => file.path !== "SKILL.md")} /></div>
         {error && <div role="alert" className="mt-2 text-[12px] text-danger">{error}</div>}
         <div className="mt-4 flex justify-end gap-2">
           <button
@@ -272,7 +277,7 @@ export function SkillsSection({ bot }: { bot: Bot }) {
     skills, staged, loading, working, setWorking, error, setError, reviewing, setReviewing, refresh, toggle, enableReviewed,
     libraryPool, addFromLibrary, setAddFromLibrary, assignmentBusy, putAssignments, addToBot,
   } = useManagedSkills(bot);
-  const [viewing, setViewing] = useState<{ name: string; text: string } | null>(null);
+  const [viewing, setViewing] = useState<({ name: string; text: string } & SkillDirectoryReviewWire) | null>(null);
   const [source, setSource] = useState("");
   const [importing, setImporting] = useState(false);
   const [importMessage, setImportMessage] = useState("");
@@ -349,9 +354,9 @@ export function SkillsSection({ bot }: { bot: Bot }) {
     setError("");
     try {
       const result = skill.origin === "library"
-        ? ((await api(`/api/skills-library/${encodeURIComponent(skill.name)}`)) as { text?: string })
-        : ((await api(`/api/bots/${bot.id}/skills/${encodeURIComponent(skill.name)}`)) as { text?: string });
-      setViewing({ name: skill.name, text: result.text ?? "" });
+        ? ((await api(`/api/skills-library/${encodeURIComponent(skill.name)}`)) as { text?: string } & SkillDirectoryReviewWire)
+        : ((await api(`/api/bots/${bot.id}/skills/${encodeURIComponent(skill.name)}`)) as { text?: string } & SkillDirectoryReviewWire);
+      setViewing({ name: skill.name, text: result.text ?? "", files: result.files, directorySha256: result.directorySha256 });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load this skill.");
     }
@@ -515,6 +520,7 @@ export function SkillsSection({ bot }: { bot: Bot }) {
         <SkillReviewDialog
           skill={reviewing.skill}
           text={reviewing.text}
+          files={reviewing.files}
           error={error}
           working={working === reviewing.skill.name}
           onCancel={() => setReviewing(null)}
@@ -549,6 +555,7 @@ export function SkillsSection({ bot }: { bot: Bot }) {
             >
               {viewing.text}
             </pre>
+            <div className="max-h-64 overflow-auto"><SkillDirectoryPreview files={viewing.files?.filter(file => file.path !== "SKILL.md")} /></div>
           </div>
         </div>
       )}

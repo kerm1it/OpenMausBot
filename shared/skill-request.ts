@@ -10,6 +10,7 @@ export interface SkillShareRecord {
   /** deduplicated: identical bytes were already in the library; assigned: it already was a library skill. */
   library: "installed" | "deduplicated" | "assigned" | "updated";
   sha256: string;
+  directorySha256?: string;
   sharedAt: number;
   assigned: Array<{ botId: string; name: string }>;
   skipped: Array<{ botId: string; name: string; reason: string }>;
@@ -30,15 +31,19 @@ export interface SkillRequestCardData {
   preview?: string;
   /** Binds approval to the exact bytes shown in preview. */
   sha256?: string;
-  /** references/<topic>.md files shown in full beside the SKILL.md; absent when the skill is SKILL.md alone. */
+  /** Supporting text files shown in full beside SKILL.md. Legacy cards restrict these to references/<topic>.md. */
   references?: Array<{ path: string; content: string }>;
-  /** Binds approval to the exact references shown. */
+  /** Legacy reference-set hash; directorySha256 binds modern complete directories. */
   referencesSha256?: string;
+  /** Hash of sorted path, size, byte hash and executable flag records for the complete proposal. */
+  directorySha256?: string;
+  /** Review metadata only; durable snapshots retain binary bytes outside the conversation. */
+  files?: Array<{ path: string; size: number; sha256: string; executable: boolean; binary: boolean }>;
   warnings: string[];
   createdAt: number;
   /** An update that applied without a person: the SKILL.md it replaced, so
    * Undo can put it back while the skill is unchanged since. */
-  previous?: { preview: string; source: string; references?: Array<{ path: string; content: string }> };
+  previous?: { preview: string; source: string; references?: Array<{ path: string; content: string }>; directoryRevision?: string };
   shared?: SkillShareRecord;
   shareError?: string;
 }

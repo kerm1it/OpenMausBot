@@ -19,9 +19,11 @@ beforeEach(async () => {
 });
 afterEach(async () => { await act(async () => root.unmount()); host.remove(); vi.unstubAllGlobals(); });
 
-it("installs from the form and refreshes the global library without enabling a bot", async () => {
+it("opens the unified preview from the form without installing or enabling a bot", async () => {
   const plugin = { id: "proof", version: "1.0.0", path: "/plugins/proof/package", source: "https://example.test/proof.zip", installedAt: 1 };
-  request.mockResolvedValueOnce({ plugins: [] }).mockResolvedValueOnce({ ...plugin, status: "installed" }).mockResolvedValueOnce({ plugins: [plugin] });
+  request.mockResolvedValue({ plugins: [] });
+  const opened = vi.fn();
+  window.addEventListener("omb:extension-import", opened);
   await act(async () => root.render(createElement(NativePluginsSettings)));
   const input = host.querySelector("input")!;
   await act(async () => {
@@ -29,9 +31,12 @@ it("installs from the form and refreshes the global library without enabling a b
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
   await act(async () => host.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
-  expect(request).toHaveBeenCalledWith("/api/plugins/install", { method: "POST", body: JSON.stringify({ source: plugin.source }) });
-  expect(host.textContent).toContain("proof");
-  expect(host.textContent).toContain("1.0.0");
+  expect(opened).toHaveBeenCalledTimes(1);
+  expect(opened.mock.calls[0]![0].detail).toEqual({ type: "plugin", source: "openmausbot", url: plugin.source });
+  expect(request).toHaveBeenCalledTimes(1);
+  window.dispatchEvent(new Event("omb:extension-installed"));
+  await act(async () => {});
+  expect(request).toHaveBeenCalledTimes(2);
   expect(host.querySelector('[role="switch"]')).toBeNull();
 });
 

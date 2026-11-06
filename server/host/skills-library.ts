@@ -1,4 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { ensureTaskWorkspace } from "../workspace.ts";
+import { parseSkillCommand } from "../../shared/skill-command.ts";
+import { retainSkillTurnDirectories, releaseSkillTurnDirectories } from "../skill-active-revisions.ts";
+import { pinTaskSkillLinks, releaseTaskSkillLinks, syncTaskSkillLinks } from "../skill-task-links.ts";
+import type { SkillFile } from "../skill-files.ts";
 
 import type { SkillRequestCardData, SkillShareRecord } from "../../shared/skill-request.ts";
 import { narrowestAudience, intersectAudience } from "../bot-visibility.ts";
@@ -22,7 +29,7 @@ import {
   updateSharedLearnedSkill,
   type ShareBot,
 } from "../skill-share.ts";
-import { expandSkillCommandTurnText, listSkills, readSkillFile, resolveBotSkills, skillsSystemPrompt, type SkillListing } from "../skills.ts";
+import { cleanupUnreferencedSkillDirectory, enabledSkillFile, expandSkillCommandTurnText, listSkills, readSkillDirectory, readSkillFile, resolveBotSkills, skillsSystemPrompt, syncSkillLinks, type SkillListing } from "../skills.ts";
 import type { BotRecord, Message, Store } from "../store.ts";
 import { claudeUserSkillsEnabled } from "../turn-settings.ts";
 
@@ -38,7 +45,8 @@ type ReceiptArgs = {
     name: string;
     gist: string;
     source: string;
-    files: Array<{ path: string; content: string }>;
+    files: SkillFile[];
+    directorySha256?: string;
     sha256: string;
     warnings: string[];
   };
@@ -70,6 +78,9 @@ const NO_TURN_NOTE: TurnShareNote = { text: "", after: (dispatch) => dispatch };
 export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
   const { store, cfg } = deps;
   const mode = () => shareLearnedSkillsMode(cfg);
+  type TurnSkills = { botId: string; skills: SkillListing[]; files: Map<string, string>; privateDirectories: Array<{ name: string; directory: string; digest: string }>; bodies: Map<string, string>; prompt: string; note: ReturnType<typeof prepareShareNote> };
+  const turns = new Map<string, TurnSkills>();
+  const turnKey = (botId: string, threadId: string) => `${botId}:${threadId}`;
 
   /** The bot's own skills, and its library skills while the library is on; an imported skill of the same name yields. */
   const ownSkills = (bot: BotRecord) =>
@@ -78,7 +89,9 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
     const own = ownSkills(bot);
     return [...own, ...importedSkillListings(bot.id, new Set(own.map((skill) => skill.name)))];
   };
-  const readBotSkillFile = (bot: BotRecord, name: string): string | null => {
+  const readBotSkillFile = (bot: BotRecord, name: string, threadId?: string): string | null => {
+    const turn = threadId ? turns.get(turnKey(bot.id, threadId)) : undefined;
+    if (turn?.skills.some(skill => skill.name === name)) return turn.bodies.get(name) ?? null;
     const own = readSkillFile(bot.id, name);
     if (own !== null) return own;
     // Private wins collisions: a private skill that no longer verifies must not fall through to a same-named shared one.
@@ -139,7 +152,7 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
   function shareFromBot(
     botId: string,
     name: string,
-    receipt?: { threadId: string; messageId: string; expectSha256?: string },
+    receipt?: { threadId: string; messageId: string; expectSha256?: string; expectDirectorySha256?: string },
   ): SkillShareRecord | { error: string; stale?: true } {
     const bots = shareBotsNow();
     const author = bots.find((bot) => bot.id === botId);
@@ -148,6 +161,7 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
       author, bots, name, patchAssigned,
       audience: sourceAudience(author, receipt?.threadId),
       ...(receipt?.expectSha256 ? { expectSha256: receipt.expectSha256 } : {}),
+      ...(receipt?.expectDirectorySha256 ? { expectDirectorySha256: receipt.expectDirectorySha256 } : {}),
     });
     if (receipt && !("stale" in shared)) {
       const message = store.messagesFor(receipt.threadId).find((candidate) => candidate.id === receipt.messageId);
@@ -166,7 +180,7 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
   function applySharedUpdate(
     from: BotRecord,
     threadId: string,
-    change: { name: string; skillMd: string; gist?: string; expectSha256: string | undefined },
+    change: { name: string; skillMd: string | undefined; gist?: string; expectSha256: string | undefined; files?: SkillFile[]; removeFiles?: string[] },
     direct: DirectApply,
   ): { name: string; summary: string; shared: string } | { error: string } {
     const bots = shareBotsNow();
@@ -180,6 +194,8 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
       bots,
       name: change.name,
       skillMd: change.skillMd,
+      files: change.files,
+      removeFiles: change.removeFiles,
       expectSha256: change.expectSha256,
       patchAssigned,
       assignOnward: mode() === "auto",
@@ -187,19 +203,21 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
     });
     if ("error" in updated) return updated;
     const gist = redactSecretsInText(change.gist ?? "").replace(/\s+/g, " ").trim().slice(0, 240) || updated.description.slice(0, 240);
+    const stagedId = randomUUID();
     const receipt = deps.appendSkillRequestCard({
       botId: from.id,
       threadId,
       applied: true,
-      previous: { preview: updated.previous.skillMd, source: updated.previous.source },
+      previous: { preview: updated.previous.skillMd, source: updated.previous.source, directoryRevision: updated.previous.directoryRevision },
       shared: updated.share,
       staged: {
-        id: randomUUID(),
+        id: stagedId,
         action: "update",
         name: change.name,
         gist,
         source: updated.previous.source,
-        files: [{ path: "SKILL.md", content: updated.content }],
+        files: updated.files,
+        directorySha256: updated.directorySha256,
         sha256: updated.sha256,
         warnings: updated.warnings,
       },
@@ -213,6 +231,48 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
     listBotSkills,
     readBotSkillFile,
 
+    beginTurnSkills(bot: BotRecord, threadId: string): void {
+      syncSkillLinks(bot.id);
+      const assigned = skillsLibraryEnabled(cfg) ? liveAssigned(bot) : undefined;
+      const skills = resolveBotSkills(bot.id, assigned).map(skill => ({ ...skill, revision: skill.directorySha256 ?? skill.sha256 }));
+      const files = new Map<string, string>();
+      const bodies = new Map<string, string>();
+      const privateDirectories = skills.flatMap(skill => {
+        const own = readSkillDirectory(bot.id, skill.name);
+        return own ? [{ name: skill.name, ...own }] : [];
+      });
+      for (const skill of skills) {
+        const file = enabledSkillFile(bot.id, skill.name, assigned);
+        if (!file) continue;
+        files.set(skill.name, file);
+        try { bodies.set(skill.name, readFileSync(file, "utf8")); } catch {}
+      }
+      const folder = ensureTaskWorkspace(bot.id, threadId);
+      const replacePaths = (text: string) => {
+        for (const [name, file] of files) text = text.replaceAll(JSON.stringify(file), JSON.stringify(join(folder, ".agents", "skills", name, "SKILL.md")));
+        return text;
+      };
+      const note = skillsLibraryEnabled(cfg)
+        ? prepareShareNote(bot.id, threadId, assigned, conversationStartedAt(threadId), listSkills(bot.id).map(skill => skill.name))
+        : { text: "", commit() {} };
+      turns.set(turnKey(bot.id, threadId), { botId: bot.id, skills, privateDirectories,
+        files: new Map([...files].map(([name]) => [name, join(folder, ".agents", "skills", name, "SKILL.md")])), bodies,
+        prompt: replacePaths(skillsSystemPrompt(bot.id, conversationSkills(bot, threadId), conversationStartedAt(threadId))),
+        note: { ...note, text: replacePaths(note.text) } });
+      const directories = new Map([...files].map(([name, file]) => [name, dirname(file)]));
+      retainSkillTurnDirectories(threadId, directories.values());
+      pinTaskSkillLinks(bot.id, threadId, directories);
+      syncTaskSkillLinks(bot.id, threadId);
+    },
+
+    releaseTurnSkills(threadId: string): void {
+      const released = [...turns].filter(([key]) => key.endsWith(`:${threadId}`));
+      for (const [key] of released) turns.delete(key);
+      releaseSkillTurnDirectories(threadId);
+      releaseTaskSkillLinks(threadId);
+      for (const [, turn] of released) for (const old of turn.privateDirectories) cleanupUnreferencedSkillDirectory(turn.botId, old.name, old.directory, old.digest);
+    },
+
     mode,
 
     conversationStartedAt,
@@ -223,7 +283,8 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
      * this computer, each with a budget of its own. */
     skillsIndex(bot: BotRecord, threadId: string | undefined, instance?: TurnInstance): string {
       const assigned = threadId === undefined ? (skillsLibraryEnabled(cfg) ? bot.assignedSkills : undefined) : conversationSkills(bot, threadId);
-      return skillsSystemPrompt(bot.id, assigned, threadId === undefined ? undefined : conversationStartedAt(threadId)) +
+      const pinned = threadId ? turns.get(turnKey(bot.id, threadId)) : undefined;
+      return (pinned?.prompt ?? skillsSystemPrompt(bot.id, assigned, threadId === undefined ? undefined : conversationStartedAt(threadId))) +
         importedSkillsPrompt(importsFor(bot, assigned, instance));
     },
 
@@ -233,7 +294,17 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
     },
 
     /** `/name` for one of the bot's own, library or imported skills. */
-    expandSkillCommand(bot: BotRecord, text: string, instance?: TurnInstance): string {
+    expandSkillCommand(bot: BotRecord, text: string, instance?: TurnInstance, threadId?: string): string {
+      const pinned = threadId ? turns.get(turnKey(bot.id, threadId)) : undefined;
+      if (pinned) {
+        const command = parseSkillCommand(text, [...pinned.files.keys()]);
+        if (command) {
+          const file = pinned.files.get(command.name)!;
+          const lead = `The user ran your ${command.name} skill with /${command.name}. Read ${JSON.stringify(file)} with your file tools and follow it for this turn.`;
+          return command.request ? `${lead} Where the skill says {input}, use the request.\n\nRequest: ${command.request}` : `${lead} There is no further request, so run it as the skill describes.`;
+        }
+        return expandImportedSkillCommand(text, importsFor(bot, conversationSkills(bot, threadId!), instance));
+      }
       const assigned = skillsLibraryEnabled(cfg) ? liveAssigned(bot) : undefined;
       const own = expandSkillCommandTurnText(bot.id, text, assigned);
       return own !== text ? own : expandImportedSkillCommand(text, importsFor(bot, assigned, instance));
@@ -242,7 +313,7 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
     shareNote(bot: BotRecord, threadId: string, enabled: boolean): TurnShareNote {
       if (!enabled || !skillsLibraryEnabled(cfg)) return NO_TURN_NOTE;
       try {
-        const note = prepareShareNote(bot.id, threadId, liveAssigned(bot), conversationStartedAt(threadId), listSkills(bot.id).map((skill) => skill.name));
+        const note = turns.get(turnKey(bot.id, threadId))?.note ?? prepareShareNote(bot.id, threadId, liveAssigned(bot), conversationStartedAt(threadId), listSkills(bot.id).map((skill) => skill.name));
         if (!note.text) return NO_TURN_NOTE;
         return { text: note.text, after: (dispatch) => dispatch.then((value) => { commitNote(note.commit); return value; }) };
       } catch (error) {
@@ -261,16 +332,23 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
         .filter((skill) => !ownNames.has(skill.name))
         .map((skill) => {
           const canEdit = editable(botId, skill.name);
-          return { name: skill.name, description: skill.description, editable: canEdit, enabled: skill.enabled, sha256: skill.sha256,
+          return { name: skill.name, description: skill.description, editable: canEdit, enabled: skill.enabled, sha256: skill.directorySha256 ?? skill.sha256,
             ...(canEdit ? { body: readLibrarySkillFile(skill.name) } : {}) };
         });
       return [...own, ...shared];
     },
 
     sharedSha: (botId: string, name: string): string | null =>
-      editable(botId, name) ? readSkillLibraryIndex()[name]?.sha256 ?? null : null,
+      editable(botId, name) ? (readSkillLibraryIndex()[name]?.directorySha256 ?? readSkillLibraryIndex()[name]?.sha256) ?? null : null,
 
     editable,
+
+    privateUpdateRefusal(botId: string, threadId: string, name: string): string | null {
+      const pinned = turns.get(turnKey(botId, threadId))?.skills.find(skill => skill.name === name);
+      if (!pinned) return null;
+      const current = listSkills(botId).find(skill => skill.name === name);
+      return current?.revision === pinned.revision ? null : `Skill "${name}" changed since this turn began; read it in a new turn before updating it`;
+    },
 
     applyReviewUpdate(bot: BotRecord, threadId: string, change: { name: string; skillMd: string; gist: string; baseSha256?: string }, direct: DirectApply):
       { ok: true } | { ok: false; error: string } {
@@ -280,20 +358,23 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
       return "error" in updated ? { ok: false, error: updated.error } : { ok: true };
     },
 
-    harnessUpdate(from: BotRecord, threadId: string, name: string, skillMd: string, gist: unknown, baseRevision: unknown, direct: DirectApply | null):
+    harnessUpdate(from: BotRecord, threadId: string, name: string, skillMd: string | undefined, gist: unknown, baseRevision: unknown, direct: DirectApply | null, changes?: { files?: SkillFile[]; removeFiles?: string[]; patch?: boolean }):
       [status: number, body: Record<string, unknown>] {
       if (!direct) return [422, { state: "failed", error: "this conversation cannot update a shared team skill" }];
       const updated = applySharedUpdate(from, threadId, {
-        name, skillMd, gist: typeof gist === "string" ? gist : undefined, expectSha256: typeof baseRevision === "string" ? baseRevision : undefined,
+        name, skillMd, files: changes?.files, removeFiles: changes?.removeFiles, gist: typeof gist === "string" ? gist : undefined, expectSha256: typeof baseRevision === "string" ? baseRevision : undefined,
       }, direct);
       if ("error" in updated) return [422, { state: "failed", error: updated.error }];
       return [201, { state: "applied", name: updated.name, action: "update", summary: updated.summary, shared: updated.shared }];
     },
 
-    harnessListing(botId: string, skills: SkillListing[]): Array<SkillListing & { revision?: string }> {
-      if (mode() === "off") return skills;
-      return skills.map((skill) => !skill.editable && editable(botId, skill.name)
-        ? { ...skill, editable: true, revision: skill.sha256.slice(0, SHARED_REVISION_CHARS) }
+    harnessListing(botId: string, skills: SkillListing[], threadId?: string): Array<SkillListing & { revision?: string; availableNextTurn?: boolean }> {
+      const pinned = threadId ? turns.get(turnKey(botId, threadId)) : undefined;
+      const ownNames = new Set(pinned?.skills.map(skill => skill.name));
+      const selected = pinned ? [...pinned.skills, ...skills.filter(skill => !ownNames.has(skill.name)).map(skill => ({ ...skill, enabled: false, ...(skill.enabled ? { availableNextTurn: true } : {}) }))] : skills;
+      if (mode() === "off") return selected;
+      return selected.map((skill) => !skill.editable && editable(botId, skill.name)
+        ? { ...skill, editable: true, revision: (skill.directorySha256 ?? skill.sha256).slice(0, SHARED_REVISION_CHARS) }
         : skill);
     },
 
@@ -302,7 +383,8 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
       T & { shared?: string; shareError?: string } {
       if (mode() !== "auto" || applied.settlementPending) return applied;
       const receipt = store.messagesFor(threadId).findLast((message) => message.card?.skillRequest?.stagedId === staged.id);
-      const shared = shareFromBot(botId, staged.name, receipt ? { threadId, messageId: receipt.id } : undefined);
+      const request = receipt?.card?.skillRequest;
+      const shared = shareFromBot(botId, staged.name, receipt ? { threadId, messageId: receipt.id, expectSha256: request?.sha256, expectDirectorySha256: request?.directorySha256 } : undefined);
       return "error" in shared ? { ...applied, shareError: shared.error } : { ...applied, shared: summaryLine(shared) };
     },
 
@@ -320,7 +402,7 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
       if (request.shared) return { ok: true, shared: request.shared };
       const botId = message.from?.botId ?? store.botByThread(threadId)?.id;
       if (!botId || botId !== request.botId) return { ok: false, status: 403, error: "this skill belongs to a different bot" };
-      const shared = shareFromBot(botId, request.name, { threadId, messageId: message.id, expectSha256: request.sha256 });
+      const shared = shareFromBot(botId, request.name, { threadId, messageId: message.id, expectSha256: request.sha256, expectDirectorySha256: request.directorySha256 });
       if ("stale" in shared) return { ok: false, status: 409, error: shared.error };
       return "error" in shared ? { ok: false, status: 422, error: shared.error } : { ok: true, shared };
     },
@@ -333,7 +415,7 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
         name: request.name,
         action: request.action,
         share: request.shared,
-        ...(request.previous ? { previous: { skillMd: request.previous.preview, source: request.previous.source } } : {}),
+        ...(request.previous ? { previous: { skillMd: request.previous.preview, source: request.previous.source, directoryRevision: request.previous.directoryRevision } } : {}),
         bots: shareBotsNow(),
         patchAssigned,
       });

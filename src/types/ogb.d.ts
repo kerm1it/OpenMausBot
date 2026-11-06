@@ -291,7 +291,7 @@ const __APP_VERSION__: string;
         onMaximizedChanged(cb: (maximized: boolean) => void): () => void;
       };
       /** Receives a GitHub package URL opened through openmausbot://install. */
-      onPackageInstall?(cb: (url: string) => void): () => void;
+      onPackageInstall?(cb: (input: string | import("../../shared/extension-import").ExtensionImportRequest) => void): () => void;
       /** Receives a chat link (openmausbot://thread/… or openmausbot://bot/…)
        * opened from outside the app. */
       onChatLink?(cb: (link: string) => void): () => void;
@@ -345,7 +345,7 @@ const __APP_VERSION__: string;
       openLogsFolder?(): Promise<{ folder: string; opened: boolean; error?: string }>;
       /** Save a provider credential through Electron's OS-backed store. */
       setCredential?(
-        name: "composioApiKey" | "xaiApiKey" | "boxToken" | "opencodeGoApiKey" | "ttsKey" | "fishAudioKey" | "jevApiKey" | "openrouterDeciderKey" | "openaiImageApiKey" | "customImageApiKey" | "openaiLiveKey" | "tregApiKey",
+        name: "composioApiKey" | "xaiApiKey" | "boxToken" | "opencodeGoApiKey" | "ttsKey" | "fishAudioKey" | "jevApiKey" | "openrouterDeciderKey" | "workersAiToken" | "openaiImageApiKey" | "customImageApiKey" | "openaiLiveKey" | "tregApiKey",
         value: string,
       ): Promise<ConfigStatus>;
       /** In-app auto-update (packaged app only; dormant in dev). Updates

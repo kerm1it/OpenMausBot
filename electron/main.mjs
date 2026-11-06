@@ -28,7 +28,7 @@ import { bootFailureMessage, listeningSignal, pollServerIdentity, SERVER_BOOT_TI
 import { createServerSupervisor } from "./server-supervisor.mjs";
 import { serverChildLaunch } from "./server-child-launch.mjs";
 import { codexRuntimeHome } from "./codex-home.mjs";
-import { packageUrlFromCommandLine, packageUrlFromDeepLink } from "./package-link.mjs";
+import { packageInstallFromCommandLine, packageInstallFromDeepLink } from "./package-link.mjs";
 import { chatLinkFrom, chatLinkFromCommandLine } from "./chat-link.mjs";
 import { createOrganizationEntry, isOrganizationDeepLink, takeOrganizationDeepLink, organizationRestartIntent, withOrganizationRestartIntent, withoutOrganizationRestartIntent } from "./organization-entry.mjs";
 import { windowChromeOptions } from "./window-chrome.mjs";
@@ -90,7 +90,8 @@ import { createComputerSharing, isHomeFolder, validateSharedFolders } from "./co
 import { acquireDataDirLease } from "./data-dir-lease.mjs";
 import { switchLocalEnvironment } from "./environment-switch.mjs";
 import { createManagedDesktopClient, createManagedDesktopRelay, createManagedDesktopStore } from "./managed-desktop.mjs";
-import { CHECKOUT_SOURCES, cloudMenuSublabel, cloudPlanSnapshot, cloudTarget, createCloudAccountClient, createCloudAccountStore } from "./cloud-account.mjs";
+import { CHECKOUT_SOURCES, cloudMenuSublabel, cloudTarget, createCloudAccountClient, createCloudAccountStore } from "./cloud-account.mjs";
+import { installCloudPlanIpc } from "./cloud-plan-ipc.mjs";
 import { cloudLinkOpensSheet, colorDotIcons, createCloudLook, createCloudReadyNotice, installCloudBuy, lookFile } from "./cloud-buy.mjs";
 import { createTrialNotices } from "./cloud-trial-notice.mjs";
 import { DESKTOP_PORTS, jsonFile, registerDesktopPrefs } from "./desktop-prefs.mjs";
@@ -144,7 +145,7 @@ const cloudEntry = createCloudEntry({
   },
 });
 cloudEntry.fromLaunch(process.argv);
-let pendingPackageInstallUrl = pendingOrganizationEntry ? null : packageUrlFromCommandLine(process.argv);
+let pendingPackageInstall = pendingOrganizationEntry ? null : packageInstallFromCommandLine(process.argv);
 let pendingChatLink = pendingOrganizationEntry ? null : chatLinkFromCommandLine(process.argv);
 let organizationEntryReady = false;
 let mainWindow = null;
@@ -201,7 +202,7 @@ function sendToPage(win, channel, value) {
 }
 
 function deliverPackageInstall(win = mainWindow) {
-  if (pendingPackageInstallUrl && sendToPage(win, "package:install", pendingPackageInstallUrl)) pendingPackageInstallUrl = null;
+  if (pendingPackageInstall && sendToPage(win, "package:install", pendingPackageInstall)) pendingPackageInstall = null;
 }
 
 function deliverChatLink(win = mainWindow) {
@@ -219,9 +220,9 @@ function revealForLink() {
 }
 
 function queuePackageInstall(rawLink) {
-  const packageUrl = packageUrlFromDeepLink(rawLink);
-  if (!packageUrl) return false;
-  pendingPackageInstallUrl = packageUrl;
+  const installRequest = packageInstallFromDeepLink(rawLink);
+  if (!installRequest) return false;
+  pendingPackageInstall = installRequest;
   revealForLink();
   deliverPackageInstall();
   return true;
@@ -247,8 +248,8 @@ app.on("second-instance", (_event, commandLine) => {
     return;
   }
   if (cloudEntry.fromArgs(commandLine)) return;
-  const packageUrl = packageUrlFromCommandLine(commandLine);
-  if (packageUrl) pendingPackageInstallUrl = packageUrl;
+  const installRequest = packageInstallFromCommandLine(commandLine);
+  if (installRequest) pendingPackageInstall = installRequest;
   const chatLink = chatLinkFromCommandLine(commandLine);
   if (chatLink) pendingChatLink = chatLink;
   revealForLink();
@@ -2644,12 +2645,7 @@ ipcMain.on("update:offered", event => {
   try { event.returnValue = updaterPageOffered(event) === true; } catch { event.returnValue = false; }
 });
 ipcMain.handle("cloud-lending:open", cloudPageSender("cloud-lending:open", () => openLendingSettings()));
-ipcMain.handle("cloud-plan:state", event => cloudPageSender("cloud-plan:state", () => {
-  const state = cloudAccount?.state();
-  return { ...cloudPlanSnapshot(state, { notice: cloudTrialNotices().due(state) }), ...(homeWindow.homePage(event) ? { home: true } : {}) };
-})(event));
-ipcMain.handle("cloud-plan:notice-seen", cloudPageSender("cloud-plan:notice-seen", () => { cloudTrialNotices().seen(cloudAccount?.state()); }));
-ipcMain.handle("cloud-plan:manage", cloudPageSender("cloud-plan:manage", async () => { await ensureCloudAccount().openDashboard(); }));
+installCloudPlanIpc({ ipcMain, pageSender: cloudPageSender, account: () => cloudAccount, client: () => ensureCloudAccount(), notices: () => cloudTrialNotices(), homePage: event => homeWindow.homePage(event) });
 
 const savedWorkspace = id => {
   const env = environmentsState.environments.find(entry => entry.id === id);

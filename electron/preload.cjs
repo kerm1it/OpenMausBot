@@ -4,12 +4,12 @@ const { contextBridge, ipcRenderer, webUtils } = require("electron");
 // Sandboxed preloads get Electron's restricted `require`, which cannot load sibling CommonJS files.
 const desktopRemoteClient = process.argv.includes("--openmausbot-remote-client");
 
-let pendingPackageInstallUrl = null;
+let pendingPackageInstall = null;
 const packageInstallListeners = new Set();
-ipcRenderer.on("package:install", (_event, url) => {
-  if (typeof url !== "string") return;
-  pendingPackageInstallUrl = url;
-  for (const listener of packageInstallListeners) listener(url);
+ipcRenderer.on("package:install", (_event, input) => {
+  if (typeof input !== "string" && (!input || typeof input !== "object" || !["bot", "plugin"].includes(input.type) || !["openmausbot", "grok-bot"].includes(input.source))) return;
+  pendingPackageInstall = packageInstallListeners.size ? null : input;
+  for (const listener of packageInstallListeners) listener(input);
 });
 
 let pendingChatLink = null;
@@ -214,7 +214,11 @@ const bridge = {
   },
   onPackageInstall: (cb) => {
     packageInstallListeners.add(cb);
-    if (pendingPackageInstallUrl) cb(pendingPackageInstallUrl);
+    queueMicrotask(() => {
+      if (!pendingPackageInstall || !packageInstallListeners.size) return;
+      const input = pendingPackageInstall; pendingPackageInstall = null;
+      for (const listener of packageInstallListeners) listener(input);
+    });
     return () => packageInstallListeners.delete(cb);
   },
   onChatLink: (cb) => {
@@ -385,6 +389,11 @@ const bridge = {
     signIn: () => isLocalPage || navigator.userActivation?.isActive === true
       ? ipcRenderer.invoke("home:sign-in") : Promise.reject(new Error("Choose Sign in to sign in again.")),
     noticeSeen: () => ipcRenderer.invoke("cloud-plan:notice-seen"),
+    // The usage meter's Upgrade: both only from the person's click (Upgrade, then the confirm's Upgrade), never by themselves.
+    upgradePreview: (plan, source) => navigator.userActivation?.isActive === true
+      ? ipcRenderer.invoke("cloud-plan:upgrade-preview", String(plan), String(source)) : Promise.reject(new Error("Choose Upgrade to see the price.")),
+    upgrade: (plan, source) => navigator.userActivation?.isActive === true
+      ? ipcRenderer.invoke("cloud-plan:upgrade", String(plan), String(source)) : Promise.reject(new Error("Choose Upgrade to change your plan.")),
   } : undefined,
   organization: process.argv.includes("--omb-company-desktop=1") ? {
     settingsOpened: () => ipcRenderer.invoke("organization:settings-opened"),
