@@ -568,7 +568,6 @@
         "properties": {
           "source": {
             "type": "string",
-            "pattern": "^[hH][tT][tT][pP][sS]?://",
             "description": "HTTP/HTTPS archive or GitHub URL; no local paths."
           }
         },
