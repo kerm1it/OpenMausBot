@@ -17,7 +17,7 @@ interface Snapshot { stage: string; root: string; digest: string; expires: numbe
 interface ExtensionHostDeps extends ResolveExtensionDeps {
   dataDir: string;
   plugins: ExtensionPlugins;
-  createBot: (draft: PreparedBotTemplate, options: ExtensionImportOptions, plugins: string[], auth: RequestAuth) => Promise<Omit<ExtensionImportResult, "warnings">>;
+  importBot: (draft: PreparedBotTemplate, options: ExtensionImportOptions, plugins: string[], auth: RequestAuth) => Promise<Omit<ExtensionImportResult, "warnings">>;
 }
 const optionsSchema = z.object({ name: z.string().max(80).optional(), section: z.string().max(60).optional(), modelSelection: z.unknown().optional(), includeMemory: z.boolean().optional(), includeRoutines: z.boolean().optional(), omitPlugins: z.array(z.string()).max(100).optional(), reusePlugins: z.array(z.string()).max(100).optional(), omitSkills: z.array(z.string()).max(100).optional() }).strict();
 
@@ -103,7 +103,7 @@ export function createExtensionHost(deps: ExtensionHostDeps) {
       const ids = await commitDependencies(snapshot.dependencies, deps.plugins, options.omitPlugins ?? [], options.reusePlugins ?? []);
       const warnings = [...snapshot.preview.warnings, ...(options.omitPlugins?.length ? ["Some plugin dependencies were omitted; the imported bot may have reduced capabilities."] : [])];
       const result: ExtensionImportResult = snapshot.draft
-        ? { ...await deps.createBot(snapshot.draft, options, ids, auth), warnings }
+        ? { ...await deps.importBot(snapshot.draft, options, ids, auth), warnings }
         : { pluginId: ids[0], warnings };
       snapshot.result = result;
       rmSync(snapshot.stage, { recursive: true, force: true });

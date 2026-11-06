@@ -36,6 +36,8 @@ export async function createImportedBot(deps: BotCreateRouteDeps, draft: Prepare
   const routines = deps.routines();
   if (options.includeRoutines && draft.routines.length && !routines) extensionError("Routines are not available in this workspace", 409);
   if (deps.store.bots.length >= deps.maxWorkspaceBots) extensionError(`this workspace is limited to ${deps.maxWorkspaceBots} bots`, 409);
+  const overPlan = deps.botLimit.refusal();
+  if (overPlan) extensionError(overPlan.error, 409);
   const creator = auth.kind === "session" && auth.session.membershipAuthority === "team" ? auth.session.email : undefined;
   const bot = deps.store.createBot({ ...profilePatch, mascotExpression, section, modelSelection: selection, plugins,
     ...(color && (MAUS_COLOR_NAMES as readonly string[]).includes(color) ? { color: color as typeof MAUS_COLOR_NAMES[number] } : {}),

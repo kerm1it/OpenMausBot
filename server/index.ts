@@ -12168,7 +12168,7 @@ const botCreateDeps: BotCreateRouteDeps = {
   personaliseSetupCard: (bot) => setupSuggestions.personalise(bot.id),
 };
 const extensionHost = createExtensionHost({ dataDir: DATA_DIR, plugins,
-  createBot: (draft, options, ids, auth) => createImportedBot(botCreateDeps, draft, options, ids, auth) });
+  importBot: (draft, options, ids, auth) => createImportedBot(botCreateDeps, draft, options, ids, auth) });
 ROUTES.push(createExtensionRoutes({ host: extensionHost,
   exportBot: (id, options, auth) => exportBotTemplate({ store, plugins, routines: () => routines }, id, options, auth) }));
 ROUTES.push(createBotCreateRoutes(botCreateDeps), createTeamOwnerRoutes({ team: CLOUD_TEAM, people: teamOwners.people, store, record: (auth, row) => appendAdminAction(DATA_DIR, { ...row, actor: decisionActorFor(auth) }), sees: (auth, botId) => visibleTo(viewerFor(auth)).bot(botId), publicBot,

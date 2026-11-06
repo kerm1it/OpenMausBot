@@ -39,14 +39,15 @@ describe("portable bot template round trip", () => {
     const routines = new RoutineManager({file: join(root, "routines.json"), botState: () => "ready", createTask: () => null, startTurn: async () => {}});
     const originalRoutine = routines.create({botId: source.id, name: "Morning", prompt: "Inspect", schedule: {type: "daily", time: "09:00", weekdays: [1, 2, 3, 4, 5]}, enabled: true});
     const plugins = createPluginService({library: new PluginLibrary(join(root, "plugins")), store, inUse: () => false, getDefaults: () => undefined, saveDefaults: () => {}});
-    const deps = {store, cfg: {newBotDefaults: {profile: {soul: "Unrelated default", approvalMode: "full"}, memory: {"MEMORY.md": "Unrelated memory"}, skills: [{name: "unrelated", text: skill("unrelated"), source: "fixture", enabled: true}]}}, hostedModels: null, maxWorkspaceBots: 100, defaultSelection: async () => selection(), checkedModelSelection: () => ({ok: true, selection: selection()}), routines: () => routines, wireBot: (bot: typeof source) => bot, cloudOwnerKey: null} as unknown as BotCreateRouteDeps;
+    let importRefusal: {code: "bot_limit"; error: string} | null = null;
+    const deps = {store, cfg: {newBotDefaults: {profile: {soul: "Unrelated default", approvalMode: "full"}, memory: {"MEMORY.md": "Unrelated memory"}, skills: [{name: "unrelated", text: skill("unrelated"), source: "fixture", enabled: true}]}}, hostedModels: null, maxWorkspaceBots: 100, botLimit: {refusal: () => importRefusal}, defaultSelection: async () => selection(), checkedModelSelection: () => ({ok: true, selection: selection()}), routines: () => routines, wireBot: (bot: typeof source) => bot, cloudOwnerKey: null} as unknown as BotCreateRouteDeps;
     const exported = await exportBotTemplate({store, plugins, routines: () => routines}, source.id, {includeMemory: true, includeRoutines: true}, auth);
     const files = unzipSync(exported.bytes);
     const profile = JSON.parse(Buffer.from(files["bot.json"]!).toString("utf8"));
     expect(profile.profile).toMatchObject({soul: "Portable soul", avatarCrop: "circle", avatarZoom: 1.5});
     expect(profile.profile).not.toHaveProperty("approvalMode");
     expect(files["skills/shared-proof/reference.bin"]).toEqual(new Uint8Array([0, 255, 9]));
-    const host = createExtensionHost({dataDir: root, plugins, createBot: (...args) => createImportedBot(deps, ...args)});
+    const host = createExtensionHost({dataDir: root, plugins, importBot: (...args) => createImportedBot(deps, ...args)});
     const preview = await host.prepare(undefined, exported.bytes);
     expect(preview.routines[0]?.schedule).toContain('"cron"');
     const imported = await host.import(preview.id, {includeMemory: true, includeRoutines: true}, auth);
@@ -71,6 +72,9 @@ describe("portable bot template round trip", () => {
     const grokResult = await host.import(grokPreview.id, {}, auth);
     expect(grokResult.bot).toMatchObject({name: "Grok minimal", title: "", description: ""});
     expect(store.bot(grokResult.botId!)?.title.trim()).toBe("");
+    const refusedPreview = await host.prepare(JSON.stringify({profile: {name: "Too many", description: "Stay concise"}}));
+    importRefusal = {code: "bot_limit", error: "Starter plan limit reached"};
+    await expect(host.import(refusedPreview.id, {}, auth)).rejects.toThrow("Starter plan limit reached");
     host.close();
   });
 });

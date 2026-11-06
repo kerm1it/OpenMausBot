@@ -20,7 +20,7 @@ describe("extension prepare and confirmation", () => {
   function setup() {
     const plugins = createPluginService({library: new PluginLibrary(join(root, "library")), store: {removePluginReferences: () => []}, inUse: () => false, getDefaults: () => undefined, saveDefaults: () => {}});
     const createBot = vi.fn(async () => ({botId: "created-bot", threadId: "created-thread"}));
-    return {plugins, createBot, host: createExtensionHost({dataDir: root, plugins, createBot})};
+    return {plugins, createBot, host: createExtensionHost({dataDir: root, plugins, importBot: createBot})};
   }
   it("prepares and imports the official Grok export through the unified host", async () => {
     const {host, createBot} = setup();

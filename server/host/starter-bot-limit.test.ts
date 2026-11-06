@@ -81,6 +81,7 @@ describe("where a bot gets made", () => {
   it("is only the paths the limit has an answer for", () => {
     expect(calling(/\.createBot\(/)).toEqual([
       "default-bot.ts", // a place's MausBot: never counted
+      "extension-create.ts", // gated before a reviewed bot template is installed
       "package-import.ts", // gated before its first record: file imports, templates, the move importer, the org library
       "routes/bots-create.ts", // gated, unless the bot arrives with its own id: a move
       "store.ts", // the store's own seed on an empty place
@@ -92,6 +93,7 @@ describe("where a bot gets made", () => {
   it("gates each of them with the one check", () => {
     const read = (file: string) => readFileSync(join(SERVER, file), "utf8");
     expect(read("routes/bots-create.ts")).toContain("kept.id ? null : deps.botLimit.refusal()");
+    expect(read("extension-create.ts")).toContain("deps.botLimit.refusal()");
     expect(read("package-import.ts")).toContain("deps.botLimit?.refusal(members.length)");
     expect(read("team-setup-requests.ts")).toContain("this.options.botLimit?.refusal(creating,");
   });
