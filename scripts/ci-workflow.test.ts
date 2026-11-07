@@ -148,6 +148,21 @@ describe("CI concurrency", () => {
     expect(workflow.on).toHaveProperty("workflow_dispatch");
   });
 
+  it("releases unsigned macOS DMGs when main's version changes", () => {
+    const source = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+    const release = parse(source);
+    expect(release.on.push).toEqual({ branches: ["main"], paths: ["package.json"] });
+    expect(release.jobs.mac.name).toContain("unsigned DMGs");
+    const packageStep = release.jobs.mac.steps.find((step: { name?: string }) => step.name === "Package both architectures without a signing identity");
+    expect(packageStep.env.CSC_IDENTITY_AUTO_DISCOVERY).toBe("false");
+    expect(packageStep.run).toContain("electron-builder --mac dmg --arm64 --x64 --publish never");
+    expect(release.jobs.mac.steps.at(-1).with.path).toBe("release/*.dmg");
+    expect(release.jobs.assemble.steps.some((step: { run?: string }) => step.run === 'node scripts/verify-release-assets.mjs assets "$VERSION"')).toBe(true);
+    expect(source).not.toContain("RELEASES_PAT");
+    expect(source).not.toContain("milind-soni/openmausbot-releases");
+    expect(source).not.toContain("latest-mac.yml");
+  });
+
   it("checks out every module the release gate imports", () => {
     const release = parse(readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8"));
     const checkout = release.jobs.ci.steps.find((step: { uses?: string }) => step.uses?.startsWith("actions/checkout@"));
