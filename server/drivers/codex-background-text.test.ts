@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -197,6 +197,7 @@ describe("Codex generateMemoryText (fake CLI)", () => {
   let scratch: string;
   let instance: ProviderInstance | undefined;
   let log: string;
+  const runtimeConfig = join(DATA_DIR, "providers", "codex", "config.toml");
 
   const calls = (): ExecCall[] => existsSync(log)
     ? readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as ExecCall)
@@ -244,6 +245,7 @@ describe("Codex generateMemoryText (fake CLI)", () => {
   afterEach(async () => {
     await instance?.dispose();
     instance = undefined;
+    rmSync(runtimeConfig, { force: true });
     await removeTempDir(scratch);
   });
 
@@ -389,7 +391,8 @@ describe("Codex generateMemoryText (fake CLI)", () => {
 
   it("writes on the bot's own gateway model with the gateway's provider table, never OpenAI's small model", async () => {
     apiKeyLogin();
-    writeFileSync(join(scratch, ".codex", "config.toml"), [
+    mkdirSync(dirname(runtimeConfig), { recursive: true });
+    writeFileSync(runtimeConfig, [
       'model = "glm-5"', 'model_provider = "mygw"',
       "[model_providers.mygw]", 'name = "My gateway"', 'base_url = "http://127.0.0.1:9/v1"', 'env_key = "MYGW_KEY"',
     ].join("\n"));
