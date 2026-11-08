@@ -102,7 +102,7 @@ describe("Settings rail groups", () => {
     expect(SETTINGS_GROUPS.map((group) => group.id)).toEqual(["you", "ai", "computers", "account"]);
     const ids = SECTIONS.map((entry) => entry.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(21);
+    expect(ids).toHaveLength(20);
     for (const entry of SECTIONS) expect(SETTINGS_GROUPS.map((group) => group.id)).toContain(entry.group);
   });
 
@@ -115,7 +115,7 @@ describe("Settings rail groups", () => {
       you: ["general", "appearance", "companion"],
       ai: ["engines", "connections", "decisionModel", "imageGeneration", "plugins"],
       computers: ["desktopWorkspaces", "computer", "logins"],
-      account: ["organization", "usage", "backups", "import", "experimental"],
+      account: ["usage", "backups", "import", "experimental"],
     });
     expect(html).toContain('<optgroup label="AI">');
   });

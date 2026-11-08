@@ -96,7 +96,6 @@ export const SECTIONS: Array<{
   { id: "desktopWorkspaces", group: "computers", labelKey: "settings.section.desktopWorkspaces", icon: Building2, keywords: ["workspace", "cloud", "hosted", "vps", "server", "servers", "connect", "pair", "switch", "local"] },
   { id: "computer", group: "computers", labelKey: "settings.section.computer", icon: Monitor, keywords: ["vm", "virtual", "desktop", "browser", "built-in browser", "profiles", "browser profiles"] },
   { id: "logins", group: "computers", labelKey: "settings.section.logins", icon: LockKeyhole, keywords: ["logins", "login", "passwords", "password", "sign in", "2fa", "one-time code", "totp", "fill_login", "1password", "vault"] },
-  { id: "organization", group: "account", labelKey: "settings.section.organization", icon: Building2, keywords: ["company", "organization", "organisation", "sign in", "enroll", "managed", "models", "disconnect"] },
   { id: "usage", group: "account", labelKey: "settings.section.usage", icon: Coins, keywords: ["tokens", "cost", "billing", "plan", "quota", "remaining", "weekly", "5-hour", "model", "used"] },
   { id: "backups", group: "account", labelKey: "settings.section.backups", icon: Archive, keywords: ["export", "import", "restore", "full backup", "password", "recovery"] },
   { id: "import", group: "account", labelKey: "settings.section.import", icon: Download, keywords: ["import", "grok", "grok bot", "move", "cursor", "claude code", "codex", "gemini", "skills", "mcp", "tools", "bring"] },
@@ -116,7 +115,7 @@ export type SimpleSettingsPage = {
 };
 
 export const SIMPLE_PAGES: SimpleSettingsPage[] = [
-  { id: "general", labelKey: "settings.section.general", icon: Settings, sections: ["general", "appearance", "people", "import", "organization", "activity"],
+  { id: "general", labelKey: "settings.section.general", icon: Settings, sections: ["general", "appearance", "people", "import", "activity"],
     keywords: ["account", "theme", "looks", "open at login", "startup", "analytics", "advanced mode"] },
   { id: "botAccess", labelKey: "settings.section.botAccess", icon: Users, sections: ["botAccess"] },
   { id: "ai", labelKey: "settings.group.ai", icon: Sparkles, sections: ["engines", "connections"] },
@@ -181,6 +180,7 @@ export function SettingsModal() {
   const remoteActive = window.ogb?.remoteClient?.active === true;
   const requested = state.appSettingsSection;
   const section: AppSettingsSection =
+    ["cloudAccount", "organization"].includes(requested) ? "general" :
     advanced && requested === "remote" && window.ogb?.environments
       ? "desktopWorkspaces"
       : (remoteActive && !["appearance", "desktopWorkspaces"].includes(requested)) || requested === "remote"
@@ -206,7 +206,7 @@ export function SettingsModal() {
     .filter((entry) => entry.id !== "people" || (!window.ogb && state.config?.cloudHome !== true))
     .filter((entry) => entry.id !== "activity" || (!window.ogb && ownerOrAdmin === true))
     .filter((entry) => entry.id !== "botAccess" || (Boolean(state.config?.team) && ownerOrAdmin === true));
-  const availableSections = baseSections.filter((entry) => entry.id !== "skills" || skillsLibraryEnabled(state.config));
+  const availableSections = baseSections.filter((entry) => entry.id !== "skills" || skillsLibraryEnabled(state.config)).filter((entry) => advanced || entry.id !== "plugins");
   const visibleSections = availableSections.filter((entry) => sectionMatches(entry, q));
 
   const simpleAvailable = new Set<AppSettingsSection>([...availableSections.map((entry) => entry.id), ...(remoteActive ? [] : ["updates" as const])]);

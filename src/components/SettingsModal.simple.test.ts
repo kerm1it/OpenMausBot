@@ -166,7 +166,7 @@ describe("Settings in Simple mode", () => {
   it("opens General on Account, then Appearance, Notifications, System and Import, with Advanced mode last as a plain row", () => {
     const html = render();
     expect(currentPage(html)).toBe("general");
-    expect(groupLabels(html)).toEqual(["Account", "Appearance", "Notifications", "System", "Import", "Organization"]);
+    expect(groupLabels(html)).toEqual(["Account", "Appearance", "Notifications", "System", "Import"]);
     expect(blocks(html).at(-1)).toBe("advanced-mode");
     expect([...html.matchAll(/<button[^>]*role="switch"[^>]*>/g)].at(-1)?.[0]).toContain('aria-label="Advanced mode"');
     expect(html).toContain("Show every control, including tools for builders. Nothing is deleted either way.");
@@ -307,7 +307,6 @@ describe("Settings in Simple mode", () => {
     ["general", "general"],
     ["appearance", "general"],
     ["import", "general"],
-    ["organization", "general"],
     ["engines", "ai"],
     ["connections", "ai"],
     ["companion", "computer"],
