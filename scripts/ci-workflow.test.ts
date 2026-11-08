@@ -80,13 +80,17 @@ describe("CI concurrency", () => {
     expect(workflow.jobs.gate.strategy).toBeUndefined();
     expect(workflow.permissions).toEqual({ contents: "read" });
     expect(workflow.jobs.vitest.strategy.matrix).toBe("${{ fromJSON(needs.static.outputs.vitest_matrix) }}");
-    expect(workflow.jobs.vitest["timeout-minutes"]).toBe("${{ matrix.os == 'ubuntu-latest' && 45 || 30 }}");
+    expect(workflow.jobs.vitest["timeout-minutes"]).toBe("${{ matrix.os == 'ubuntu-latest' && 25 || 30 }}");
   });
 
   it("runs each selected platform's own shards, and its e2e files, from ci-scope's matrix", () => {
     expect(workflow.jobs.static.outputs.vitest_matrix).toBe("${{ steps.scope.outputs.vitest_matrix }}");
     expect(workflow.jobs.vitest.name).toBe("vitest (${{ matrix.os }}, ${{ matrix.part }})");
-    const run = (workflow.jobs.vitest.steps as { name?: string; run?: string; env?: Record<string, string> }[])
+    const steps = workflow.jobs.vitest.steps as { name?: string; run?: string; if?: string; env?: Record<string, string> }[];
+    const noBox = steps.find((step) => step.name === "Keep Cloud fixtures outside the production bot box")!;
+    expect(noBox.if).toBe("runner.os == 'Linux'");
+    expect(noBox.run).toBe("sudo rm -f /usr/bin/bwrap");
+    const run = steps
       .find((step) => step.name === "Run tests")!;
     expect(run.run).toContain("pnpm exec vitest run ${{ matrix.files }} --shard=${{ matrix.shard }}/${{ matrix.shards }} ");
     expect(run.env?.OMB_VITEST_E2E).toBe("${{ matrix.e2e }}");
