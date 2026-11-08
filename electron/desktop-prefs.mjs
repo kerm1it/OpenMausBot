@@ -3,6 +3,8 @@
 // the person hid the window's rail of places and whether they turned the window's frame off.
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
+import nativeText from "./native-text.cjs";
 
 import { DEFAULT_TALK_KEY, isTalkKey } from "./talk-keys.mjs";
 import { parseUpdatesConsent } from "./updates-consent.mjs";
@@ -54,6 +56,17 @@ function parse(raw) {
     ...(typeof record.railHidden === "boolean" ? { railHidden: record.railHidden } : {}),
     ...(typeof record.windowFrame === "boolean" ? { windowFrame: record.windowFrame } : {}),
     ...(Object.keys(quickAsks).length ? { quickAsks } : {}) };
+}
+
+export function createDesktopText(app, prefs = createDesktopPrefs(jsonFile(path.join(app.getPath("userData"), "desktop-prefs.json")))) {
+  return Object.assign(nativeText.createNativeText({ saved: prefs.language(), system: () => (app.isReady() ? app.getLocale() : "") }), { prefs });
+}
+
+export function relabelDesktop({ menu, trays, window, title, badge }) {
+  menu();
+  for (const tray of trays) tray?.relabel();
+  if (window && !window.isDestroyed()) window.setTitle(title());
+  badge();
 }
 
 /** A record that cannot be written is still kept for this launch. */
@@ -128,15 +141,7 @@ export function createDesktopPrefs({ read, write }) {
   };
 }
 
-/**
- * `cloudAccount()`: the MausBot Cloud sign-in client, for the product-updates question (updates-consent.mjs), which is
- * asked where Cloud offers are (`cloudOffered`); without it nothing is asked and null is returned.
- * `page(event)`: "local" for this computer's page, "cloud" for My Cloud's own page as main verifies it, "server" for
- * another saved server open in this desktop's window, null for anything else. `cloudOffered()`: this desktop sells
- * MausBot Cloud, asked once its Cloud sign-in is restored. `localConfig()`: This computer's own workspace's config.json.
- * `languageChanged(language, sender)`: tells this desktop's other pages the language picked on one of them.
- */
-export function registerDesktopPrefs({ prefs: given, ipcMain, read, write, page, languageChanged = () => {}, frame = null, systemName = accountFullName }) {
+export function registerDesktopPrefs({ prefs: given, ipcMain, read, write, page, languageChanged = () => {}, onLanguage = () => {}, onShown = () => {}, frame = null, systemName = accountFullName }) {
   let prefs = given ?? null;
   const store = () => prefs ??= createDesktopPrefs({ read, write });
   const from = (channel, pages, handler) => (event, ...args) => {
@@ -158,8 +163,12 @@ export function registerDesktopPrefs({ prefs: given, ipcMain, read, write, page,
   ipcMain.handle("desktop-language:set", (event, language) => {
     if (setLanguage(event, language)) {
       try { languageChanged(language, event.sender); } catch {}
+      try { onLanguage(language); } catch {}
     }
     return store().language() === language;
+  });
+  ipcMain.on("desktop-language:shown", (event, language) => {
+    try { if (page(event) && isLanguage(language) && language) onShown(language, event.sender); } catch {}
   });
   // Every page of this desktop's window reads and sets the frame; a server's page sets it only from the person's click,
   // which the preload checks.

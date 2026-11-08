@@ -169,8 +169,6 @@ describe("one name per thing", () => {
       ["cloudAccount.storageFailed", [label("cloudAccount.signOut")]],
       ["cloudAccount.codeExpired", [label("cloudAccount.signIn")]],
       ["computer.routines.offWarning", [label("routines.runsOn.boat")]],
-      ["native.dialog.org.consHosted", [label("native.menu.server")]],
-      ["native.dialog.unreachable.detail", [label("native.menu.server")]],
       ["native.boot.folderMissing.body", [label("native.menu.server")]],
       ["native.boot.unhealthy.body", [label("native.menu.server")]],
       ["native.dialog.connectFailed.detail", [withoutEllipsis("native.menu.connect")]],

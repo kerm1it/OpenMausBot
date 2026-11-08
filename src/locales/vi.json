@@ -5118,7 +5118,6 @@
   "rail.profile": "{name}: một nơi riêng trên máy tính này, có bot riêng. Các bot trong Cloud của bạn vẫn ở My Cloud.",
   "homeLine.profile": "{name} bắt đầu mới hoàn toàn, tách biệt với My Cloud. Các bot bạn từng có ở đây hiện ở My Cloud; để đưa một bản cũ hơn về, hãy nhập bản sao lưu của nó trong Cài đặt → Sao lưu.",
   "homeLine.local": "{name} bắt đầu mới hoàn toàn: một nơi riêng trên máy tính này, có bot, cuộc trò chuyện và tệp riêng.",
-  "native.places.profileFailed": "Không mở được nơi riêng của máy tính này. Hãy thử lại sau giây lát.",
   "rail.settingUp": "{name}: đang thiết lập",
   "rail.waiting": "{name}: đang chờ thanh toán",
   "rail.attention": "{name}: cần bạn",

@@ -470,6 +470,8 @@ test("times out only after an ambiguous elevated grant is revoked", async () => 
 test("safe Ask timeouts do not enqueue a redundant recovery", async () => {
   const proc = fakeProcess();
   const coordinator = createTrustedApprovalModeCoordinator({ randomId: () => REQUEST_ID, timeoutMs: 5 });
-  await assert.rejects(coordinator.request(proc, "bot-1", "ask"), /did not answer/);
+  const keepAlive = setTimeout(() => {}, 50);
+  try { await assert.rejects(coordinator.request(proc, "bot-1", "ask"), /did not answer/); }
+  finally { clearTimeout(keepAlive); }
   assert.equal(proc.messages.length, 1);
 });

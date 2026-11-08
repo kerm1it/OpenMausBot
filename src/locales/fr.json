@@ -2683,7 +2683,6 @@
   "rail.profile": "{name} : un espace à part sur cet ordinateur, avec ses propres bots. Les bots de votre Cloud restent sur My Cloud.",
   "homeLine.profile": "{name} repart de zéro, séparé de My Cloud. Les bots que vous aviez ici sont sur My Cloud ; pour récupérer une ancienne copie, importez sa sauvegarde dans Paramètres → Backups.",
   "homeLine.local": "{name} repart de zéro : un espace à part sur cet ordinateur, avec ses propres bots, discussions et fichiers.",
-  "native.places.profileFailed": "L'espace propre à cet ordinateur ne s'est pas ouvert. Réessayez dans un instant.",
   "rail.settingUp": "{name} : configuration en cours",
   "rail.waiting": "{name} : en attente du paiement",
   "rail.attention": "{name} : a besoin de vous",

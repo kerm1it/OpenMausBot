@@ -97,6 +97,7 @@ test("main's own wiring: This computer's page reads and changes its own colour, 
   const handlers = new Map(), persisted = [];
   const context = vm.createContext({ installPlaceLook, nativeT: nativeText.englishText.t, savedPlace: environments.savedPlace, withPlaceColor: environments.withPlaceColor,
     ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) }, workspaceOnly: handler => handler,
+    localWorkspaceOnly: (_channel, handler) => handler,
     environmentsState: { environments: [typed], activeId: "local" }, desktopRemoteAccess: null, cloudAccount: null, myCloud: () => null,
     ensureCloudAccount: () => { throw new Error("This computer's colour never asks the Admin"); },
     persistEnvironments: next => { persisted.push(next); context.environmentsState = next; },
