@@ -4,6 +4,7 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { DATA_DIR } from "../config.ts";
 import { CodexDriver } from "./codex.ts";
 import {
   decodeCodexSelection,
@@ -225,17 +226,18 @@ name = "oMLX"
 });
 
 describe("CodexDriver catalog", () => {
-  it("loads the explicit native home's config catalog when the instance is created", async () => {
+  it("loads the application CODEX_HOME config catalog when the instance is created", async () => {
     chmodSync(FAKE_CLI, 0o755);
-    const home = scratchHome({
-      "config.toml": `
+    const home = scratchHome({});
+    const codexHome = join(DATA_DIR, "providers", "codex");
+    mkdirSync(codexHome, { recursive: true });
+    writeFileSync(join(codexHome, "config.toml"), `
 model_provider = "omlx"
 model = "MiniMax-M3-4bit"
 
 [model_providers.omlx]
 name = "oMLX"
-`,
-    });
+`);
     const instance = await CodexDriver.create({
       instanceId: "codex-catalog",
       displayName: "Codex",
