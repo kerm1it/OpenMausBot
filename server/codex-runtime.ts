@@ -42,10 +42,3 @@ export function linkExternalCodexAuth(home: string, sourceHome: string): void {
   catch { throw new Error("Could not link the external Codex login into the application's private home. Check filesystem symlink permissions."); }
   finally { try { unlinkSync(staged); } catch { /* renamed, or creation failed */ } }
 }
-
-export function configureCodexRuntime(env: NodeJS.ProcessEnv): void {
-  const runtime = codexRuntimeEnvironment(env);
-  initializeCodexRuntime(runtime.CODEX_HOME);
-  env.CODEX_HOME = runtime.CODEX_HOME;
-  env.OMB_CODEX_AUTH_HOME = runtime.OMB_CODEX_AUTH_HOME;
-}

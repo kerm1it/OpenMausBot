@@ -84,7 +84,7 @@ test("every list of the app's windows leaves the talk box out", () => {
 
 test("main hands the talk wiring its speech sinks, this computer's own server and window, and closes it first on quit", () => {
   assert.match(main, /const talk = installTalk\(\{ ipcMain, localOnly, localOrHome, BrowserWindow, appleSpeech: nativeActions\.appleSpeech,\s*speech: \{ start: startSpeech, stop: stopSpeech, finish: finishSpeech, busy: speechBusy \},/);
-  assert.match(main, /packaged: app\.isPackaged, devUrl: DEV_URL, nativeImage, iconPath: APP_ICON, openLink: queueChatLink, reveal: revealForLink, log: slog \}\);/);
+  assert.match(main, /packaged: app\.isPackaged, devUrl: DEV_URL, nativeImage, iconPath: APP_ICON, openLink: queueChatLink, reveal: revealForLink, log: slog, t: nativeT \}\);/);
   assert.match(main, /talk\.start\(\{ globalShortcut, screen, prefs: desktopPrefs, remote: \(\) => Boolean\(desktopRemoteAccess\), away: \(\) => Boolean\(activeRemote\(environmentsState\)\), starting: \(\) => !serverReady, localRequest: localServerRequest, dataDir: \(\) => runningDataDir \}\);/);
   assert.match(main, /app\.on\("before-quit", \(e\) => \{\s*talk\.close\(\);/);
   assert.doesNotMatch(main, /ipcMain\.handle\("(?:speech|talk-shortcut|call):/);
@@ -260,7 +260,8 @@ test("a press while this computer's server is still starting says so", async () 
   h.start();
   h.press();
   await settle();
-  assert.deepEqual((await h.painted()).at(-1), { state: "error", text: "MausBot is still starting. Try again in a moment." });
+  const frame = (await h.painted()).at(-1);
+  assert.deepEqual({ state: frame.state, text: frame.text }, { state: "error", text: "MausBot is still starting. Try again in a moment." });
   h.talk.close();
 });
 
@@ -269,10 +270,12 @@ test("the box takes the light or dark of the skin the app painted last, before o
   h.talk.skin("meadow");
   h.start();
   h.press();
-  assert.deepEqual((await h.painted()).at(-1), { state: "listening", text: "", theme: "light" });
+  let frame = (await h.painted()).at(-1);
+  assert.deepEqual({ state: frame.state, text: frame.text, theme: frame.theme }, { state: "listening", text: "", theme: "light" });
   h.talk.skin("midnight");
   await settle();
-  assert.deepEqual((await h.painted()).at(-1), { state: "listening", text: "", theme: "dark" });
+  frame = (await h.painted()).at(-1);
+  assert.deepEqual({ state: frame.state, text: frame.text, theme: frame.theme }, { state: "listening", text: "", theme: "dark" });
   h.talk.skin("no-such-skin");
   h.talk.skin(undefined);
   await settle();

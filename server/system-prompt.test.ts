@@ -7,6 +7,7 @@ import {
   buildSystemPrompt,
   CONVERSATIONAL_STYLE_PROMPT,
   CLOUD_HOME_PLACE,
+  CLOUD_ENGINES_HERE,
   cloudHomePrompt,
   userProfileSystemPrompt,
   computerPrompt,
@@ -406,17 +407,47 @@ describe("cloudHomePrompt", () => {
   });
 });
 
+// A Cloud's bot told its person to run `cursor-agent login` on their PC, then ran it on the cloud computer: neither signs
+// in the Cursor the bots run on, which is on the Cloud itself.
+it("tells Cloud bots that their AIs run on the Cloud and are signed in from the app, never on another computer", () => {
+  for (const text of [cloudHomePrompt(true), cloudHomePrompt(false), cloudHomePrompt(true, [], [{ name: "ASH-PC", platform: "win32" }], true)]) {
+    expect(text).toContain(CLOUD_ENGINES_HERE);
+    expect(text).toContain("run here, on My Cloud, not on their computer or their cloud computer");
+    expect(text).toContain("tell them to choose it in the model picker: its card does that here, with a sign-in link they open on any device");
+    expect(text).toContain("Never tell them to run an AI's install or sign-in command on their own computer, and never run one on their cloud computer yourself");
+  }
+});
+
 describe("longCommandsPrompt", () => {
   it("names Bash's limit everywhere and vm_exec's own limit only with a Local VM", () => {
     for (const kind of [null, "local", "vps", "box"] as const) {
       const text = longCommandsPrompt(kind);
       expect(text).toContain("`timeout` in milliseconds, up to 600000");
       expect(text).toContain("Never wait inside a command for CI, a deploy or any other job to finish (no sleep loops or repeated polls): check it once");
-      expect(text).toContain("tell the person what you made (with links), set wait_until or a one-time trigger to check back, and end your turn. When the person writes while you work, answer them first.");
+      expect(text).toContain("tell the person what you made (with links). Only on a turn the person started in their own chat, set wait_until or a one-time trigger to check back and end your turn");
+      expect(text).toContain("When the person writes while you work, answer them first.");
       expect(text).not.toContain("vm_exec");
     }
     for (const kind of ["vm-private", "vm-shared"] as const) {
       expect(longCommandsPrompt(kind)).toContain("vm_exec takes `timeout_seconds` instead (default 60, at most 300)");
+    }
+  });
+
+  it("keeps a long command in the foreground, and trusts only its own fresh exit code", () => {
+    for (const kind of [null, "local", "vps", "box"] as const) {
+      const text = longCommandsPrompt(kind);
+      expect(text).toContain("keep the command in the foreground until it exits");
+      expect(text).toContain("split work that cannot finish within that into shorter pieces");
+      expect(text).toContain("A detached job may be killed when the call ends");
+      expect(text).not.toContain("nohup");
+      expect(text).toContain("trust only the command's own fresh exit code and output");
+      expect(text).toContain("cannot set a wait, so finish it in this turn");
+    }
+  });
+
+  it("keeps the Local VM's own detached path, where the container outlives the call", () => {
+    for (const kind of ["vm-private", "vm-shared"] as const) {
+      expect(longCommandsPrompt(kind)).toContain("may start detached inside it (`nohup <command> > /tmp/<job>.log 2>&1 &`)");
     }
   });
 });

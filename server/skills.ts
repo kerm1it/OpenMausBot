@@ -30,6 +30,8 @@ import {
 } from "./skill-storage.ts";
 import { workspaceDir } from "./workspace.ts";
 import { isSkillName, parseSkillMd, SKILL_FILE_MAX_BYTES } from "../shared/skill-md.ts";
+import type { GitHubSkillOrigin } from "../shared/skill-import.ts";
+import { githubSkillOriginSchema } from "./skill-folder.ts";
 
 export {
   DESCRIPTION_MAX,
@@ -60,6 +62,8 @@ interface SkillManifestEntry {
   skippedFiles: string[];
   referencesSha256?: string;
   directorySha256?: string;
+  files?: string[];
+  github?: GitHubSkillOrigin;
   /** Replay guard for a crash between promotion and card settlement. Never exposed to agents. */
   appliedStageId?: string;
   storageRevision?: string;
@@ -91,6 +95,8 @@ const skillManifestEntrySchema = z.object({
   skippedFiles: z.array(z.string()),
   referencesSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   directorySha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  files: z.array(z.string()).optional(),
+  github: githubSkillOriginSchema.optional(),
   appliedStageId: z.string().optional(),
   storageRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   package: z.object({
@@ -235,6 +241,8 @@ export interface SkillListing {
   compatibility?: string;
   directorySha256?: string;
   revision?: string;
+  files?: string[];
+  github?: GitHubSkillOrigin;
   warnings: string[];
   skippedFiles: string[];
 }
@@ -314,10 +322,12 @@ export function installSkill(
   botId: string,
   source: string,
   files: SkillFile[],
+  github?: GitHubSkillOrigin,
+  skippedFiles: string[] = [],
 ): SkillListing | { error: string } {
   const prepared = preparedSkillFiles(files);
   if ("error" in prepared) return prepared;
-  return installPreparedSkill(botId, source, prepared, { enabled: false });
+  return installPreparedSkill(botId, source, { ...prepared, skippedFiles }, { enabled: false, github });
 }
 
 export function installSkillDirectory(botId: string, source: string, directory: string): SkillListing | { error: string } {
@@ -658,7 +668,7 @@ function installPreparedSkill(
   botId: string,
   source: string,
   prepared: PreparedSkillFiles,
-  options: { enabled: boolean; appliedStageId?: string; package?: SkillPackageStamp },
+  options: { enabled: boolean; appliedStageId?: string; package?: SkillPackageStamp; github?: GitHubSkillOrigin },
 ): SkillListing | { error: string } {
   const name = prepared.parsed.name;
   const manifest = readManifest(botId);
@@ -693,6 +703,8 @@ function installPreparedSkill(
     skippedFiles: prepared.skippedFiles,
     ...(referencesSha256 ? { referencesSha256 } : {}),
     directorySha256,
+    files: prepared.files.slice(1).map(file => file.path),
+    ...(options.github ? { github: options.github } : {}),
     appliedStageId: options.appliedStageId,
     ...(options.package ? { package: options.package } : {}),
   };

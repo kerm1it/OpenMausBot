@@ -58,6 +58,9 @@ vi.mock("shiki/core", () => ({
 vi.mock("shiki/engine/javascript", () => ({
   createJavaScriptRegexEngine: () => ({}),
 }));
+// These tests pin how a block is coloured, not when: without an observer a block counts as near the screen at once.
+// Tests below undo every stubbed global, so the observer is deleted instead.
+delete (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver;
 
 describe("soft line breaks", () => {
   it("keeps a reply's single line breaks as line breaks, outside code", () => {
@@ -349,7 +352,7 @@ describe("repaired tables", () => {
     const html = renderToStaticMarkup(createElement(ChatMarkdown, {
       text: "Pros | Cons\n---\n\n| a \\| b | c |\n| --- | --- |\n| 1 | 2 |",
     }));
-    expect(html).toContain('font-semibold">Pros | Cons</div>');
+    expect(html).toContain('tracking-[-0.005em]">Pros | Cons</div>');
     expect(html.match(/<table\b/g)).toHaveLength(1);
     expect(html).toContain(">a | b</span>");
     expect(html.match(/<th\b/g)).toHaveLength(2);
@@ -552,7 +555,7 @@ describe("#Title thread links in markdown", () => {
     const markup = render("`#QA PR 245` in code, [#QA PR 245](https://example.test) as a link, #123 an issue\n\n# QA PR 245\n\nplain");
     expect(markup).not.toContain("data-thread-link");
     expect(markup).toContain("<code");
-    expect(markup).toContain('font-semibold">QA PR 245</div>');
+    expect(markup).toContain('tracking-[-0.01em]">QA PR 245</div>');
   });
 
   it("does nothing without any visible threads", () => {
@@ -848,6 +851,7 @@ describe("ChatMarkdown attachments", () => {
       reason: "",
       savedTo: "",
       outsideWorkspace: false,
+      retryable: false,
       folder: {
         name: "04_post",
         entries: [{ name: "cover.png", bytes: 2048, mime: "image/png" }],
@@ -875,6 +879,7 @@ describe("ChatMarkdown attachments", () => {
         reason: "the linked file is outside this conversation's workspace",
         savedTo: "",
         outsideWorkspace,
+        retryable: !outsideWorkspace,
         folder: null,
         save: vi.fn(async () => undefined),
       });
@@ -1218,7 +1223,7 @@ describe("bidi: message content carries its own direction", () => {
       ].join("\n"),
     }));
 
-    expect(html).toContain('<div dir="rtl" class="mt-3 text-[18px] font-semibold">');
+    expect(html).toContain('<div dir="rtl" class="md-heading mt-3 text-[20px] font-semibold leading-[26px] tracking-[-0.01em]">');
     expect(html).toContain('<p dir="rtl">');
     expect(html).toContain('<p dir="ltr">An English paragraph');
     expect(html).toContain('<blockquote dir="rtl"');
@@ -1380,7 +1385,7 @@ describe("Simple mode's code block", () => {
 
   it("drops the header bar for a quiet surface, with Copy and a ⋯ menu on a hover plate", () => {
     const html = simple(() => renderToStaticMarkup(createElement(CodeBlock, { code: "const a = 1;", lang: "js" })));
-    expect(html).toMatch(/class="chat-code-block group\/code relative my-2\.5 overflow-hidden rounded-lg bg-ink\/\[0\.04\]"/);
+    expect(html).toMatch(/class="chat-code-block group\/code relative my-2\.5 overflow-hidden rounded-xl bg-ink\/\[0\.04\]"/);
     expect(html).not.toContain("border-hairline");
     expect(html).not.toContain('aria-label="Wrap long lines"');
     const plate = html.match(/<div data-code-plate="[^"]*" class="([^"]*)"/)?.[1] ?? "";
@@ -1395,5 +1400,33 @@ describe("Simple mode's code block", () => {
     expect(html).toContain("data-code-plate");
     expect(html).toContain('aria-label="Copy diagram source"');
     expect(html).not.toContain('title="Mermaid diagram"');
+  });
+});
+
+describe("a code block far from the screen", () => {
+  it("stays plain until it comes near the screen, then is coloured", async () => {
+    let report: IntersectionObserverCallback | undefined;
+    (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver = class {
+      constructor(callback: IntersectionObserverCallback) { report = callback; }
+      observe() {}
+      unobserve() {}
+    };
+    shiki.codeToHtml.mockReset();
+    shiki.codeToHtml.mockImplementation(async (code: string) => `<pre class="near-probe">${code}</pre>`);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    try {
+      await act(async () => root.render(createElement(ChatMarkdown, { text: "```ts\nconst farAway = 1;\n```" })));
+      expect(shiki.codeToHtml).not.toHaveBeenCalled();
+      expect(host.textContent).toContain("const farAway = 1;");
+      await act(async () => report!([{ target: host.querySelector(".chat-code-block")!, isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver));
+      await vi.waitFor(() => expect(host.querySelector(".near-probe")?.textContent).toBe("const farAway = 1;"));
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      delete (globalThis as { IntersectionObserver?: unknown }).IntersectionObserver;
+      shiki.codeToHtml.mockReset();
+    }
   });
 });

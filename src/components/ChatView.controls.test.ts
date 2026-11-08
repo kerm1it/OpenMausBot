@@ -6,6 +6,8 @@ import type { ApprovalModeSelector } from "./ApprovalModeSelector";
 import type { ModelPicker } from "./ModelPicker";
 import { CODEX_USAGE_LIMIT_REACHED, CODEX_USAGE_URL } from "../../shared/codex-usage-limit";
 import { failedTurnTool } from "../../shared/failed-turn";
+import { PROVIDER_SAFETY_GUIDANCE } from "../../shared/provider-safety";
+import { en } from "@/locales";
 
 const fixture = vi.hoisted(() => {
   vi.stubGlobal("window", {});
@@ -274,6 +276,22 @@ describe("header name", () => {
     expect(button(pinned)).toContain('data-testid="computer-button-live"');
   });
 
+  it("offers a Watch button only while a running tool uses the bot's screen", () => {
+    const working = (tool: string, busy = true, computer: Bot["computer"] | "auto" = "cloud", ok?: boolean) => renderToStaticMarkup(createElement(ChatView, {
+      bot: { ...bot, computer: computer === "auto" ? undefined : computer, busy, turnStartedAt: 1, tasks: (bot.tasks ?? []).map((task) => ({ ...task, busy, turnStartedAt: 1 })), messages: [
+        { id: "ask", role: "user", kind: "text", at: 1, text: "Check the site" },
+        { id: "tool", role: "bot", kind: "activity", at: 2, tool: { name: tool, ok } },
+      ] } as Bot,
+    }));
+    const watch = (markup: string) => markup.match(/<button[^>]*data-testid="watch-screen"[^>]*>[\s\S]*?<\/button>/)?.[0] ?? "";
+    expect(watch(working("mcp__computer__click"))).toContain(">Watch<");
+    expect(watch(working("mcp__browser__browser_snapshot", true, "auto"))).toContain(">Watch<");
+    expect(watch(working("mcp__computer__click", false))).toBe("");
+    expect(watch(working("Bash"))).toBe("");
+    expect(watch(working("screenshot", true, "auto"))).toBe("");
+    expect(watch(working("mcp__browser__browser_snapshot", true, "cloud", true))).toBe("");
+  });
+
   it("centres the bot in the header's middle column, with the controls in the last", () => {
     const markup = renderToStaticMarkup(createElement(ChatView, { bot }));
     const row = markup.match(/data-chathead-row="true" class="([^"]*)"/)?.[1] ?? "";
@@ -396,6 +414,9 @@ describe("thread control placement", () => {
     expect(markup).not.toContain("<button");
     expect(renderToStaticMarkup(createElement(ErrorRow, { message: "Network timeout", onRetry: () => {} }))).toContain("<button");
   });
+  it("shows the provider safety guidance from the catalog, word for word", () => {
+    expect(en["chat.providerSafety.guidance"]).toBe(PROVIDER_SAFETY_GUIDANCE);
+  });
   it("draws Retry and the next action on the 28px control step", () => {
     const retry = renderToStaticMarkup(createElement(ErrorRow, { message: "Network timeout", onRetry: () => {} }));
     const action = renderToStaticMarkup(createElement(ErrorRow, { message: "Network timeout", action: { label: "Open", onClick: () => {} } }));
@@ -418,6 +439,43 @@ describe("thread control placement", () => {
     expect(markup).toContain(`href="${CODEX_USAGE_URL}"`);
     expect(markup).toContain("Manage usage");
     expect(markup).not.toContain("<button");
+  });
+  it("turns an expired usage-limit error into history without hiding a new refusal", () => {
+    const codex = { instanceId: "codex", driverKind: "codex", displayName: "Codex",
+      snapshot: { state: "available", authenticated: true } } as unknown as InstanceInfo;
+    const reset = Date.now() - 60_000;
+    const limit = failedTurnTool(CODEX_USAGE_LIMIT_REACHED, { limitResetsAt: reset });
+    const historical = renderToStaticMarkup(createElement(FailedTurnRow, {
+      tool: limit, engine: codex, messageAt: reset - 10_000,
+    }));
+    expect(historical).toContain("Past usage-limit notice");
+    expect(historical).toContain(CODEX_USAGE_LIMIT_REACHED.replaceAll("'", "&#x27;"));
+    expect(historical).not.toContain("Manage usage");
+
+    const recent = renderToStaticMarkup(createElement(FailedTurnRow, {
+      tool: limit, engine: codex, messageAt: reset + 1_000,
+    }));
+    expect(recent).not.toContain("Past usage-limit notice");
+    expect(recent).toContain("Manage usage");
+
+    const pending = renderToStaticMarkup(createElement(FailedTurnRow, {
+      tool: failedTurnTool(CODEX_USAGE_LIMIT_REACHED, { limitResetsAt: Date.now() + 60_000 }),
+      engine: codex, messageAt: Date.now() - 1_000,
+    }));
+    expect(pending).not.toContain("Past usage-limit notice");
+    expect(pending).toContain("Manage usage");
+
+    const unknown = renderToStaticMarkup(createElement(FailedTurnRow, {
+      tool: failedTurnTool(CODEX_USAGE_LIMIT_REACHED), engine: codex, messageAt: reset - 10_000,
+    }));
+    expect(unknown).toContain("Manage usage");
+
+    const auth = renderToStaticMarkup(createElement(FailedTurnRow, {
+      tool: failedTurnTool("Not logged in - please sign in", { setup: true, limitResetsAt: reset }),
+      engine: codex, messageAt: reset - 10_000,
+    }));
+    expect(auth).not.toContain("Past usage-limit notice");
+    expect(auth).toContain("Not logged in");
   });
   it("opens a signed-out engine's failed turn with one sentence and the sign-in, the CLI's words under Details", () => {
     const claude = {

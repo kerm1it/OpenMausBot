@@ -21,7 +21,7 @@ import { useTeamPeople } from "@/state/team-people";
 import { TeamDialog } from "./TeamDialog";
 import { TeamMemoryDialog } from "./TeamMemoryDialog";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { t } from "@/lib/i18n";
+import { intlLocale, t } from "@/lib/i18n";
 import { CanvasComputers } from "./CanvasComputers";
 import { useMapComputers, useShowComputers } from "@/lib/map-computers";
 import { MapComposer } from "./MapComposer";
@@ -75,7 +75,7 @@ interface SectionContextResponse {
   maxBytes: number;
 }
 
-function SectionContextDialog({ section, label, onClose }: { section: string; label: string; onClose: () => void }) {
+export function SectionContextDialog({ section, label, onClose }: { section: string; label: string; onClose: () => void }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const onCloseRef = useRef(onClose);
@@ -182,8 +182,10 @@ function SectionContextDialog({ section, label, onClose }: { section: string; la
   };
 
   return createPortal(
+    // No backdrop blur: blurring the whole team map behind the dialog on every repaint is costly without GPU
+    // compositing (common on Linux).
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[2px] sm:p-6"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 sm:p-6"
       onMouseDown={(event) => event.target === event.currentTarget && requestClose()}
     >
       <div
@@ -233,10 +235,10 @@ function SectionContextDialog({ section, label, onClose }: { section: string; la
               />
               <div className="mt-2 flex items-start justify-between gap-4 text-[12px] text-ink-secondary">
                 <span>
-                  {t("team.instructionsFactHint")} {updatedAt ? ` ${t("team.instructionsLastSaved", { time: new Date(updatedAt).toLocaleString() })}` : ""}
+                  {t("team.instructionsFactHint")} {updatedAt ? ` ${t("team.instructionsLastSaved", { time: new Date(updatedAt).toLocaleString(intlLocale()) })}` : ""}
                 </span>
                 <span className={cn("shrink-0 tabular-nums", bytes > maxBytes && "text-danger")}>
-                  {bytes.toLocaleString()} / {maxBytes.toLocaleString()} bytes
+                  {t("team.instructionsBytes", { bytes: bytes.toLocaleString(intlLocale()), limit: maxBytes.toLocaleString(intlLocale()) })}
                 </span>
               </div>
             </>

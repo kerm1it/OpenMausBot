@@ -42,7 +42,7 @@ export const CREDENTIAL_TARGETS = {
   },
   openaiImageApiKey: {
     label: "OpenAI API key",
-    description: "Used only to generate custom bot avatar images.",
+    description: "Used to generate images in chats and bot avatars when OpenAI is the image provider.",
     placeholder: "sk-…",
     helpUrl: "https://platform.openai.com/api-keys",
   },
@@ -56,7 +56,7 @@ export const CREDENTIAL_TARGETS = {
     label: "Composio API key",
     description: "Connects apps such as Gmail, Slack and GitHub through your own Composio project.",
     placeholder: "ak_…",
-    helpUrl: "https://dashboard.composio.dev",
+    helpUrl: "https://dashboard.composio.dev/~/project/settings/api-keys",
   },
   openaiApiKey: {
     label: "OpenAI API key",

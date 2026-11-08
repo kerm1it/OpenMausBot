@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import { RESERVED_MCP_NAMES, slugMcpName } from "../shared/mcp-name.ts";
 import type { McpServerSpec, RemoteMcpSpec, StdioMcpSpec } from "./contracts.ts";
+import { MCP_RESTART_ENV } from "./mcp-app-catalog.ts";
 
 export { importedMcpServerName } from "../shared/mcp-name.ts";
 
@@ -103,6 +104,22 @@ export function isReservedMcpEnvEntry(name: string, value: string): boolean {
   return isHarnessOwnedMcpEnvName(name);
 }
 
+/** Custom command servers as Codex mounts them, with new MCP children every turn: the host's restart count (MCP_RESTART_ENV)
+ * only tells an engine that keeps servers across turns to start a new one, so it is dropped here instead of failing every
+ * turn as an OMB_ name; any other reserved variable is refused. */
+export function perTurnCustomMcp<T extends { integrations?: { custom?: Record<string, McpServerSpec> } }>(turn: T): T {
+  if (!turn.integrations?.custom) return turn;
+  const custom = { ...turn.integrations.custom };
+  for (const [name, server] of Object.entries(custom)) {
+    if ("url" in server) continue;
+    const { [MCP_RESTART_ENV]: _restarts, ...env } = server.env;
+    const reserved = Object.entries(env).find(([key, value]) => isReservedMcpEnvEntry(key, value));
+    if (reserved) throw new Error(`Custom MCP server “${name}” cannot set reserved environment variable “${reserved[0]}”`);
+    custom[name] = { ...server, env };
+  }
+  return { ...turn, integrations: { ...turn.integrations, custom } };
+}
+
 function environmentEntryError(name: string, value: string): string | null {
   if (!ENV_NAME.test(name)) return `Environment variable “${name}” is not valid.`;
   if (isReservedMcpEnvEntry(name, value)) {
@@ -140,6 +157,8 @@ const runsOnSchema = z.object({
 }).strict();
 
 const stdioEntrySchema = z.object({
+  /** Optional, as other MCP clients write it; a command always runs over stdio, so it is not stored. */
+  type: z.literal("stdio").optional(),
   command: z.string().trim().min(1).max(1_024),
   args: z.array(z.string().max(4_096)).max(MAX_ARGS).optional(),
   env: z.record(z.string(), z.string().max(16_384)).optional(),

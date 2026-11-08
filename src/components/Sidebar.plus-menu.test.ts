@@ -67,10 +67,10 @@ function plusMenu(admin: boolean | null) {
 
 describe("the sidebar's + menu", () => {
   it("offers a new bot and templates to someone who can make one, and while that isn't known yet", () => {
-    for (const admin of [true, null]) expect(plusMenu(admin)).toEqual(["New bot", "New group chat", "Templates"]);
+    for (const admin of [true, null]) expect(plusMenu(admin)).toEqual(["New bot", "New group chat", "Templates", "Import bot or plugin"]);
   });
 
   it("offers neither to a User, who keeps New group chat", () => {
-    expect(plusMenu(false)).toEqual(["New group chat"]);
+    expect(plusMenu(false)).toEqual(["New group chat", "Import bot or plugin"]);
   });
 });

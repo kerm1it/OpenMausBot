@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FILE_MAX_BYTES } from "@/lib/composer-attachments";
+import { PREVIEW_MAX_BYTES } from "@/lib/composer-attachments";
 import { AttachmentGallery, collectMessageFiles, isAudioAttachment, isVideoAttachment, loadMessageAudio, loadMessageVideo, MessageAttachmentGallery, splitMessageAttachments } from "./AttachmentGallery";
 
 const message = { threadId: "thread/one", messageId: "message two" };
@@ -23,11 +23,22 @@ describe("bot-attached files", () => {
         { path: "/store/bbbb.mp3", name: "song.mp3", private: true },
         { path: "/store/cccc.pptx", name: "deck.pptx", private: true },
       ],
+      originals: {},
     });
-    expect(splitMessageAttachments(undefined)).toEqual({ images: [], files: [] });
+    expect(splitMessageAttachments(undefined)).toEqual({ images: [], files: [], originals: {} });
     expect(splitMessageAttachments([
       ...attachments, { kind: "audio", path: "/store/voice.mp3" }, { kind: "future", path: "/store/unknown" },
     ])).toEqual(splitMessageAttachments(attachments));
+  });
+
+  it("remembers the original of each image and file a bot attached, never of a voice note", () => {
+    const split = splitMessageAttachments([
+      { ...attachments[0]!, source: "/Users/me/Pictures/chart.png" },
+      { ...attachments[2]!, source: "C:\\Users\\me\\deck.pptx" },
+      { kind: "audio", path: "/store/voice.mp3", source: "/Users/me/voice.mp3" },
+    ]);
+    expect(split.originals).toEqual({ "/store/aaaa.png": "/Users/me/Pictures/chart.png", "/store/cccc.pptx": "C:\\Users\\me\\deck.pptx" });
+    expect(split.images).toEqual(["/store/aaaa.png"]);
   });
 
   it("shows an attached clip as a play button and a deck as a save chip, without repeating a linked one", () => {
@@ -77,10 +88,10 @@ describe("audio attachments", () => {
 
   it("enforces the size limit with and without Content-Length", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("audio", {
-      headers: { "content-type": "audio/mpeg", "content-length": String(FILE_MAX_BYTES + 1) },
+      headers: { "content-type": "audio/mpeg", "content-length": String(PREVIEW_MAX_BYTES + 1) },
     })));
     await expect(loadMessageAudio(clip, message, new AbortController().signal)).rejects.toThrow("25 MB");
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array(FILE_MAX_BYTES + 1), { headers: { "content-type": "audio/mpeg" } })));
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array(PREVIEW_MAX_BYTES + 1), { headers: { "content-type": "audio/mpeg" } })));
     await expect(loadMessageAudio(clip, message, new AbortController().signal)).rejects.toThrow("25 MB");
   });
 });
@@ -200,11 +211,17 @@ describe("explicit local video preview", () => {
 
   it("enforces the video size limit with and without Content-Length", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("video", {
-      headers: { "content-type": "video/mp4", "content-length": String(FILE_MAX_BYTES + 1) },
+      headers: { "content-type": "video/mp4", "content-length": String(PREVIEW_MAX_BYTES + 1) },
     })));
-    await expect(loadMessageVideo(file, message, new AbortController().signal)).rejects.toThrow("25 MB");
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array(FILE_MAX_BYTES + 1), { headers: { "content-type": "video/mp4" } })));
-    await expect(loadMessageVideo(file, message, new AbortController().signal)).rejects.toThrow("25 MB");
+    await expect(loadMessageVideo(file, message, new AbortController().signal)).rejects.toMatchObject({
+      code: "file_too_large",
+      message: "This file is 25.1 MB, over the 25 MB preview limit. You can still download it below.",
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array(PREVIEW_MAX_BYTES + 1), { headers: { "content-type": "video/mp4" } })));
+    await expect(loadMessageVideo(file, message, new AbortController().signal)).rejects.toMatchObject({
+      code: "file_too_large",
+      message: "Preview is limited to 25 MB.",
+    });
   });
 
   it("cancels a partially read video when the preview is closed", async () => {

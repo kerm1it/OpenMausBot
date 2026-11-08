@@ -21,7 +21,9 @@ test("the private ask takes its answer only from the process it asked, and gives
   const gone = refused.request(proc, { kind: "login", id: "x" });
   refused.receive(proc, { type: "openmausbot:login-handoff-result", requestId: "request-0002", ok: false, error: "This login is no longer saved on this computer." });
   await assert.rejects(gone, /no longer saved on this computer/);
-  await assert.rejects(createLoginHandoffClient({ timeoutMs: 20 }).request(proc, { kind: "1password" }), /did not answer/);
+  const keepAlive = setTimeout(() => {}, 50);
+  try { await assert.rejects(createLoginHandoffClient({ timeoutMs: 20 }).request(proc, { kind: "1password" }), /did not answer/); }
+  finally { clearTimeout(keepAlive); }
   await assert.rejects(createLoginHandoffClient().request(null, { kind: "1password" }), /not running/);
 });
 

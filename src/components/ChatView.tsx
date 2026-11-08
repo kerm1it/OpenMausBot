@@ -37,7 +37,7 @@ import { CODEX_USAGE_URL, codexUsageLimitReached } from "../../shared/codex-usag
 import { ClaudeUpdatePrompt } from "./ClaudeUpdatePrompt";
 import { MacCuaRecoveryActions } from "./MacCuaRecoveryActions";
 import { macCuaPermissionMessage, missingMacCuaPermissions } from "@/lib/mac-cua-permissions";
-import { claudeUpdateTarget, failedTurnCause, signedOutEngine } from "@/lib/failed-turn";
+import { claudeUpdateTarget, failedTurnCause, failedTurnNotice, signedOutEngine } from "@/lib/failed-turn";
 import { plainErrorLine } from "@/lib/plain-error";
 import { openPlaceAction, placeRowViewFor, usePlaceSeat, worksOnSimpleLabel } from "@/lib/place-view";
 import type { PlaceRow } from "../../shared/place-view";
@@ -47,7 +47,7 @@ import { PartlyDoneRow } from "./PartlyDoneRow";
 import { isPureLeakedSystemHarnessMessage, stripLeakedSystemHarnessMessages } from "../../shared/system-message-guard.ts";
 import { ConversationalReply, QuickModelNote, isConversational, useReplySegments, useThreadOpenedAt } from "./ConversationalReply";
 import type { LocaleKey } from "@/locales";
-import { isProviderSafetyBlock, PROVIDER_SAFETY_GUIDANCE, PROVIDER_SAFETY_HELP_URL } from "../../shared/provider-safety";
+import { isProviderSafetyBlock, PROVIDER_SAFETY_HELP_URL } from "../../shared/provider-safety";
 import { isCancelledTranscriptRow, PERSON_STOPPED_TURN_NAME } from "../../shared/client-cancel";
 import { stopNoticeDue, useStoppedAt } from "@/lib/stop-turn";
 import { THIS_COMPUTER_NOT_READY } from "../../shared/your-computer";
@@ -73,14 +73,14 @@ import { useColorUserBubbles } from "@/lib/user-bubble-preference";
 import { userBubbleStyle } from "@/lib/user-bubble-tone";
 import { ToolActivity } from "./ToolActivity";
 import { DataResultChip } from "./DataResultChip"; import { PublishedPageCard } from "./PublishedPageCard";
-import { ThreadRefText } from "./ThreadRefs";
+import { ThreadRefText } from "./ThreadRefs"; import { WatchScreenButton } from "./WatchScreenButton";
 import { optionsCardRow } from "./OptionsCardRow";
 import { MessageBoundary } from "./MessageBoundary";
 import { RichMessageRow, UserLineNote, richRowKind } from "./RichMessageRow"; import { SetupOffer } from "./SetupOffer"; import { SavedStepsChip } from "./SavedStepsChip";
 import { Composer } from "./Composer";
 import { ChatErrorBanner, ChatNotice } from "./ChatErrorBanner";
 import { ThreadContextWarning } from "./ContextWarning";
-import { UsageAlert, useLimitResetContinue } from "./EngineUsage";
+import { UsageAlert, useLimitResetContinue, usePastLimitNotice } from "./EngineUsage";
 import { ChatFindBar } from "./ChatFindBar";
 import { ReplyQuote } from "./ReplyQuote";
 import { ConnectorCard } from "./ConnectorCard";
@@ -104,7 +104,7 @@ import { LiveCallBar } from "./LiveCallBar";
 import { LiveCallChip } from "./LiveCallPill";
 import { effectivePlace, toolPlace, type EffectivePlace } from "@/lib/place";
 import { cn } from "@/lib/cn";
-import { activeLocale, t } from "@/lib/i18n";
+import { activeLocale, intlLocale, t } from "@/lib/i18n";
 import { COMPACT_BUBBLE } from "@/lib/compact-chip";
 import { groupTranscript, isStatusActivity, turnDurations, workedLabel } from "@/lib/activity-runs";
 import { StatusActivityRow } from "@/components/StatusActivityRow";
@@ -122,7 +122,7 @@ import { useUnreadDivider } from "@/hooks/use-unread-divider";
 import { NewMessagesDivider } from "./NewMessagesDivider";
 import { unreadMessageIds } from "@/lib/unread-divider";
 import { appendComposerDraft, appendDraftAttachments, useReplyDraft } from "@/lib/drafts";
-import { localDay, transcriptLookups, type TranscriptLookups } from "@/lib/transcript-derivations"; import { DaySeparator } from "./DaySeparator";
+import { botLineText, localDay, transcriptLookups, type TranscriptLookups } from "@/lib/transcript-derivations"; import { DaySeparator } from "./DaySeparator";
 import { splitTranscriptCitations, type CitationAttachment } from "@/lib/citations";
 import { EmptyChat } from "./ChatEmptyState";
 import { PinnedBanner } from "./ChatPinnedBanner";
@@ -216,8 +216,8 @@ export function ErrorRow({
           <ClaudeUpdatePrompt instance={claudeUpdateInstance} onRetry={onRetry} />
         ) : isProviderSafetyBlock(message) ? (
           <p className="mt-2 text-[13px] leading-relaxed text-ink-secondary">
-            {PROVIDER_SAFETY_GUIDANCE}{" "}
-            <a href={PROVIDER_SAFETY_HELP_URL} target="_blank" rel="noreferrer" className="underline">About provider safety checks</a>
+            {t("chat.providerSafety.guidance")}{" "}
+            <a href={PROVIDER_SAFETY_HELP_URL} target="_blank" rel="noreferrer" className="underline">{t("chat.providerSafety.about")}</a>
           </p>
         ) : setupInstance &&
         !(setupInstance.snapshot.state === "available" && setupInstance.snapshot.authenticated !== false) ? (
@@ -255,7 +255,7 @@ function PlaceFailedRow({ place, botId, threadId, onRetry }: {
 }) {
   const { state, dispatch } = useStore();
   const { capabilities } = useDesktopCapabilities();
-  const seat = usePlaceSeat(state.config, capabilities.host.platform);
+  const seat = usePlaceSeat(state.config, capabilities);
   const bot = state.bots.find((candidate) => candidate.id === botId);
   const view = placeRowViewFor(place, seat, worksOnSimpleLabel(bot?.computer, capabilities.host.platform));
   const id = view.action?.id;
@@ -273,24 +273,20 @@ function TrialCreditFailedRow({ kind, onRetry }: { kind: TrialCreditRefusal; onR
   return <ErrorRow message={t(TRIAL_CREDIT_LINE[kind])} action={{ label: t("chat.error.connectOwnAi"), onClick: () => dispatch({ type: "toggleAppSettings", open: true, section: "engines" }) }} />;
 }
 
-export function FailedTurnRow({ tool, engine, onRetry, botId, threadId }: {
-  tool: NonNullable<Message["tool"]>;
-  engine: InstanceInfo | undefined;
-  onRetry?: () => void;
-  botId?: string;
-  threadId?: string;
-}) {
+export function FailedTurnRow({ tool, engine, onRetry, botId, threadId, messageAt }: { tool: NonNullable<Message["tool"]>; engine: InstanceInfo | undefined; onRetry?: () => void; botId?: string; threadId?: string; messageAt?: number }) {
   const resume = useLimitResetContinue(botId, threadId, tool.limitResetsAt);
+  const past = usePastLimitNotice(tool, messageAt);
   if (tool.place && botId) return <PlaceFailedRow place={tool.place} botId={botId} threadId={threadId} onRetry={onRetry} />;
   const credit = trialCreditKind(failedTurnCause(tool.name) ?? "");
   if (credit) return <TrialCreditFailedRow kind={credit} onRetry={onRetry} />;
-  const cause = failedTurnCause(tool.name) ?? tool.name;
-  if (tool.partial) return <PartlyDoneRow cause={cause} onRetry={onRetry} />;
+  const { cause, notice } = failedTurnNotice(tool);
+  if (tool.partial) return <PartlyDoneRow cause={notice ?? cause} onRetry={onRetry} />;
+  if (past) return past;
   const signedOut = signedOutEngine(tool, engine);
   return (
     <ErrorRow
-      message={cause}
-      headline={signedOut ? t("chat.error.signedOut", { name: signedOut.displayName }) : plainErrorLine(cause)}
+      message={notice ?? cause}
+      headline={signedOut ? t("chat.error.signedOut", { name: signedOut.displayName }) : notice ?? plainErrorLine(cause)}
       onRetry={onRetry}
       action={resume}
       setupInstance={tool.setup ? engine : undefined}
@@ -355,7 +351,7 @@ const Bubble = memo(function Bubble({
   const [viewRaw, setViewRaw] = useState(false);
   const speech = useSpeech();
   const speaking = speech.messageId === message.id && speech.status !== "idle";
-  const rawText = peer ? peer.body : (message.text ?? "");
+  const rawText = peer ? peer.body : botLineText(message);
   const text = user ? rawText : stripLeakedSystemHarnessMessages(rawText);
   const botMenu = useBotMessageMenu({
     text,
@@ -472,7 +468,7 @@ const Bubble = memo(function Bubble({
             simple && join && !split && !attachmentsOnly && !tabled && joinedCorners(user ? "end" : "start", join),
           )}
           style={user && !webhookView && !attachmentsOnly ? ownBubbleStyle : undefined}
-          title={workedFor === undefined ? new Date(message.at).toLocaleString() : `${workedLabel(workedFor)} · ${new Date(message.at).toLocaleString()}`}
+          title={workedFor === undefined ? new Date(message.at).toLocaleString(intlLocale()) : `${workedLabel(workedFor)} · ${new Date(message.at).toLocaleString(intlLocale())}`}
         >
           {replyTarget && (
             <div className="mb-2">
@@ -549,19 +545,19 @@ const Bubble = memo(function Bubble({
                   ))}
                 </div>
               )}
-              {!group && <AttachmentGallery images={generatedPaths} files={linkedFiles} message={{ threadId, messageId: message.id }} className={text ? undefined : "mb-0"} eager={eagerAttachments} />}
+              {!group && <AttachmentGallery images={generatedPaths} files={linkedFiles} originals={attached.originals} message={{ threadId, messageId: message.id }} className={text ? undefined : "mb-0"} eager={eagerAttachments} />}
               {split ? (
                 <ConversationalReply simple={simple} join={join} segments={reply.segments} firstNew={reply.firstNew} citation={{ messageId: message.id, botId, threadId }}
-                  renderSegment={(segment) => <ChatMarkdown text={segment} mentionPeers={mentionPeers} mentionPerson={mentionPerson} message={{ threadId, messageId: message.id }} delivered={group?.delivered} />} />
+                  renderSegment={(segment) => <ChatMarkdown text={segment} mentionPeers={mentionPeers} mentionPerson={mentionPerson} message={{ threadId, messageId: message.id }} delivered={group?.delivered} originals={group?.originals} />} />
               ) : tabled && blocks ? (
                 <ReplyBlocks blocks={blocks} join={join} tray={botActions} citation={{ messageId: message.id, ownerType: "bot", ownerId: botId, threadId }}
-                  render={(block) => <ChatMarkdown text={block} mentionPeers={mentionPeers} mentionPerson={mentionPerson} message={{ threadId, messageId: message.id }} delivered={group?.delivered} />} />
+                  render={(block) => <ChatMarkdown text={block} mentionPeers={mentionPeers} mentionPerson={mentionPerson} message={{ threadId, messageId: message.id }} delivered={group?.delivered} originals={group?.originals} />} />
               ) : viewRaw && text ? (
                 <div data-citation-source={message.id} data-citation-owner-type="bot" data-citation-owner={botId} data-citation-thread={threadId}><RawMarkdownView text={text} /></div>
               ) : text ? (
-                <div data-citation-source={message.id} data-citation-owner-type="bot" data-citation-owner={botId} data-citation-thread={threadId}><ChatMarkdown text={text} mentionPeers={mentionPeers} mentionPerson={mentionPerson} message={{ threadId, messageId: message.id }} delivered={group?.delivered} /></div>
+                <div data-citation-source={message.id} data-citation-owner-type="bot" data-citation-owner={botId} data-citation-thread={threadId}><ChatMarkdown text={text} mentionPeers={mentionPeers} mentionPerson={mentionPerson} message={{ threadId, messageId: message.id }} delivered={group?.delivered} originals={group?.originals} /></div>
               ) : null}
-              {group && <AttachmentGallery images={group.images} files={group.files} message={{ threadId, messageId: message.id }} eager={eagerAttachments} beneath />}
+              {group && <AttachmentGallery images={group.images} files={group.files} originals={group.originals} message={{ threadId, messageId: message.id }} eager={eagerAttachments} beneath />}
             </MessageBoundary>
           )}
         </div>
@@ -733,7 +729,7 @@ const MessagesList = memo(function MessagesList({
           }
           switch (richRowKind(m)) {
             case "secret":
-              return m.secret ? <SecretRequestCard botId={botId} color={botColor} threadId={threadId} message={m} /> : null;
+              return m.secret ? <SecretRequestCard botId={botId} botName={botName} color={botColor} threadId={threadId} message={m} /> : null;
             case "signin":
               return m.signIn ? <SignInRequestCard botId={botId} botName={botName} color={botColor} threadId={threadId} message={m} /> : null;
             case "connector":
@@ -753,7 +749,7 @@ const MessagesList = memo(function MessagesList({
               if (m.tool && failedTurnCause(m.tool.name) !== null) {
                 return (
                   <FailedTurnRow
-                    tool={m.tool}
+                    tool={m.tool} messageAt={m.at}
                     engine={engine}
                     botId={botId}
                     threadId={threadId}
@@ -1081,7 +1077,7 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
             </button>
           )}
           {!phone && !simpleHead && <ChatHeadRole bot={bot} />}<span role="status" className="sr-only" data-chathead-status>{bot.busy ? t("sidebar.preview.working") : ""}</span>{!simpleHead && privateChat && <TeamPrivateHeader />}{!simpleHead && ownHelper && <TeamOwnHelperHeader />}{!simpleHead && sharedChat && team && <TeamSharedHeader team={team} onlyPeopleAdded={bot.onlyPeopleAdded} />}
-          {!simpleHead && !bot.busy && bot.waitingForTeammates && <span className="truncate text-[12px] text-ink-secondary" role="status">Teammates working</span>}
+          {!simpleHead && !bot.busy && bot.waitingForTeammates && <span className="truncate text-[12px] text-ink-secondary" role="status">{t("chat.teammatesWorking")}</span>}
           {(advanced || remoteClient) && awayFromMainThread(profile, showThreads) && (
             <button
               type="button"
@@ -1114,18 +1110,18 @@ export function ChatView({ bot: profile }: { bot: Bot }) {
           {phone && <UsageAlert engine={bot.modelSelection?.instanceId} />}
           {/* The model and the bot's computer stay in view in both modes; Simple mode moves only ⋯ into the bot panel. */}
           {!phone && <ModelPicker key={bot.threadId} bot={bot} threadId={bot.threadId} />}
-          <LiveCallChip currentBotId={bot.id} onOpen={(botId, threadId) => openThread(dispatch, { botId, threadId }, state, showThreads)} />
+          <LiveCallChip currentBotId={bot.id} onOpen={(botId, threadId) => openThread(dispatch, { botId, threadId }, state, showThreads)} />{!phoneMenu && <WatchScreenButton botId={bot.id} messages={messages} liveTools={liveTools} place={place} />}
           {!phoneMenu && <button
             data-tour="computer"
             onClick={(event) => { if (!state.computerOpen) rememberComputerPanelOpen({ botId: bot.id, opener: event.currentTarget, tabs: event.detail === 0 }); dispatch({ type: "toggleComputer" }); }}
             className={cn(
               "relative",
-              "flex size-8 items-center justify-center rounded-full transition-colors hover:bg-ink/[0.06]",
+              "flex size-8 items-center justify-center rounded-full", ELEVATED_FLOAT, ELEVATED_HOVER,
               state.computerOpen ? "text-accent" : "text-ink-secondary hover:text-ink",
             )}
             title={t("chat.computer")} aria-label={busy && place === "browser" ? `${t("chat.computer")}, ${t("place.live")}` : t("chat.computer")}
           >
-            <Monitor size={18} />{busy && place === "browser" && <span aria-hidden="true" className="absolute right-1 top-1 size-1.5 animate-pulse rounded-full bg-success" data-testid="computer-button-live" />}
+            <Monitor size={16} />{busy && place === "browser" && <span aria-hidden="true" className="absolute right-1 top-1 size-1.5 animate-pulse rounded-full bg-success" data-testid="computer-button-live" />}
           </button>}
           {phoneMenu ? <ChatMoreMenu bot={bot} phoneHeader /> : (advanced || remoteClient) && <ChatHeaderMenu key={`menu:${bot.threadId}`} bot={bot} />}
         </div>

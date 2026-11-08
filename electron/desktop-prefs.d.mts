@@ -26,6 +26,7 @@ export interface DesktopLanguageBridge {
   set(language: string): Promise<boolean>;
   /** A pick made on another page of this desktop. */
   onChange(listener: (language: string) => void): () => void;
+  shown?(language: string): void;
 }
 export interface DesktopPrefs {
   seen(): string[];

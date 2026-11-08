@@ -122,9 +122,18 @@ describe("recordMcpAppCall", () => {
       bot: { id: bot.id, name: bot.name, color: "blue" }, threadId: THREAD, input: { tool: "mcp_app" } })).toEqual({ ok: false, status: 400, error: "MCP apps are not available on this computer." });
   }, 30_000);
 
-  it("writes no row for a room, an unmounted server, one outside the bot's scope, or one whose apps are off (rule 17)", async () => {
+  it("shows a room member's app in the room as that bot's row, view-only for everyone", async () => {
+    const { record, row, apps } = setup();
+    expect(await record(REPORT, ROOM)).toEqual({ ok: true, messageId: "m1" });
+    expect(row("m1", ROOM)).toMatchObject({ role: "bot", kind: "app", from: { botId: "bot-scout", name: "Scout", color: "blue" }, app: { source: "mcp", title: "Show board" } });
+    const doc = apps.appDocument(ROOM, "m1")!;
+    expect(doc.srcdoc).toContain("<h1>Fake board</h1>");
+    expect(doc).toMatchObject({ room: true, toolResult: REPORT.result, can: { serverTools: false, serverResources: false, message: false, modelContext: false, openLinks: true } });
+    expect(doc).not.toHaveProperty("blocked");
+  }, 30_000);
+
+  it("writes no row for an unmounted server, one outside the bot's scope, or one whose apps are off (rule 17)", async () => {
     const base = setup();
-    expect(await base.record(REPORT, ROOM)).toMatchObject({ ok: false, status: 409 });
     expect(await base.record({ ...REPORT, server: "elsewhere" })).toMatchObject({ ok: false, status: 404 });
     expect(await base.record({ ...REPORT, definition: { ...REPORT.definition, _meta: {} } })).toMatchObject({ ok: false, status: 400 });
     expect(await base.record({ ...REPORT, result: { content: "x" } })).toMatchObject({ ok: false, status: 400 });
@@ -202,6 +211,33 @@ describe("rpc", () => {
     await record();
     expect(await rpc("m1", "tools/call", { name: "paint_board", arguments: { color: "blue" } })).toMatchObject({ status: 200, body: { content: [{ type: "text", text: "Painted blue" }] } });
     expect(await rpc("m1", "tools/call", { name: "wipe_board", arguments: {} })).toMatchObject({ status: 200 });
+  }, 30_000);
+
+  it("keeps a change the card made itself on its row, so a reopened conversation shows it done (#4532)", async () => {
+    const { record, rpc, row } = setup({ approval: "full" });
+    await record();
+    // looking and the app's own plumbing are not changes
+    await rpc("m1", "tools/call", { name: "show_board", arguments: { cards: 5 } });
+    await rpc("m1", "tools/call", { name: "save_board", arguments: { state: "s" } });
+    expect(row("m1").app.done).toBeUndefined();
+    expect(await rpc("m1", "tools/call", { name: "paint_board", arguments: { color: "blue" } })).toMatchObject({ status: 200 });
+    expect(row("m1").app.done).toEqual({ tool: "Paint board", text: "Painted blue", at: expect.any(Number) });
+    // the row keeps everything else it had
+    expect(row("m1").app).toMatchObject({ source: "mcp", mcp: { server: "board", tool: "show_board" } });
+  }, 30_000);
+
+  it("keeps no secret from the result in the note", async () => {
+    const { record, rpc, row } = setup({ approval: "full" });
+    await record();
+    await rpc("m1", "tools/call", { name: "paint_board", arguments: { color: "ghp_abcdefghijklmnopqrstuvwxyz0123456789" } });
+    expect(JSON.stringify(row("m1").app.done)).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz0123456789");
+  }, 30_000);
+
+  it("records nothing when the change is declined", async () => {
+    const { record, rpc, row } = setup();
+    await record();
+    expect(await rpc("m1", "tools/call", { name: "paint_board", arguments: { color: "red" } })).toMatchObject({ status: 403 });
+    expect(row("m1").app.done).toBeUndefined();
   }, 30_000);
 
   it("refuses a tool the server lacks, one its view may not call, one outside the selection, and bad arguments", async () => {

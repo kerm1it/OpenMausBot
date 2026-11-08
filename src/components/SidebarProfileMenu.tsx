@@ -42,7 +42,7 @@ import { useSidebarPhoneStatus } from "./SidebarPhoneButton";
 import { api, useStore, type Action } from "@/state/store";
 import { serverCheckPhase, serverUpdateRow, type ServerUpdateCheck, type ServerUpdatePhase } from "@/lib/server-update";
 import type { CloudAccountBridge, CloudAccountState } from "../../electron/cloud-account.mjs";
-import { useUpdaterState, type UpdaterState } from "@/lib/updater";
+import { updaterMessage, useUpdaterState, type UpdaterState } from "@/lib/updater";
 import { productName } from "../lib/brand";
 import { cloudColor } from "@/lib/cloud-look";
 import { cn } from "@/lib/cn";
@@ -112,7 +112,7 @@ export function updateLabel(phase: UpdatePhase, state: UpdaterState | null): str
       ).replace("  ", " ");
     case "installing":
       return (
-        state?.message ||
+        updaterMessage(state) ||
         (state?.installMode === "handoff"
           ? t("sidebar.update.openingTerminal")
           : t("sidebar.update.installing"))
@@ -122,7 +122,7 @@ export function updateLabel(phase: UpdatePhase, state: UpdaterState | null): str
     case "handed-off":
       return t("sidebar.update.handedOff");
     case "error":
-      return state?.message?.trim() || t("sidebar.update.failed");
+      return updaterMessage(state)?.trim() || t("sidebar.update.failed");
     case "up-to-date":
       return t("sidebar.update.upToDate");
     default:
@@ -525,8 +525,10 @@ export function profileMenuItems({
   const groups = [
     move,
     present(raised),
-    [...present(usageItem), ...phone, { ...support, submenu: raised ? help : [...help, ...present(update)] }, settings],
+    // Places you go first, then the app's own settings, then getting the phone app and help.
     simple.tools,
+    [...present(usageItem), settings],
+    [...phone, { ...support, submenu: raised ? help : [...help, ...present(update)] }],
     [...simple.places, ...present(accountItem)],
     accounts,
   ].filter((group) => group.length > 0);

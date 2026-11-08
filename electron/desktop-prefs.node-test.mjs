@@ -151,7 +151,7 @@ function preload(origin, { activation = false, saved = null, language = null } =
 test("the preload gives every page of the window the app language this computer keeps", async () => {
   for (const origin of [LOCAL, CLOUD, VPS]) {
     const page = preload(origin, { language: "de" });
-    assert.deepEqual(Object.keys(page.bridge.desktopLanguage), ["choice", "set", "onChange"], origin);
+    assert.deepEqual(Object.keys(page.bridge.desktopLanguage), ["choice", "set", "onChange", "shown"], origin);
     const asked = () => page.synced.filter(channel => channel.startsWith("desktop-"));
     assert.deepEqual(asked(), [], "nothing is asked until the language is");
     assert.equal(page.bridge.desktopLanguage.choice(), "de", origin);
@@ -180,7 +180,7 @@ test("production wiring: preferences accept this computer and the active saved s
   const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8").replace(/\r\n/g, "\n");
   assert.match(main, /for \(const port of DESKTOP_PORTS\)/, "main tries the ports this module names, in order");
   assert.deepEqual([...DESKTOP_PORTS], [8799, 18799, 28799]);
-  const start = main.indexOf("  desktopPrefs = createDesktopPrefs("), end = main.indexOf("\n  talk.start", start);
+  const start = main.indexOf("  desktopPrefs = nativeText.prefs;"), end = main.indexOf("\n  talk.start", start);
   assert.ok(start >= 0 && end > start, "main.mjs registers the desktop prefs");
   let options = null;
   const localFrame = { url: `${LOCAL}/` }, serverFrame = { url: `${VPS}/` };
@@ -191,7 +191,7 @@ test("production wiring: preferences accept this computer and the active saved s
   const windows = [window("team"), window("home"), window("closed")];
   let switched = async id => { calls.push(["switch", id]); }, loads = true, broadcasts = 0;
   const context = vm.createContext({
-    registerDesktopPrefs: value => { options = value; }, createDesktopPrefs: store => ({ store }), jsonFile: file => ({ read: () => file, write: () => {} }), ipcMain: {}, updatesConsent: null, cloudAccount: "the client",
+    registerDesktopPrefs: value => { options = value; }, nativeText: { prefs: { store: { read: () => "/user-data/desktop-prefs.json" } }, set: () => true, follow: () => true }, ipcMain: {},
     path: { join: (...parts) => parts.join("/") }, app: { getPath: () => "/user-data" }, desktopDataDir: () => "/home/.openmausbot",
     navigateMainWindow: async url => { calls.push(["navigate", url]); return loads; },
     senderIsLocal: localOrigin.isLocalSender, workspaceSenderAllowed: environments.workspaceSenderAllowed, visibleWorkspaceState: state => state,
@@ -200,7 +200,7 @@ test("production wiring: preferences accept this computer and the active saved s
     rendererOrigin: () => LOCAL, cloudAccountRestored: async () => calls.push("restored"), cloudOffersReady: async () => { calls.push("offers"); return true; },
     cloudPageAsking: event => event.verifiedCloud ? "cloud" : null,
     serverReady: true, LOCAL_ID: "local", switchEnvironment: id => switched(id),
-    process: { platform: "win32" }, windowFrameMade: false, broadcastDesktopCapabilities: async () => { broadcasts++; },
+    process: { platform: "win32" }, windowFrameMade: false, broadcastDesktopCapabilities: async () => { broadcasts++; }, applyNativeLanguage: () => {}, talk: { relabel: () => {} },
     // main's own: a failed switch shows its dialog and resolves.
     workspaceMenuAction: async action => { try { await action(); } catch { calls.push("dialog"); } },
   });
@@ -218,7 +218,8 @@ test("production wiring: preferences accept this computer and the active saved s
   assert.equal(options.page({ sender: { mainFrame: evil }, senderFrame: evil }), null, "a page that is not the active server");
   options.languageChanged("en", windows[0].webContents);
   assert.deepEqual(sent, [["home", "desktop-language:changed", "en"], ["rail", "desktop-language:changed", "en"]], "every other open window hears the pick, and the window's rail");
-  const navigate = main.slice(main.indexOf("function navigateMainWindow(url) {"), main.indexOf("\n}\n", main.indexOf("function navigateMainWindow(url) {")) + 3);
+  const navigateStart = main.indexOf("function navigateMainWindow(url) {");
+  const navigate = main.slice(navigateStart, main.indexOf("\n}\n", navigateStart) + 3);
   const load = vm.runInNewContext(`${navigate}; navigateMainWindow`, { mainWindow: { isDestroyed: () => false, loadURL: async url => { if (url.endsWith("fail")) throw new Error("ERR_CONNECTION_REFUSED"); } } });
   assert.equal(await load(`${LOCAL}/ok`), true); assert.equal(await load(`${LOCAL}/fail`), false, "a failed load answers false, never throws");
   assert.equal(await vm.runInNewContext(`${navigate}; navigateMainWindow`, { mainWindow: null })(`${LOCAL}/`), false, "no window");

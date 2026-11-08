@@ -31,7 +31,7 @@ vi.mock("@/lib/interface-mode", () => ({
   useAdvancedMode: () => fixture.advancedMode,
   setAdvancedMode: vi.fn(),
 }));
-
+vi.mock("@/lib/analytics", () => ({ analyticsEnabled: () => false, setAnalyticsEnabled: vi.fn() }));
 vi.mock("@/lib/use-owner-or-admin", () => ({ useOwnerOrAdmin: () => fixture.ownerOrAdmin }));
 vi.mock("@/lib/chrome-rail", () => ({ useChromeRail: () => fixture.rail, setChromeRailHidden: (hidden: boolean) => fixture.railHidden.push(hidden) }));
 vi.mock("./SettingsPrimitives", async (importOriginal) => {
@@ -48,13 +48,12 @@ vi.mock("./SettingsPrimitives", async (importOriginal) => {
 const { marker } = vi.hoisted(() => ({
   marker: (name: string) => () => `MARKER:${name};`,
 }));
-vi.mock("./NativePluginsSettings", () => ({ NativePluginsSettings: marker("plugins") }));
 vi.mock("./EnginesSettings", () => ({ EnginesSettings: marker("engines") }));
 vi.mock("./DecisionModelSettings", () => ({ DecisionModelSettings: marker("decisionModel") }));
 vi.mock("./keys/KeysPage", () => ({ KeysPage: marker("apiKey") }));
 vi.mock("./RemoteComputerSection", () => ({ RemoteComputerSection: marker("companion") }));
 vi.mock("./CustomDomainSettings", () => ({ CustomDomainSettings: () => null }));
-vi.mock("./CompanionSection", () => ({ CompanionSection: () => null }));
+vi.mock("./PhoneDevicesSection", () => ({ PhoneDevicesSection: () => null }));
 vi.mock("./ServerPairingCard", () => ({ ServerPairingCard: () => null }));
 vi.mock("./ConnectedWorkspacesSettings", () => ({ ConnectedWorkspacesSettings: marker("desktopWorkspaces") }));
 vi.mock("./LocalComputerSection", () => ({ LocalComputerSection: marker("computer") }));
@@ -80,7 +79,7 @@ vi.mock("@/lib/updater", async (importOriginal) => ({
   useUpdaterState: () => fixture.updater,
 }));
 
-const desktop = { ogb: { environments: {}, organization: {}, cloudAccount: {} } };
+const desktop = { ogb: { environments: {}, organization: {}, cloudAccount: {}, companion: {} } };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -160,19 +159,20 @@ describe("Settings in Simple mode", () => {
     const placed = SIMPLE_PAGES.flatMap((page) => page.sections);
     expect(new Set(placed).size).toBe(placed.length);
     const hidden = SECTIONS.map((entry) => entry.id).filter((id) => !placed.includes(id));
-    expect(hidden).toEqual(["decisionModel", "plugins", "skills", "backups", "workspaces", "experimental"]);
-    for (const id of hidden.filter(id => id !== "plugins")) expect(SIMPLE_HIDDEN_SECTIONS).toContain(id);
+    expect(hidden).toEqual(["decisionModel", "imageGeneration", "plugins", "skills", "backups", "workspaces", "experimental"]);
+    for (const id of hidden) expect(SIMPLE_HIDDEN_SECTIONS).toContain(id);
   });
 
-  it("opens General on Account, then Appearance, Notifications, System and Import, with Advanced mode last as a plain row", () => {
+  it("opens General on Account, then Appearance, Language and typing, Notifications, System and Import, with Advanced mode last as a plain row", () => {
     const html = render();
     expect(currentPage(html)).toBe("general");
-    expect(groupLabels(html)).toEqual(["Account", "Appearance", "Notifications", "System", "Import"]);
+    expect(groupLabels(html)).toEqual(["Account", "Appearance", "Language and typing", "Notifications", "System", "Import"]);
     expect(blocks(html).at(-1)).toBe("advanced-mode");
     expect([...html.matchAll(/<button[^>]*role="switch"[^>]*>/g)].at(-1)?.[0]).toContain('aria-label="Advanced mode"');
     expect(html).toContain("Show every control, including tools for builders. Nothing is deleted either way.");
     expect(html).not.toContain("border-accent-border/40");
-    expect(html).toContain("Add your name");
+    expect(html).toContain(">Your name</div>");
+    expect(html).toContain(">Not set yet</div>");
     expect(html).toMatch(/aria-expanded="false" aria-controls="[^"]+"[^>]*>Add<\/button>/);
   });
 
@@ -180,7 +180,7 @@ describe("Settings in Simple mode", () => {
     fixture.rail = { available: true, hidden: false };
     const html = render();
     const appearance = html.slice(html.indexOf('data-settings-block="appearance"'), html.indexOf(">Notifications<"));
-    const order = ['role="radiogroup" aria-label="Theme"', ">Sidebar picture<", 'aria-label="Show your computers"', 'aria-label="Color my messages with the bot&#x27;s color"', ">More looks<"]
+    const order = ['role="radiogroup" aria-label="Light or dark"', ">Browse themes<", ">Sidebar picture<", 'aria-label="Show your computers"', 'aria-label="Color my messages with the bot&#x27;s color"']
       .map((needle) => appearance.indexOf(needle));
     expect(order.every((at) => at > -1), String(order)).toBe(true);
     expect(order).toEqual([...order].sort((a, b) => a - b));
@@ -207,10 +207,10 @@ describe("Settings in Simple mode", () => {
   it("keeps the everyday rows and leaves the fourteen builder controls to Advanced, where search still points", () => {
     const general = open("general");
     for (const shown of ['aria-label="Color my messages with the bot&#x27;s color"', 'aria-label="Send messages with"',
-      'aria-label="Notification sounds"', 'aria-label="Show the notification feed"', 'aria-label="App language"', 'role="radiogroup" aria-label="Theme"']) {
+      'aria-label="Notification sounds"', 'aria-label="Show the notification feed"', 'aria-label="App language"', 'role="radiogroup" aria-label="Light or dark"']) {
       expect(placement(general, shown), shown).toBe("shown");
     }
-    expect(placement(open("updates"), "MARKER:updatesConsent;")).toBe("missing");
+    expect(open("updates")).not.toContain("MARKER:updatesConsent;");
     const everyPage = ["general", "engines", "companion", "usage", "updates"].map((section) => open(section as AppSettingsSection)).join("");
     for (const gone of ["Effort for new bots", "Defaults for new bots", "Group turns", "MCP calls", "Parallel threads", "Automatic recovery", "Event log cleanup",
       "Interface font", "Chat width", "Pinned bots as circles", "Universal pins", "Tool calls", "This run", "Keep prompt cache warm"]) {
@@ -226,6 +226,7 @@ describe("Settings in Simple mode", () => {
     const html = open("updates");
     expect(html).toMatch(/>MausBot [^<]+<\/div>/);
     for (const shown of ["Check for updates", "Replay welcome tour", "Diagnostics"]) expect(placement(html, shown), shown).toBe("shown");
+    expect(html).not.toContain("MARKER:updatesConsent;");
   });
 
   it("checks the server's version from a browser", () => {
@@ -257,23 +258,22 @@ describe("Settings in Simple mode", () => {
     expect(html).not.toContain("API keys and connections");
   });
 
-  it("orders Computer as your bots' computers, your devices, the browser, logins, then Connect from elsewhere", () => {
+  it("orders Computer as your bots' computers, Phone & devices, the browser, logins, then Connect from elsewhere", () => {
     fixture.section = "companion";
     const html = render();
     expect(currentPage(html)).toBe("computer");
-    expect(blocks(html)).toEqual(["computer", "companion", "browser", "logins", "elsewhere", "remote", "desktopWorkspaces"]);
-    expect(groupLabels(html)).toEqual(["Your bots’ computers", "Your devices", "Built-in browser"].map((label) => label.replace("’", "&#x27;")));
+    expect(blocks(html)).toEqual(["computer", "companion", "browser", "logins", "elsewhere", "desktopWorkspaces", "remote"]);
+    expect(groupLabels(html)).toEqual(["Your bots’ computers", "Phone &amp; devices", "Built-in browser"].map((label) => label.replace("’", "&#x27;")));
     expect(html).toContain('aria-label="Enable the built-in browser"');
   });
 
-  it("keeps usage and provider limits without Cloud plan controls", () => {
+  it("shows usage without an official Cloud plan card", () => {
     fixture.section = "usage";
     const html = render();
     expect(currentPage(html)).toBe("billing");
     expect(blocks(html)).toEqual(["usage"]);
     expect(placement(html, "MARKER:usage;")).toBe("folded");
     expect(html).not.toContain("MARKER:cloudAccount;");
-    expect(groupLabels(html)).not.toContain("Plan");
   });
 
   it("shows a hosted workspace's admins People in Account and Activity as its own group", () => {
@@ -294,12 +294,12 @@ describe("Settings in Simple mode", () => {
     const html = render();
     expect(pages(html)).toEqual(["general", "computer"]);
     expect(currentPage(html)).toBe("computer");
-    expect(blocks(html)).toEqual(["companion", "elsewhere", "remote", "desktopWorkspaces"]);
+    expect(blocks(html)).toEqual(["companion", "elsewhere", "desktopWorkspaces", "remote"]);
     expect(html).not.toContain('aria-label="Enable the built-in browser"');
     fixture.section = "appearance";
     const general = render();
     expect(currentPage(general)).toBe("general");
-    expect(general).not.toContain("Add your name");
+    expect(general).not.toContain(">Your name</div>");
     expect(general).toContain('aria-label="App language"');
     expect(general).toContain('aria-label="Advanced mode"');
   });
@@ -366,6 +366,7 @@ describe("Settings in Advanced mode", () => {
     for (const kept of ["Group turns", 'aria-label="Effort for new bots"', "Diagnostics"]) {
       expect(placement(html, kept), kept).toBe("shown");
     }
+    expect(html).not.toContain('aria-label="Send usage analytics"');
   });
 
   it("treats a link to Updates as General", () => {

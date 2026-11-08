@@ -6,6 +6,7 @@ import { delimiter, dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { removeTempDir } from "../../testing/cleanup.ts";
+import { runtimeNoticeTool } from "../../chat-notices.ts";
 import { recordEvents, type EventRecorder } from "../../testing/events.ts";
 import {
   canRunOpenCode,
@@ -16,6 +17,7 @@ import {
   describeOpenCodeAccountError,
   discoverOpenCodeModels,
   openCodeFreeFallback,
+  openCodeLimitFacts,
   openCodeOwnedDirectories,
   OpenCodeDriver,
   openCodeProviderKeysAllowed,
@@ -311,6 +313,8 @@ describe("OpenCode catalog", () => {
     ["Internal error: Insufficient account funds.", "insufficient_funds"],
     ["Internal error: An active OpenCode Go subscription is required", "inactive_subscription"],
     ["Internal error: Monthly usage limit reached for this key", "quota_or_region_restriction"],
+    ["Internal error: FreeUsageLimitError: free models are limited today", "quota_or_region_restriction"],
+    ["Internal error: GoUsageLimitError: the Go allowance is used up", "quota_or_region_restriction"],
   ] as const)("classifies the real APIError %s", (message, expected) => {
     expect(classifyOpenCodeError(apiError(message))).toBe(expected);
   });
@@ -321,6 +325,33 @@ describe("OpenCode catalog", () => {
     "Internal error: 429 Too Many Requests: rate limit has been exceeded, retry in 20s",
   ])("leaves a transient rate limit unclassified: %s", (message) => {
     expect(classifyOpenCodeError(apiError(message))).toBeUndefined();
+  });
+
+  // A Go subscriber can still run out of Zen's free models: the paid Go and Zen models on the same login keep working,
+  // so that refusal holds only the free model, never the whole OpenCode account.
+  it.each([
+    ['AI_APICallError: Free usage limit reached. Free models work in OpenCode (https://opencode.ai); subscribe to OpenCode Go to keep going: https://opencode.ai/go', "model"],
+    ["Internal error: FreeUsageLimitError: free models are limited today", "model"],
+    ['OpenCode reached a usage limit (“Free usage limit reached. Free models work in OpenCode”) and is waiting it out without replying, so this turn was stopped.', "model"],
+    ["Internal error: Monthly usage limit reached for this key", "engine"],
+    ["Internal error: GoUsageLimitError: the Go allowance is used up", "engine"],
+    ["GoUsageLimitError: usage limit reached", "engine"],
+  ] as const)("reads how far the usage limit reaches: %s", (message, expected) => {
+    expect(openCodeLimitFacts(message).limit).toBe(expected);
+  });
+
+  it("holds a provider's free models together, never a paid Go model", () => {
+    // The catalog reports Zen's free models at cost 0; a Go model is paid.
+    parseOpenCodeModelsOutput([
+      "opencode/big-pickle", JSON.stringify({ cost: { input: 0, output: 0 } }),
+      "opencode-go/deepseek-v4.1-flash", JSON.stringify({ cost: { input: 1, output: 2 } }),
+    ].join("\n"));
+    const said = 'AI_APICallError: Free usage limit reached. Free models work in OpenCode (https://opencode.ai); subscribe to OpenCode Go to keep going: https://opencode.ai/go';
+    const facts = openCodeLimitFacts(said, "opencode/deepseek-v4.1-flash-free");
+    expect(facts.limit).toBe("model");
+    expect(facts.limitModels).toEqual(expect.arrayContaining(["opencode/deepseek-v4.1-flash-free", "opencode/big-pickle"]));
+    expect(facts.limitModels).not.toContain("opencode-go/deepseek-v4.1-flash");
+    expect(openCodeLimitFacts(said), "a refusal that names no model holds just the model scope").toEqual({ limit: "model" });
   });
 
   it("classifies OpenCode 2's authentication refusal and leaves real internal errors alone", () => {
@@ -833,6 +864,28 @@ describe("OpenCode turns without a sign-in gate", () => {
     }
   });
 
+  // Recorded from opencode 1.18.27 with a `-free` model on an account that still has Go allowance: the refusal is Zen's
+  // free-tier limit, so it holds that model alone and the account stays usable on a Go model.
+  it("holds only the free model a Go account's free allowance limited, not the account", async () => {
+    vi.spyOn(quietStatus, "sampleProcessTree").mockResolvedValue({ cpuMs: 0, connections: 0 });
+    vi.stubEnv("OMB_ACP_QUIET_NOTICE_MS", "300");
+    vi.stubEnv("OMB_ACP_QUIET_TICK_MS", "50");
+    vi.stubEnv("OMB_ACP_LIMIT_QUIET_MS", "400");
+    const row = `timestamp=2026-11-07T10:13:43.366Z level=ERROR run=fixture_run message="stream error" providerID=opencode modelID=deepseek-v4.1-flash-free session.id={session} small=false agent=build mode=primary error.error="AI_APICallError: Free usage limit reached. Free models work in OpenCode (https://opencode.ai); subscribe to OpenCode Go to keep going: https://opencode.ai/go"`;
+    const f = await open("opencode-go-free-limit", () => ({
+      FAKE_ACP_MODE: "quiet-then-answer", FAKE_ACP_QUIET_MS: "30000", FAKE_ACP_MODELS: "opencode/deepseek-v4.1-flash-free",
+      FAKE_ACP_OPENCODE_LOG: JSON.stringify([row]),
+    }));
+    try {
+      const { done, events } = await f.run("t-go-free-limit", "opencode/deepseek-v4.1-flash-free");
+      expect(done).toMatchObject({ ok: false, stopReason: "quota" });
+      expect(events.find((event) => event.type === "runtime.error")).toMatchObject({ limit: "model", message: expect.stringMatching(/usage limit/i) });
+    } finally {
+      vi.unstubAllEnvs();
+      vi.restoreAllMocks();
+    }
+  });
+
   it("marks OpenCode's own usage-limit refusal as the account's limit, so another AI can carry on", async () => {
     const f = await open("opencode-gave-up", (scratch) => ({ FAKE_ACP_MODELS: "opencode/big-pickle", FAKE_ACP_RPC_FAILURE_FILE: join(scratch, "failure.json") }));
     writeFileSync(join(f.scratch, "failure.json"), JSON.stringify({
@@ -1201,7 +1254,9 @@ describe("OpenCode session variants", () => {
     const f = await fixture({ [model]: variantConfig(["low", "high"]) });
     expect((await f.run({ variant: "high" })).done).toMatchObject({ ok: true });
     const before = f.calls().length;
-    const { done, events } = await f.run({ threadId: "resumed-thread", resumeCursor: "native-resumed", variant: "high" });
+    const folder = join(dirname(f.dump), "resumed-thread");
+    mkdirSync(folder);
+    const { done, events } = await f.run({ threadId: "resumed-thread", cwd: folder, resumeCursor: "native-resumed", variant: "high" });
     expect(done).toMatchObject({ ok: true, threadId: "resumed-thread" });
     expect(f.calls().slice(before).map((entry) => entry.params)).toEqual([{ sessionId: "native-resumed", configId: "effort", value: "high" }]);
     expect(events.filter((event) => event.type === "session.model-variants").every((event) => event.threadId === "resumed-thread")).toBe(true);
@@ -1289,8 +1344,9 @@ describe("OpenCode session variants", () => {
   it("is stored as a status row the person always sees", () => {
     const source = readFileSync(new URL("../../index.ts", import.meta.url), "utf8");
     const handler = source.slice(source.indexOf('case "runtime.notice":'), source.indexOf('case "runtime.error":'));
-    // Room for a memory wait in full, Starter line included, in the longer languages.
-    expect(handler).toContain("name: `notice: ${event.message.slice(0, 400)}`");
+    expect(handler).toContain('role: "bot", kind: "activity", tool: { ...runtimeNoticeTool(event), name: `notice: ${event.message.slice(0, 400)}` }');
+    const message = "Retired model ".repeat(30);
+    expect(runtimeNoticeTool({ message })).toEqual({ name: `notice: ${message.slice(0, 240)}`, ok: true });
   });
 
   it("still switches to a model the session offers", async () => {

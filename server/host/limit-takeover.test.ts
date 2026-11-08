@@ -130,6 +130,16 @@ describe("a model's own limit", () => {
     now.at = NOW + UNNAMED_LIMIT_MS + 1;
     expect(instance.modelHeld(on("claude", "claude-sonnet-5"))).toBeNull();
   });
+
+  it("holds every model one shared allowance covers", () => {
+    const { instance } = takeover();
+    instance.noteRuntimeEvent("kai", on("claude", "claude-opus-5-5"),
+      { ...error("model", NOW + 2 * HOUR), limitModels: ["claude-opus-5-5", "claude-sonnet-5"] } as RuntimeEvent);
+    expect(instance.modelHeld(on("claude", "claude-opus-5-5"))).toEqual({ until: NOW + 2 * HOUR, resetsAt: NOW + 2 * HOUR, scope: "model" });
+    expect(instance.modelHeld(on("claude", "claude-sonnet-5")), "the same allowance holds it too")
+      .toEqual({ until: NOW + 2 * HOUR, resetsAt: NOW + 2 * HOUR, scope: "model" });
+    expect(instance.modelHeld(on("codex", "gpt-6")), "another AI is untouched").toBeNull();
+  });
 });
 
 describe("what the person hears", () => {
@@ -288,7 +298,7 @@ describe("an AI that is signed out", () => {
     expect(instance.tell(KAI, CLAUDE_ON, { scope: "signed-out", backup: on("codex", "gpt-6") }), "once, not once a turn").toBeNull();
     signedOut(instance);
     expect(instance.carriedOn(KAI, "t2", CLAUDE_ON, on("codex", "gpt-6"), { scope: "signed-out" }))
-      .toEqual([{ name: "recovery: Claude is signed out, so Codex took over.", ok: true }]);
+      .toEqual([{ name: "recovery: Claude is signed out, so Codex took over.", nameCode: "chat.notice.failoverSignedOut", nameParams: { from: "Claude", to: "Codex" }, ok: true }]);
     expect(told.map((entry) => entry.text)).toEqual(["Claude is signed out on the Cloud. Sign in again in Settings → AI to keep using it."]);
     expect(record.mock.calls.at(-1)![0]).toMatchObject({ threadId: "t2", why: "signed-out", resetsAt: null });
 
@@ -297,7 +307,7 @@ describe("an AI that is signed out", () => {
     expect(instance.stillSignedOut("claude")).toBe(false);
     signedOut(instance);
     expect(instance.carriedOn(KAI, "t3", CLAUDE_ON, on("codex", "gpt-6"), { scope: "signed-out" }), "a new sign-out is told again").toEqual([
-      { name: "recovery: Claude is signed out, so Codex took over.", ok: true },
+      { name: "recovery: Claude is signed out, so Codex took over.", nameCode: "chat.notice.failoverSignedOut", nameParams: { from: "Claude", to: "Codex" }, ok: true },
       { name: "notice: Claude is signed out on the Cloud, so Kai is using Codex meanwhile. Sign in again in Settings → AI to keep using Claude.", ok: true, setup: true },
     ]);
   });

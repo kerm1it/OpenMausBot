@@ -1,12 +1,15 @@
 // What GET /api/config tells the app about the server and its settings (re-exported by store.tsx).
 import type { EffortLevel, LiveSettings } from "../../shared/wire";
+import type { ImageProvider } from "../../shared/image-generation";
 import type { OnboardingStatus } from "@/lib/onboarding";
 import type { ModelSelection } from "./store";
 
 /** A saved credential: whether it is set and, for admins, its last four characters. The key itself never comes back. */
 export interface SavedKey { configured: boolean; last4?: string }
 
-export type NestedKeyName = "ttsKey" | "fishAudioKey" | "geminiTtsKey" | "jevApiKey" | "openrouterDeciderKey" | "workersAiToken" | "openaiImageApiKey" | "customImageApiKey" | "openaiLiveKey";
+export type NestedKeyName = "ttsKey" | "fishAudioKey" | "geminiTtsKey" | "jevApiKey" | "openrouterDeciderKey" | "workersAiToken" | "openaiImageApiKey" | "customImageApiKey" | "openaiLiveKey" | "geminiImageApiKey";
+
+export interface ImageSlotStatus { provider: ImageProvider; model: string; configured: boolean }
 
 /** GET /api/config — configured flags only; secrets are never echoed. */
 export interface ConfigStatus {
@@ -59,6 +62,12 @@ export interface ConfigStatus {
   botLimit?: number;
   /** A task on this Cloud is waiting for memory right now. */
   waitingForRoom?: boolean;
+  /** On Starter: the turns it runs at once and the hand-offs it holds waiting, and when work was last refused for a limit. */
+  planTurns?: { running: number; waiting: number; refusedAt?: number; refused?: "tasks" | "paused" };
+  /** On Starter: how many bots stay awake; absent when every bot does. */
+  awakeLimit?: number;
+  /** Bots paused for the plan's limit: kept, but taking no turns. */
+  pausedBots?: string[];
   threads?: { maxConcurrentPerBot: number; eventLogMaxBytes?: number; eventLogRetentionDays?: number };
   automaticRecovery?: { enabled: boolean; backup?: ModelSelection };
   /** Prompt-cache keep-warm for idle Claude threads. Absent from older servers. */
@@ -75,9 +84,11 @@ export interface ConfigStatus {
     configured: boolean;
     ready: boolean;
     voice: string;
-    provider?: "elevenlabs" | "fish" | "system" | "chatterbox" | "xai" | "gemini";
+    provider?: "elevenlabs" | "fish" | "system" | "chatterbox" | "xai" | "gemini" | "openai";
     baseUrl?: string;
     model?: string;
+    /** Voice note with every reply, for every bot without its own choice. Absent from older servers. */
+    everyReply?: boolean;
     /** Fish Audio speech model; present only while Fish is the provider. */
     fishModel?: "s2.1-pro" | "s2.1-pro-free";
     /** ElevenLabs voice comes with Cloud Pro; no key is saved. */
@@ -110,16 +121,21 @@ export interface ConfigStatus {
   live?: LiveSettings;
   /** Keys kept inside another setting (voice, decisions, pictures, live calls), by their desktop credential name. */
   savedKeys?: Partial<Record<NestedKeyName, SavedKey>>;
-  /** Shared write-only credential for on-demand GPT Image avatars. */
   imageGen?: {
     configured: boolean;
-    provider?: "openai" | "xai" | "custom";
+    provider?: ImageProvider;
     model?: string;
+    primary?: ImageSlotStatus;
+    fallback?: ImageSlotStatus | null;
+    ready?: boolean;
+    maxPerTurn?: number;
     customUrl?: string;
     customModel?: string;
     openaiConfigured?: boolean;
     xaiConfigured?: boolean;
     customKeyConfigured?: boolean;
+    geminiConfigured?: boolean;
+    openrouterConfigured?: boolean;
   };
   /** who's using the app — collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string; aboutMe?: string; avatarUrl?: string };

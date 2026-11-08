@@ -93,6 +93,14 @@ const remoteKeys = REMOTE_SAFE;
 // main passes app.getVersion(): a server's page carries that server's version, so About asks this for the app's own.
 const appVersion = (process.argv.find((arg) => arg.startsWith("--omb-app-version="))?.slice("--omb-app-version=".length) ?? "").slice(0, 64);
 
+/** ipcRenderer wraps a main-process throw in "Error invoking remote method"; the page shows the text verbatim. */
+function invokeWithPlainError(channel, ...args) {
+  return ipcRenderer.invoke(channel, ...args).catch((error) => {
+    const message = String(error?.message ?? error);
+    throw new Error(message.replace(/^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/, ""));
+  });
+}
+
 const bridge = {
   platform: process.platform,
   /** This app's version, and whether this page is this app's own (served by this computer, not a server from the Server menu). */
@@ -105,8 +113,9 @@ const bridge = {
     places: () => ipcRenderer.invoke("workspaces:places"),
     open: (id) => isLocalPage || navigator.userActivation?.isActive === true
       ? ipcRenderer.invoke("workspaces:open", String(id)) : Promise.reject(new Error("Choose a place to open it.")),
-    add: (choice, link) => isLocalPage || navigator.userActivation?.isActive === true
-      ? ipcRenderer.invoke("workspaces:add", String(choice), ...(typeof link === "string" ? [link] : [])) : Promise.reject(new Error("Choose what to add.")),
+    add: (choice, link, code) => isLocalPage || navigator.userActivation?.isActive === true
+      ? ipcRenderer.invoke("workspaces:add", String(choice), ...(typeof link === "string" ? [link, ...(typeof code === "string" ? [code] : [])] : [])) : Promise.reject(new Error("Choose what to add.")),
+    probe: (address, code) => ipcRenderer.invoke("workspaces:probe", String(address ?? ""), String(code ?? "")),
     // The colour of the place this page is (never another's): read, and changed only from the person's click.
     look: () => ipcRenderer.invoke("workspaces:look"),
     color: (swatch) => isLocalPage || navigator.userActivation?.isActive === true
@@ -121,6 +130,23 @@ const bridge = {
       const handler = () => cb();
       ipcRenderer.on("workspaces:changed", handler);
       return () => ipcRenderer.removeListener("workspaces:changed", handler);
+    },
+    // A workspace of this computer's own, from a click on the rail's page or this computer's own page (main refuses any
+    // other): a new one by its name and colour, and a name, colour or removal for one the rail lists.
+    local: {
+      create: (name, color) => isLocalPage || navigator.userActivation?.isActive === true
+        ? ipcRenderer.invoke("workspaces:local-new", String(name), color === null || color === undefined ? null : String(color)) : Promise.reject(new Error("Choose a name.")),
+      edit: (id, changes) => isLocalPage || navigator.userActivation?.isActive === true
+        ? ipcRenderer.invoke("workspaces:local-edit", String(id), typeof changes?.name === "string" ? { name: changes.name } : { color: changes?.color === null || changes?.color === undefined ? null : String(changes.color) })
+        : Promise.reject(new Error("Choose a change.")),
+      remove: (id) => isLocalPage || navigator.userActivation?.isActive === true
+        ? ipcRenderer.invoke("workspaces:local-remove", String(id)) : Promise.reject(new Error("Choose Remove.")),
+    },
+    // The Server menu's New workspace on this computer, for this computer's own page to ask its name.
+    onNewLocal: (cb) => {
+      const handler = () => cb();
+      ipcRenderer.on("workspaces:new-local", handler);
+      return () => ipcRenderer.removeListener("workspaces:new-local", handler);
     },
   },
   // The window's own rail (this app's page at /rail, beside every place's page): while a sheet of its own is open it
@@ -173,14 +199,19 @@ const bridge = {
   },
   companion: {
     state: () => ipcRenderer.invoke("companion:state"),
-    start: () => ipcRenderer.invoke("companion:start"),
+    start: (routes) => ipcRenderer.invoke("companion:start", Array.isArray(routes) ? routes.filter((route) => typeof route === "string") : undefined),
     stop: () => ipcRenderer.invoke("companion:stop"),
     keepAwake: (enabled) => ipcRenderer.invoke("companion:keep-awake", enabled),
     refreshTailscale: () => ipcRenderer.invoke("companion:refresh-tailscale"),
+    setTailscale: (on) => ipcRenderer.invoke("companion:tailscale", on === true),
+    setRoute: (route, on) => ipcRenderer.invoke("companion:route", String(route), on === true),
+    dismissNotice: (route) => ipcRenderer.invoke("companion:notice-dismiss", String(route)),
     pairing: (open, expectedToken) => ipcRenderer.invoke("companion:pairing", open, expectedToken),
     cloudDesktop: (deviceId, allowed) => ipcRenderer.invoke("companion:cloud-desktop", deviceId, allowed),
     browserControl: (deviceId, allowed) => ipcRenderer.invoke("companion:browser-control", deviceId, allowed),
     revoke: (deviceId) => ipcRenderer.invoke("companion:revoke", deviceId),
+    renewPairing: () => ipcRenderer.invoke("companion:pairing-renew"),
+    routes: (deviceId, routes) => ipcRenderer.invoke("companion:routes", deviceId, routes),
   },
   routines: {
     wakeState: () => ipcRenderer.invoke("routines:wake-state"),
@@ -280,7 +311,8 @@ const bridge = {
     packageInstallListeners.add(cb);
     queueMicrotask(() => {
       if (!pendingPackageInstall || !packageInstallListeners.size) return;
-      const input = pendingPackageInstall; pendingPackageInstall = null;
+      const input = pendingPackageInstall;
+      pendingPackageInstall = null;
       for (const listener of packageInstallListeners) listener(input);
     });
     return () => packageInstallListeners.delete(cb);
@@ -318,13 +350,9 @@ const bridge = {
   },
   pickFolder: (current) => ipcRenderer.invoke("desktop:pick-folder", current),
   exportDiagnostics: () => ipcRenderer.invoke("desktop:export-diagnostics"),
-  /** ipcRenderer wraps a main-process throw in "Error invoking remote method"; the bubble shows the text verbatim. */
-  saveFile: (filePath) =>
-    ipcRenderer.invoke("desktop:save-file", filePath).catch((error) => {
-      const message = String(error?.message ?? error);
-      throw new Error(message.replace(/^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/, ""));
-    }),
+  saveFile: (filePath) => invokeWithPlainError("desktop:save-file", filePath),
   revealInFolder: (filePath) => ipcRenderer.invoke("desktop:reveal-file", filePath),
+  openHtmlInBrowser: (source, name) => invokeWithPlainError("desktop:open-html", source, name),
   // This app's own logs folder (server.log, desktop-crashes.log, updater.log); the page names no path.
   openLogsFolder: () => ipcRenderer.invoke("desktop:open-logs"),
   openAtLogin: {
@@ -342,6 +370,13 @@ const bridge = {
     create: (name, dataDir) => ipcRenderer.invoke("environments:create", name, dataDir),
     pickDir: () => ipcRenderer.invoke("environments:pick-dir"),
     forget: (id, purge) => ipcRenderer.invoke("environments:forget", id, purge === true),
+    status: () => ipcRenderer.invoke("environments:status"),
+    retry: (id) => ipcRenderer.invoke("environments:retry", ...(typeof id === "string" ? [id] : [])),
+    onStatus: (cb) => {
+      const handler = () => cb();
+      ipcRenderer.on("environments:status-changed", handler);
+      return () => ipcRenderer.removeListener("environments:status-changed", handler);
+    },
     onOpenSettings: (cb) => {
       const handler = (_event, computerId) => cb(computerId);
       ipcRenderer.on("workspaces:open-settings", handler);
@@ -354,6 +389,10 @@ const bridge = {
     save: (id, grant) => ipcRenderer.invoke("sharing:save", id, grant),
     revoke: id => ipcRenderer.invoke("sharing:revoke", id),
     activity: id => ipcRenderer.invoke("sharing:activity", id),
+    servers: () => ipcRenderer.invoke("sharing:servers"),
+    allow: id => ipcRenderer.invoke("sharing:allow", id),
+    pause: () => ipcRenderer.invoke("sharing:pause"),
+    resume: () => ipcRenderer.invoke("sharing:resume"),
   },
   confirm: message => ipcRenderer.invoke("dialog:confirm", message),
   desktopProfile: {
@@ -385,6 +424,7 @@ const bridge = {
       languageListeners.add(listener);
       return () => { languageListeners.delete(listener); };
     },
+    shown: language => { ipcRenderer.send("desktop-language:shown", String(language)); },
   },
 };
 

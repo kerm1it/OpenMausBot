@@ -1,5 +1,4 @@
 // The config pins one deliberately unknown driver, so the suite is deterministic with or without agent CLIs installed.
-import { HIGHLEVEL_TOOLS } from "./highlevel/tools.js";
 import { EMAIL_TOOLS } from "./email/tools.ts";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
@@ -171,6 +170,8 @@ let setupAnswersDump: string;
 let fakeDockerFixture: string;
 let fakeVpsFixture: string;
 let fakeDockerLog: string;
+let fakeSshLog: string;
+let fakeSshUnavailable: string;
 let stderr = "";
 let connectorAccounts: Array<{ id: string; alias?: string; status: string; toolkit: { slug: string } }> = [];
 let connectorAccountsGate: DeferredGate | null = null;
@@ -414,6 +415,8 @@ beforeAll(async () => {
   fakeDockerFixture = join(home, ".openmausbot", "fake-unmanaged-container");
   fakeVpsFixture = join(home, ".openmausbot", "fake-vps-container.json");
   fakeDockerLog = join(home, ".openmausbot", "fake-docker-calls.log");
+  fakeSshLog = join(home, ".openmausbot", "fake-ssh-calls.log");
+  fakeSshUnavailable = join(home, ".openmausbot", "fake-ssh-unavailable");
   mkdirSync(fakeDockerDir, { recursive: true });
   writeFileSync(fakeDockerProgram, [
     'import { appendFileSync, existsSync, readFileSync, rmSync } from "node:fs";',
@@ -462,6 +465,22 @@ beforeAll(async () => {
       { mode: 0o755 },
     );
     chmodSync(join(fakeDockerDir, "docker"), 0o755);
+    const fakeSshProgram = join(fakeDockerDir, "ssh-empty.mjs");
+    writeFileSync(fakeSshProgram, [
+      'import { appendFileSync, existsSync } from "node:fs";',
+      'const args = process.argv.slice(2);',
+      `appendFileSync(${JSON.stringify(fakeSshLog)}, JSON.stringify(args) + "\\n");`,
+      `if (existsSync(${JSON.stringify(fakeSshUnavailable)})) { console.error("fixture SSH is unavailable"); process.exit(255); }`,
+      'if (args[0] === "-F") args.splice(0, 2);',
+      'if (args.length === 4 && args.slice(0, 3).join(" ") === "-O check --") process.exit(255);',
+      'if (args.length === 8 && args.slice(0, 6).join(" ") === "-o BatchMode=yes -o PermitLocalCommand=no -T --" && args[7] === "true") process.exit(0);',
+      'console.error("unexpected fixture SSH command"); process.exit(127);',
+    ].join("\n"));
+    writeFileSync(
+      join(fakeDockerDir, "ssh"),
+      `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(fakeSshProgram)} "$@"\n`,
+      { mode: 0o755 },
+    );
   }
   // a fleet of exactly one unknown driver: no CLI probes, no network
   mkdirSync(join(home, ".openmausbot"), { recursive: true });
@@ -2729,7 +2748,7 @@ describe("harness HTTP API", () => {
         await mintTestCapability(BASE, chief.id, chief.threadId);
         const expired = await held.finish();
         expect(expired.status).toBe(401);
-        expect(expired.body.error).toMatch(/expired/);
+        expect(expired.body.error).toMatch(/turn has already ended/);
         held.close();
         held = undefined;
         token = await mintTestCapability(BASE, chief.id, chief.threadId, { kind: "connectors" });
@@ -2780,7 +2799,7 @@ describe("harness HTTP API", () => {
 
       const rejected = await held.finish();
       expect(rejected.status).toBe(401);
-      expect(rejected.body.error).toMatch(/expired/i);
+      expect(rejected.body.error).toMatch(/turn has already ended/i);
       const state = (await api("GET", "/api/bots?messages=0")).body;
       expect(state.bots.some((bot: { name: string }) => bot.name === lateName)).toBe(false);
     } finally {
@@ -4829,6 +4848,13 @@ describe("harness HTTP API", () => {
     }
   });
 
+  it("words a new bot's refused department access by key, keeping its English", async () => {
+    expect(await api("POST", "/api/bots", { settings: { managedSections: ["Nowhere"] } })).toEqual({ status: 400,
+      body: { error: "Only a Chief may manage existing additional departments", errorKey: "serverError.department.chiefOnlyExtra" } });
+    expect(await api("POST", "/api/bots", { settings: { chiefOfStaff: true, managedSections: [""] } })).toEqual({ status: 400,
+      body: { error: "Confirm additional department access (acknowledgePeerScope)", errorKey: "serverError.department.confirmExtra" } });
+  });
+
   it("rejects a sidebar section Chief collision without changing any bot", async () => {
     const incumbent = (await api("POST", "/api/bots")).body.bot;
     const incoming = (await api("POST", "/api/bots")).body.bot;
@@ -4846,6 +4872,7 @@ describe("harness HTTP API", () => {
         status: 409,
         body: {
           error: "A department can have only one Chief of Staff. Choose one Chief or use a department without one.",
+          errorKey: "serverError.department.oneChief",
         },
       });
 
@@ -5524,7 +5551,7 @@ describe("harness HTTP API", () => {
     }
   });
 
-  it("refuses paired model changes while the bot is working", async () => {
+  it("refuses paired model changes while the bot is working but saves a reasoning level", async () => {
     const instances = (await api("GET", "/api/instances")).body.instances;
     const claude = instances.find((instance: { instanceId: string }) => instance.instanceId === "claude");
     const selection = { instanceId: claude.instanceId, model: claude.models.default };
@@ -5541,16 +5568,23 @@ describe("harness HTTP API", () => {
         return current?.busy;
       }).toBe(true);
 
-      const blocked = await api("PATCH", `/api/bots/${bot.id}/model`, {
-        ...selection,
-        effort: "high",
-      });
+      const otherModel = claude.models.options.find((option: { id: string }) => option.id !== selection.model).id;
+      const blocked = await api("PATCH", `/api/bots/${bot.id}/model`, { ...selection, model: otherModel });
       expect(blocked.status).toBe(409);
       expect(blocked.body.error).toMatch(/working.*stop it before changing models/i);
       const unchanged = (await api("GET", "/api/bots?messages=0")).body.bots.find(
         (candidate: { id: string }) => candidate.id === bot.id,
       );
       expect(unchanged.modelSelection).toEqual(selection);
+
+      // The reasoning level is read when each turn starts, so it can change while the bot works.
+      const effort = await api("PATCH", `/api/bots/${bot.id}/model`, { ...selection, effort: "high" });
+      expect(effort.status).toBe(200);
+      const saved = (await api("GET", "/api/bots?messages=0")).body.bots.find(
+        (candidate: { id: string }) => candidate.id === bot.id,
+      );
+      expect(saved.modelSelection).toEqual({ ...selection, effort: "high" });
+      expect(saved.busy).toBe(true);
     } finally {
       await api("POST", `/api/bots/${bot.id}/interrupt`, {});
       await expect.poll(async () => {
@@ -6733,8 +6767,9 @@ describe("harness HTTP API", () => {
       expect(first.status).toBe(201);
       const firstCard = (await first.json()) as { messageId: string };
 
-      // A second connection holds the database write lock, so the fresh card's append fails mid-request.
-      const lockDb = new DatabaseSync(join(home, ".openmausbot", "messages.db"));
+      // A second connection holds the database write lock, so the fresh card's append fails mid-request. It waits for
+      // a write the harness may still be finishing from the first card instead of failing at once.
+      const lockDb = new DatabaseSync(join(home, ".openmausbot", "messages.db"), { timeout: 5_000 });
       lockDb.exec("BEGIN IMMEDIATE");
       try {
         const failed = await request("needed for the second task");
@@ -9544,7 +9579,7 @@ describe("harness HTTP API", () => {
         expect(bot.messages[0].setupOffer).toBeUndefined();
         expect((await api("PATCH", `/api/bots/${bot.id}`, { modelSelection: { instanceId: "claude", model: "claude-sonnet-5" } })).status).toBe(200);
         expect(await api("POST", `/api/bots/${bot.id}/setup-request`, { threadId: bot.threadId })).toEqual({
-          status: 409, body: { error: "This bot already has instructions. To change its job, type /setup and what you'd like it to do." },
+          status: 409, body: { error: "This bot already has instructions. To change its job, type /setup and what you'd like it to do.", errorKey: "serverError.setup.hasInstructions" },
         });
       } finally {
         await api("DELETE", `/api/bots/${bot.id}`);
@@ -9557,7 +9592,7 @@ describe("harness HTTP API", () => {
         // A plain chat model with its tools off cannot propose a profile.
         expect((await api("PATCH", `/api/bots/${bot.id}`, { modelSelection: { instanceId: "plainApi", model: "fixture-plain-model" } })).status).toBe(200);
         expect(await api("POST", `/api/bots/${bot.id}/setup-request`, { threadId: bot.threadId })).toEqual({
-          status: 409, body: { error: "This bot's AI can't set it up by itself. Tell the bot what you'd like it to do instead." },
+          status: 409, body: { error: "This bot's AI can't set it up by itself. Tell the bot what you'd like it to do instead.", errorKey: "serverError.setup.noTools" },
         });
         expect(await messages(bot.threadId)).toHaveLength(1);
       } finally {
@@ -10051,10 +10086,10 @@ describe("harness HTTP API", () => {
   });
 
   it.skipIf(process.platform === "win32").each([
-    { mode: "size", sizes: [25 * 1024 * 1024 + 1], message: "Uploads are limited to 25 MiB per file.", status: 200 },
+    { mode: "size", sizes: [FILE_MAX_BYTES + 1], message: "Uploads are limited to 100 MiB per file.", status: 200 },
     { mode: "batch", sizes: Array(5).fill(21 * 1024 * 1024) as number[], message: "Uploads are limited to 100 MiB per batch.", status: 200 },
     { mode: "changed", sizes: [1024], message: expect.stringContaining("changed while staging"), status: 200 },
-    { mode: "stop", sizes: [1024], message: "the internal turn capability has expired", status: 401 },
+    { mode: "stop", sizes: [1024], message: expect.stringContaining("turn has already ended"), status: 401 },
     { mode: "disk", sizes: [1024], message: expect.stringMatching(/ENOTDIR|EEXIST/), status: 500 },
   ])("returns the correct browser upload result for $mode", async ({ mode, sizes, message, status }) => {
     const bot = (await api("POST", "/api/bots")).body.bot;
@@ -10821,6 +10856,7 @@ describe("harness HTTP API", () => {
       const deleted = await api("DELETE", `/api/bots/${bot.id}`);
 
       expect(deleted).toMatchObject({ status: 200, body: { ok: true } });
+      expect(deleted.body).not.toHaveProperty("notice");
       expect(readFileSync(fakeDockerLog, "utf8").split("\n")).toContain(
         `-H ssh://fixture-vps rm -f ${containerId}`,
       );
@@ -10833,6 +10869,43 @@ describe("harness HTTP API", () => {
       rmSync(fakeDockerLog, { force: true });
       await api("DELETE", `/api/bots/${bot.id}`).catch(() => undefined);
       await api("PUT", "/api/config", { vps: { sshAlias: "" } }).catch(() => undefined);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("saves a first VPS alias offline and reports its computer left behind on SSH failure", async () => {
+    const bot = (await api("POST", "/api/bots")).body.bot;
+    const containerName = managedVpsNameForFixture(bot.id);
+    try {
+      writeFileSync(fakeSshUnavailable, "");
+      rmSync(fakeSshLog, { force: true });
+      rmSync(fakeDockerLog, { force: true });
+
+      const saved = await api("PUT", "/api/config", { vps: { sshAlias: "fixture-vps" } });
+      expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+      expect(existsSync(fakeSshLog)).toBe(false);
+      writeFileSync(fakeVpsFixture, JSON.stringify({ id: "a".repeat(64), name: containerName }));
+
+      const deleted = await api("DELETE", `/api/bots/${bot.id}`);
+      expect(deleted).toMatchObject({ status: 200, body: { ok: true } });
+      expect(deleted.body.notice).toContain("fixture-vps could not be reached");
+      expect(deleted.body.notice).toContain(`docker -H ssh://fixture-vps rm -f ${containerName}`);
+      expect(existsSync(fakeVpsFixture)).toBe(true);
+      expect(existsSync(fakeDockerLog)).toBe(false);
+      expect((await api("GET", "/api/bots?messages=0")).body.bots.some(
+        (candidate: { id: string }) => candidate.id === bot.id,
+      )).toBe(false);
+
+      const cleared = await api("PUT", "/api/config", { vps: { sshAlias: "" } });
+      expect(cleared.status).toBe(503);
+      expect(cleared.body.error).toContain("fixture SSH is unavailable");
+      expect(cleared.body.error).toContain("Keep the current SSH config alias");
+      expect((await api("GET", "/api/config")).body.vps.sshAlias).toBe("fixture-vps");
+    } finally {
+      rmSync(fakeSshUnavailable, { force: true });
+      rmSync(fakeVpsFixture, { force: true });
+      rmSync(fakeDockerLog, { force: true });
+      await api("DELETE", `/api/bots/${bot.id}`).catch(() => undefined);
+      expect((await api("PUT", "/api/config", { vps: { sshAlias: "" } })).status).toBe(200);
     }
   });
 
@@ -11826,6 +11899,75 @@ describe("harness HTTP API", () => {
     }
   });
 
+  it("turns a bot's own skill on, off or deletes it at once, with a receipt the person can undo", async () => {
+    const bot = (await api("POST", "/api/bots", {})).body.bot;
+    try {
+      expect((await api("PATCH", `/api/bots/${bot.id}`, {
+        modelSelection: { instanceId: "claude", model: "claude-sonnet-5" },
+      })).status).toBe(200);
+      const token = await mintTestCapability(BASE, bot.id, bot.threadId, { skillAuthoring: true });
+      const post = (body: Record<string, unknown>) => fetch(`${BASE}/api/internal/skills/stage`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ fromBotId: bot.id, fromThreadId: bot.threadId, ...body }),
+      });
+      const latestCard = async (action: string) => {
+        const messages = (await api("GET", "/api/bots")).body.bots.find((candidate: { id: string }) => candidate.id === bot.id).messages;
+        return messages.filter((message: any) => message.card?.skillRequest?.name === "switch-me" && message.card.skillRequest.action === action).at(-1).card;
+      };
+      const skill = async () => (await api("GET", `/api/bots/${bot.id}/skills`)).body.skills.find((entry: { name: string }) => entry.name === "switch-me");
+      const skillText = async () => (await api("GET", `/api/bots/${bot.id}/skills/switch-me`)).body.text;
+      const undo = (requestId: string) => api("POST", `/api/threads/${bot.threadId}/undo`, { requestId });
+      const skillMd = "---\nname: switch-me\ndescription: Keeps notes.\n---\n\n# Switch me\n";
+      const create = async () => expect((await post({ action: "create", source: "conversation", skill_md: skillMd })).status).toBe(201);
+      const change = async (action: string, title: string) => {
+        const response = await post({ action, skill_name: "switch-me" });
+        expect(response.status).toBe(201);
+        expect(await response.json()).toMatchObject({ state: "applied", name: "switch-me", action });
+        const receipt = await latestCard(action);
+        expect(receipt).toMatchObject({ answered: "allow", autoApplied: true, options: [], title });
+        return receipt;
+      };
+
+      await create();
+      expect(await skill()).toMatchObject({ enabled: true });
+
+      const off = await change("disable", "Skill \"switch-me\" turned off");
+      expect(await skill()).toMatchObject({ enabled: false });
+      expect((await post({ action: "disable", skill_name: "switch-me" })).status).toBe(422);
+      expect((await undo(off.requestId)).status).toBe(200);
+      expect(await skill()).toMatchObject({ enabled: true });
+      expect(await latestCard("disable")).toMatchObject({ undone: true });
+
+      const offAgain = await change("disable", "Skill \"switch-me\" turned off");
+      const on = await change("enable", "Skill \"switch-me\" turned on");
+      expect(await skill()).toMatchObject({ enabled: true });
+      expect((await undo(offAgain.requestId)).status, "the skill is on again since, so turning it back on is stale").toBe(409);
+      expect((await undo(on.requestId)).status).toBe(200);
+      expect(await skill()).toMatchObject({ enabled: false });
+
+      const gone = await change("delete", "Skill \"switch-me\" deleted");
+      expect(await skill()).toBeUndefined();
+      expect(gone.skillRequest.previous).toMatchObject({ preview: skillMd, enabled: false });
+      expect((await undo(gone.requestId)).status).toBe(200);
+      expect(await skill(), "a skill that was off comes back off").toMatchObject({ enabled: false });
+      expect(await skillText()).toBe(skillMd);
+
+      expect((await post({ action: "enable", skill_name: "switch-me" })).status).toBe(201);
+      const goneAgain = await change("delete", "Skill \"switch-me\" deleted");
+      await create();
+      expect((await undo(goneAgain.requestId)).status, "a skill of that name exists again").toBe(409);
+
+      const missing = await post({ action: "enable", skill_name: "not-there" });
+      expect(missing.status).toBe(422);
+      expect(((await missing.json()) as { error: string }).error).toContain("no skill named");
+      expect((await post({ action: "delete" })).status).toBe(400);
+    } finally {
+      await api("POST", `/api/bots/${bot.id}/interrupt`);
+      await api("DELETE", `/api/bots/${bot.id}`);
+    }
+  }, 60_000);
+
   it("applies a bot's own learned skill at once and undoes it from its receipt", async () => {
     const bot = (await api("POST", "/api/bots", {})).body.bot;
     try {
@@ -12299,7 +12441,7 @@ describe("harness HTTP API", () => {
       expect((await api("PATCH", `/api/bots/${bot.id}`, {
         composio: true,
         connectorTools: { gmail: { tools: ["GMAIL_SEND_EMAIL"] } },
-        outbound: { policy: "allow", dailyCap: 10 },
+        outbound: { policy: "allow" },
       })).status).toBe(200);
       const token = await mintTestCapability(BASE, bot.id, bot.threadId, { kind: "connectors" });
       const call = async (frame: unknown, bearer = token) => {
@@ -12363,7 +12505,7 @@ describe("harness HTTP API", () => {
         expect((await api("PATCH", `/api/bots/${legacy.id}`, {
           composio: true,
           approvalMode: "ask",
-          outbound: { policy: "allow", dailyCap: 10 },
+          outbound: { policy: "allow" },
         })).status).toBe(200);
         const legacyToken = await mintTestCapability(BASE, legacy.id, legacy.threadId, { kind: "connectors" });
         const legacyCall = await call(
@@ -12559,9 +12701,7 @@ describe("harness HTTP API", () => {
           { name: "GMAIL_SEND_EMAIL", description: "Send an email" },
         ],
         slack: [{ name: "SLACK_POST_MESSAGE", description: "a".repeat(240) }],
-        // HighLevel's tools are listed whenever its relay is configured, so grants can be set before connecting.
-        highlevel: HIGHLEVEL_TOOLS.map(({ name, description }) => ({ name, description })),
-        // So are email's, wherever a mailbox can be connected here.
+        // Email's tools are listed wherever a mailbox can be connected here, so grants can be set before connecting.
         email: EMAIL_TOOLS.map(({ name, description }) => ({ name, description })),
       },
     });
@@ -12677,14 +12817,15 @@ describe("harness HTTP API", () => {
       });
       expect(saved.status).toBe(200);
       expect(saved.body.imageGen).toEqual({ provider: "custom", configured: true, model: "local/image",
+        primary: { provider: "custom", model: "local/image", configured: true }, fallback: null, ready: true, maxPerTurn: 4,
         customUrl: "http://127.0.0.1:4321/v1", customModel: "local/image",
-        openaiConfigured: true, xaiConfigured: false, customKeyConfigured: true });
+        openaiConfigured: true, xaiConfigured: false, customKeyConfigured: true, geminiConfigured: false, openrouterConfigured: false });
       for (const secret of ["openai-avatar-fixture", "custom-avatar-fixture"]) {
         expect(JSON.stringify(saved.body)).not.toContain(secret);
         expect(readFileSync(join(home, ".openmausbot", "config.json"), "utf8")).not.toContain(secret);
       }
       const disk = JSON.parse(readFileSync(join(home, ".openmausbot", "config.json"), "utf8"));
-      expect(disk.imageGen).toMatchObject({ key: "", customApiKey: "", provider: "custom" });
+      expect(disk.imageGen).toMatchObject({ key: "", customApiKey: "", primary: { provider: "custom" }, customModel: "local/image" });
 
       const preset = await api("PUT", "/api/config", { imageGen: { provider: "openai" } });
       expect(preset.body.imageGen).toMatchObject({ provider: "openai", configured: true, customKeyConfigured: true });
@@ -13854,6 +13995,32 @@ describe("message pages", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ path: linkedFile }),
     })).status).toBe(404);
+  });
+
+  it("downloads a linked file over the 25 MB preview limit, but not an inline image that big or a file over 500 MB", async () => {
+    const threadId = "test-linked-file-room-thread";
+    const linkedFile = join(home, ".openmausbot", "workspaces", "test-bot-a", "phone report.md");
+    const linkedImage = join(home, ".openmausbot", "workspaces", "test-bot-a", "preview.png");
+    const [fileBytes, imageBytes] = [readFileSync(linkedFile), readFileSync(linkedImage)];
+    const reel = 26 * 1024 * 1024;
+    try {
+      truncateSync(linkedFile, reel);
+      const download = await fetch(`${BASE}/api/threads/${threadId}/messages/linked-file-message/file`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ path: linkedFile }),
+      });
+      expect(download.status).toBe(200);
+      expect(download.headers.get("content-length")).toBe(String(reel));
+      await download.body?.cancel();
+
+      truncateSync(linkedImage, reel);
+      expect((await fetch(`${BASE}/api/threads/${threadId}/messages/linked-image-message/file?preview=1&ref=0`)).status).toBe(413);
+
+      truncateSync(linkedFile, 500 * 1024 * 1024 + 1);
+      expect((await api("POST", `/api/threads/${threadId}/messages/linked-file-message/file`, { path: linkedFile })).status).toBe(413);
+    } finally {
+      writeFileSync(linkedFile, fileBytes);
+      writeFileSync(linkedImage, imageBytes);
+    }
   });
 
   it("downloads a structured generated image from an image-only reply", async () => {

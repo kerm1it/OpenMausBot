@@ -137,6 +137,11 @@ export const CLOUD_HOME_PLACE = "the user's My Cloud, their always-on OpenMausBo
 // The Cloud prompt names the synced folders; index.ts reads the registry through here.
 export { syncedFolders } from "./cloud-sync-store.ts";
 
+/** The AIs a Cloud's bots run on run on the Cloud itself: a sign-in or install anywhere else never reaches them. */
+export const CLOUD_ENGINES_HERE = " The AIs bots run on (Claude, Codex, Cursor and the rest) run here, on My Cloud, not on their computer or their cloud computer."
+  + " If one needs installing or signing in, tell them to choose it in the model picker: its card does that here, with a sign-in link they open on any device."
+  + " Never tell them to run an AI's install or sign-in command on their own computer, and never run one on their cloud computer yourself: neither signs in the AIs here.";
+
 /** `asks`: the person's own Cloud, whose bots ask them to turn on what their computer doesn't give now (ask_for_computer). */
 export function cloudHomePrompt(sharedComputerTools: boolean, synced: ReadonlyArray<{ computerName: string; pcPath: string; cloudPath: string }> = [],
   lent: ReadonlyArray<{ name: string; platform: "darwin" | "win32" | "linux" | null }> = [], asks = false): string {
@@ -150,6 +155,7 @@ export function cloudHomePrompt(sharedComputerTools: boolean, synced: ReadonlyAr
     : ` You cannot see or use ${theirs}, its screen or its files from here. If they ask for something on it, say so in one sentence.`)
     + (asks ? " For work that doesn't need their own computer, use what works here:" : " Offer what works here:")
     + " the built-in browser and their cloud computer, a desktop in the cloud. Call it their cloud computer, as the app does. Never ask them to set up this computer or a Local VM; neither exists here."
+    + CLOUD_ENGINES_HERE
     + syncedFoldersPrompt(synced);
 }
 
@@ -211,9 +217,9 @@ export const CREDENTIAL_PROMPT =
 /** Ten minutes stays inside the 20-minute turn stall watchdog, which sees nothing while a command runs. */
 export const BASH_MAX_TIMEOUT_MS = 600_000;
 const LONG_COMMANDS_TEXT =
-  ` Long-running shell commands: a shell call is stopped after a default limit (2 minutes for a Bash call) and the output of a stopped command is lost. Before running anything that can take more than a minute, such as transcription (whisper), ffmpeg or ffprobe over long media, renders, large builds or big file transfers, either pass a longer per-call timeout (Bash takes \`timeout\` in milliseconds, up to ${BASH_MAX_TIMEOUT_MS}) or start it detached with its output in a file (\`nohup <command> > /tmp/<job>.log 2>&1 &\`) and check that file in later calls. Never scan the whole disk with \`find /\` or similar: search by name with \`mdfind -name\` on macOS, or search a specific folder such as your workspace or home with a depth limit. If a command times out, do not rerun it the same way. Never wait inside a command for CI, a deploy or any other job to finish (no sleep loops or repeated polls): check it once, and if it is still running, tell the person what you made (with links), set wait_until or a one-time trigger to check back, and end your turn. When the person writes while you work, answer them first.`;
+  ` Long-running shell commands: a shell call is stopped after a default limit (2 minutes for a Bash call) and the output of a stopped command is lost. Before running anything that can take more than a minute, such as transcription (whisper), ffmpeg or ffprobe over long media, renders, large builds or big file transfers, pass a longer per-call timeout (Bash takes \`timeout\` in milliseconds, up to ${BASH_MAX_TIMEOUT_MS}) and keep the command in the foreground until it exits; split work that cannot finish within that into shorter pieces. A detached job may be killed when the call ends, so keep work whose result you need in the foreground, and trust only the command's own fresh exit code and output, not a launch exit 0 or an old output file. Never scan the whole disk with \`find /\` or similar: search by name with \`mdfind -name\` on macOS, or search a specific folder such as your workspace or home with a depth limit. If a command times out, do not rerun it the same way. Never wait inside a command for CI, a deploy or any other job to finish (no sleep loops or repeated polls): check it once, and if it is still running, tell the person what you made (with links). Only on a turn the person started in their own chat, set wait_until or a one-time trigger to check back and end your turn; work handed to you by a bot, a routine or an outside event cannot set a wait, so finish it in this turn. When the person writes while you work, answer them first.`;
 const VM_LONG_COMMANDS_TEXT =
-  " In your Local VM, vm_exec takes `timeout_seconds` instead (default 60, at most 300); start anything longer detached the same way, inside the VM, and check its log with later vm_exec calls.";
+  " In your Local VM, vm_exec takes `timeout_seconds` instead (default 60, at most 300). The VM keeps running between calls, so a job longer than that may start detached inside it (`nohup <command> > /tmp/<job>.log 2>&1 &`); check its log with later vm_exec calls.";
 export function longCommandsPrompt(computer: ComputerPromptKind | null): string {
   return LONG_COMMANDS_TEXT + (computer === "vm-private" || computer === "vm-shared" ? VM_LONG_COMMANDS_TEXT : "");
 }

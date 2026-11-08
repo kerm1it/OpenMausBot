@@ -102,6 +102,8 @@ vi.mock("@/state/store", async (importOriginal) => ({
 }));
 
 const { ComputerPanel } = await import("./ComputerPanel");
+const { WorksOnGrid } = await import("./WorksOnGrid");
+const { FullScreenButton } = await import("./FullScreenButton");
 const { ComputerFilesPane } = await import("./ComputerFilesPane");
 const { CloudBackendPicker } = await import("./CloudBackendPicker");
 const { LocalComputerAutoWarning } = await import("./LocalComputerAutoWarning");
@@ -117,6 +119,16 @@ function nodes(value: ReactNode): Node[] {
     return [node, ...nodes(node.props.children)];
   });
 }
+function destinations(rendered: { nodes: Node[] }): Node[] {
+  const grid = rendered.nodes.find((node) => node.type === WorksOnGrid)!;
+  return nodes(WorksOnGrid(grid.props as unknown as Parameters<typeof WorksOnGrid>[0])).filter((node) => node.type === "button");
+}
+/** The action row's buttons by label; Full screen is its own component (watch-only until control is held). */
+function actionLabels(row: Node): string[] {
+  return nodes(row.props.children).filter((node) => node.type === "button" || node.type === FullScreenButton)
+    .map((node) => node.type === FullScreenButton ? "Full screen" : text(node.props.children));
+}
+
 function text(value: ReactNode): string {
   return Children.toArray(value).map((child) => {
     if (typeof child === "string" || typeof child === "number") return String(child);
@@ -377,7 +389,16 @@ describe("Where the bot works", () => {
 
   it("leaves This Mac out on another server's page, where this computer can never be a bot's place", () => {
     fixture.localComputer = { available: false, support: "unsupported", enabled: false, status: "unavailable", reasonCode: "remote-server" };
-    expect(grid(render(makeBot())).map((node) => text(node.props.children))).toEqual(["Auto", "Cloud desktop", "Private desktop", "Browser", "Off"]);
+    const rendered = render(makeBot());
+    expect(grid(rendered).map((node) => text(node.props.children))).toEqual(["Auto", "Cloud desktop", "Private desktop", "Browser", "Off"]);
+    expect(placeLine(rendered)).toBe("Uses the built-in browser, or a running private desktop when a task needs one.");
+  });
+
+  it("shows a bot set to This Mac as Auto on another server's page, without changing its setting", () => {
+    fixture.localComputer = { available: false, support: "unsupported", enabled: false, status: "unavailable", reasonCode: "remote-server" };
+    const pressed = grid(render(makeBot({ computer: "local" }))).filter((node) => node.props["aria-pressed"]).map((node) => text(node.props.children));
+    expect(pressed).toEqual(["Auto"]);
+    expect(fixture.dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ type: "updateBot" }));
   });
 
   it("says what Auto does on My Cloud, where it starts a cloud computer by itself", () => {
@@ -397,10 +418,9 @@ describe("Where the bot works", () => {
     fixture.values = [];
     phaseIndex = -1;
     const advanced = render(makeBot());
-    const group = advanced.nodes.find((node) => node.props.role === "group" && node.props["aria-label"] === "Computer destination")!;
-    const card = nodes(group.props.children).filter((node) => node.type === "button")[1]!;
+    const card = destinations(advanced)[1]!;
     expect(card.props.disabled).toBe(true);
-    expect(text(card.props.children)).toBe("Cloud desktopNot with this model");
+    expect(text(card.props.children)).toBe(`Cloud desktop${tile.props.title}`);
     expect(card.props.title).toBe(tile.props.title);
   });
 
@@ -473,8 +493,8 @@ describe("Where the bot works", () => {
         fixture.dispatch = vi.fn();
         const start = makeBot({ computer: patch.computer === "off" ? "cloud" : "off" });
         const rendered = render(start);
-        const group = rendered.nodes.find((node) => node.props.role === "group" && node.props["aria-label"] === "Computer destination")!;
-        const option = nodes(group.props.children).filter((node) => node.type === "button")[index]!;
+        const group = advanced ? null : rendered.nodes.find((node) => node.props.role === "group" && node.props["aria-label"] === "Computer destination")!;
+        const option = (group ? nodes(group.props.children).filter((node) => node.type === "button") : destinations(rendered))[index]!;
         (option.props.onClick as () => void)();
         calls.push((fixture.dispatch as ReturnType<typeof vi.fn>).mock.calls);
       }
@@ -529,6 +549,15 @@ describe("A chat pinned to a place", () => {
     fixture.advanced = true;
     fresh();
     expect(unpin(render(pinned()))).toBeUndefined();
+  });
+
+  it("saves Auto too when Use Auto stands in for This Mac on another server's page", () => {
+    fixture.localComputer = { available: false, support: "unsupported", enabled: false, status: "unavailable", reasonCode: "remote-server" };
+    const button = unpin(render(pinnedOn("local")))!;
+    expect(text(button.props.children)).toBe("Use Auto");
+    (button.props.onClick as () => void)();
+    expect(fixture.dispatch).toHaveBeenCalledWith({ type: "updateBot", botId: "scout", patch: { computer: null } });
+    expect(fixture.dispatch).toHaveBeenCalledWith({ type: "updateTask", botId: "scout", threadId: "thread-scout", patch: { surface: null } });
   });
 
   it("waits out a running turn, as the server refuses a busy chat's place change", () => {
@@ -586,7 +615,7 @@ describe("Technical controls", () => {
     fixture.seed = { phase: "ready", resolved: { botId: "scout", threadId: "thread-scout", computer: "cloud", cloudBackend: "box" } };
     const simple = render(cloud());
     const row = simple.nodes.find((node) => node.props["data-testid"] === "computer-actions")!;
-    expect(nodes(row.props.children).filter((node) => node.type === "button").map((node) => text(node.props.children)))
+    expect(actionLabels(row))
       .toEqual(["Take control", "Full screen", "Sleep"]);
 
     fixture.advanced = true;
@@ -611,7 +640,7 @@ describe("Technical controls", () => {
     expect(simple.html).not.toContain("Open two desktops");
     expect(simple.html).not.toContain("Delete this bot");
     const row = simple.nodes.find((node) => node.props["data-testid"] === "computer-actions")!;
-    expect(nodes(row.props.children).filter((node) => node.type === "button").map((node) => text(node.props.children)))
+    expect(actionLabels(row))
       .toEqual(["Take control", "Full screen"]);
 
     fixture.advanced = true;

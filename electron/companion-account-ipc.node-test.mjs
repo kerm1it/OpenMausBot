@@ -67,15 +67,17 @@ test("the desktop holds its address on demand, read from the running companion",
   assert.equal(await options.managedEndpointNeeded(), null);
 });
 
-test("prepare is local-only, takes nothing from the page, and an organisation can refuse it", async () => {
+test("prepare is local-only and takes nothing from the page", async () => {
   const origin = "http://127.0.0.1:49210";
   const handlers = new Map();
   const prepared = [];
+  const routes = [];
 
   localOrigin.setLocalOrigin(origin);
   const context = vm.createContext({
     ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
     localOnly: localOrigin.localOnly,
+    rememberCompanionRoute: async (route, on) => { routes.push([route, on]); },
 
     ensureCompanionAccountService: () => ({
       state: () => ({ status: "ready" }),
@@ -96,7 +98,6 @@ test("prepare is local-only, takes nothing from the page, and an organisation ca
   const local = { senderFrame: { url: `${origin}/` } };
   assert.deepEqual(await prepare(local, { endpoint: "https://evil.example.test" }), { available: true, status: "ready" });
   assert.deepEqual(prepared, [[]]);
+  assert.deepEqual(routes, [["https", true]], "setting up the secure address is the person turning the HTTPS address on");
   assert.throws(() => prepare({ senderFrame: { url: "https://remote.example.test/" } }), /only available/);
-
-
 });

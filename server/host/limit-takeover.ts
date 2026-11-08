@@ -1,3 +1,4 @@
+import { type ServerToolText } from "../../shared/server-text.ts";
 // When the AI a bot runs on reaches its usage limit, or is signed out, the bot carries on with another AI the person has
 // set up until that limit resets or the AI is signed in again, without anyone being asked, and the person hears it once
 // for that stretch. What is held (an engine's limit on the reset clock, one model's own limit, a sign-in that expired)
@@ -78,7 +79,7 @@ export function signedOutStop(stopReason: string | null | undefined, said: strin
   return stopReason === "auth_required" && !(said && (engineFailureKind(said) === "credits" || classifyError({ text: said }).reason === "quota"));
 }
 /** A row a conversation shows when its turn carried on elsewhere: `setup` marks the one signing in fixes. */
-export interface CarriedOnRow { name: string; ok: boolean; setup?: boolean }
+export interface CarriedOnRow extends ServerToolText { name: string; ok: boolean; setup?: boolean }
 
 export function createLimitTakeover(deps: LimitTakeoverDeps) {
   const now = deps.now ?? Date.now;
@@ -260,7 +261,9 @@ export function createLimitTakeover(deps: LimitTakeoverDeps) {
       const said = event.type === "turn.completed" || event.type === "session.exited" ? setupSaid.get(event.threadId) : undefined;
       if (said !== undefined) setupSaid.delete(event.threadId);
       if (!selection) return;
-      if (event.type === "runtime.error" && (event.limit === "model" || event.limit === "credits")) holdModel(selection, event.limit, event.limitResetsAt);
+      if (event.type === "runtime.error" && (event.limit === "model" || event.limit === "credits")) {
+        for (const model of event.limitModels?.length ? event.limitModels : [selection.model]) holdModel({ ...selection, model }, event.limit, event.limitResetsAt);
+      }
       else if (event.type === "turn.completed" && event.ok) worked(botId, selection);
       else if (event.type === "turn.completed" && signedOutStop(event.stopReason, said)) noteSignedOut(selection.instanceId);
     },
@@ -274,7 +277,7 @@ export function createLimitTakeover(deps: LimitTakeoverDeps) {
       const told = tell(bot, from, { ...facts, backup: to });
       const line = facts.scope === "signed-out" ? signedOutLine(refusedName(from, facts.scope), label(to, from))
         : failoverLine(refusedName(from, facts.scope), label(to, from), facts.resetsAt);
-      return [{ name: `recovery: ${line}`, ok: true }, ...(told && facts.scope === "signed-out" ? [{ name: `notice: ${told}`, ok: true, setup: true }] : [])];
+      return [{ name: `recovery: ${line}`, ok: true, ...(facts.scope === "signed-out" ? { nameCode: "chat.notice.failoverSignedOut", nameParams: { from: refusedName(from, facts.scope), to: label(to, from) } } : {}) }, ...(told && facts.scope === "signed-out" ? [{ name: `notice: ${told}`, ok: true, setup: true }] : [])];
     },
     /** True once per bot for each stretch of this limit or sign-out: the one incident its Chief is told about, not one per
      * refused turn. */

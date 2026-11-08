@@ -1,3 +1,4 @@
+import { userError } from "../user-errors.ts";
 // The secure credential cards request_credential adds: the card on the conversation's visible branch, settling it,
 // resuming the turn it paused, and the value a paired phone sealed for this computer. No card, message or log holds the value.
 import { randomUUID } from "node:crypto";
@@ -19,7 +20,7 @@ import {
   type CredentialTargetId,
   type SecretDelivery,
 } from "../../shared/credential-request.ts";
-import { EMAIL_CREDENTIAL, type EmailConnectAnswer, type EmailConnectRequest, type EmailServerFields } from "../../shared/email.ts";
+import { EMAIL_CREDENTIAL, outgoingFieldsOf, type EmailAccountView, type EmailConnectAnswer, type EmailConnectRequest, type EmailOutgoingAnswer, type EmailOutgoingFields, type EmailServerFields } from "../../shared/email.ts";
 import type { SecretRequestCardData } from "../../shared/wire.ts";
 import type { AppConfig } from "../config.ts";
 import { perBotLocalVmTarget, poolLocalVmTarget, SHARED_LOCAL_VM_TARGET, VM_WORKSPACE_GUEST } from "../container-computer.ts";
@@ -71,11 +72,17 @@ export interface SecretCardsDeps {
   threadLanguage?(threadId: string): string | undefined;
   /** The Email connector the mailbox card saves to: connecting proves it reads a real header before anything is kept. */
   email?: {
-    connect(request: EmailConnectRequest): Promise<EmailConnectAnswer>;
+    connect(request: EmailConnectRequest, reading?: (imapHost: string) => void): Promise<EmailConnectAnswer>;
     /** Why a mailbox can't be connected here, if so. */
     refusal(): string | undefined;
     /** Already connected and working. */
     connected(address: string): boolean;
+    /** Why a connected mailbox can't send, if it can't. */
+    sendingProblem(address: string): string | undefined;
+    /** A connected mailbox, without its password. */
+    account(address: string): EmailAccountView | undefined;
+    /** Checks sending again at the outgoing server given, and keeps it once it sends, as the mailbox's own form does. */
+    checkOutgoing(address: string, fields: EmailOutgoingFields): Promise<EmailOutgoingAnswer>;
     /** The person's own address, the likeliest mailbox when the bot names none. */
     profileAddress(): string | undefined;
   };
@@ -112,20 +119,39 @@ function vmFileHome(botId: string, vm: string): SecretFileHome | null {
 }
 
 /** What the bot hears when the mailbox card settles; it never hears the password. */
-function emailUpdateText(secret: SecretRequestCardData, outcome: "provided" | "dismissed"): string {
-  return outcome === "provided"
-    ? `OpenMausBot secret update: the person connected the mailbox ${secret.address ?? "they typed"}. The email tools (EMAIL_LIST_MESSAGES, EMAIL_READ_MESSAGE, EMAIL_SEND_MESSAGE and others) are ready. Continue the task that paused for it.`
-    : "OpenMausBot secret update: the person chose not to connect a mailbox. Say briefly what you cannot do without it, and do not ask for the password in chat.";
+function emailUpdateText(secret: SecretRequestCardData, outcome: "provided" | "dismissed", sendingProblem: string | undefined): string {
+  if (outcome === "dismissed") return "OpenMausBot secret update: the person chose not to connect a mailbox. Say briefly what you cannot do without it, and do not ask for the password in chat.";
+  const address = secret.address ?? "they typed";
+  return sendingProblem
+    ? `OpenMausBot secret update: the person connected the mailbox ${address} for reading: EMAIL_LIST_MESSAGES, EMAIL_READ_MESSAGE and the other reading tools are ready. Sending from it doesn't work yet: ${sendingProblem} The mailbox card in this chat now shows its outgoing server for the person to fix. Continue the task as far as reading allows; don't try to send another way.`
+    : `OpenMausBot secret update: the person connected the mailbox ${address}. The email tools (EMAIL_LIST_MESSAGES, EMAIL_READ_MESSAGE, EMAIL_SEND_MESSAGE and others) are ready. Continue the task that paused for it.`;
 }
 
-const SERVER_FIELDS = ["imapHost", "imapPort", "smtpHost", "smtpPort", "username"] as const;
+/** What the bot hears when the outgoing-server card settles; it never hears a password either. */
+function emailOutgoingUpdateText(address: string, outcome: "provided" | "dismissed", sendingProblem: string | undefined): string {
+  if (outcome === "dismissed") return `OpenMausBot secret update: the person chose not to set up sending for ${address}. Reading still works. Say briefly what you can't do without sending; don't send another way or ask for the password in chat.`;
+  return sendingProblem
+    ? `OpenMausBot secret update: the person tried another outgoing server for ${address}, and sending still doesn't work: ${sendingProblem} Tell them in one line and carry on without sending.`
+    : `OpenMausBot secret update: sending from ${address} works now; EMAIL_SEND_MESSAGE is ready. Continue the task that paused for it.`;
+}
+
+const OUTGOING_FIELDS = ["smtpHost", "smtpPort", "smtpSecurity", "smtpUsername", "smtpPassword"] as const;
+
+const SERVER_FIELDS = ["imapHost", "imapPort", "smtpHost", "smtpPort", "smtpSecurity", "username", "smtpUsername", "smtpPassword"] as const;
 function emailServerFields(fields: Record<string, unknown>): EmailServerFields {
   const out: Record<string, unknown> = {};
   for (const name of SERVER_FIELDS) {
     const value = fields[name];
-    if ((name.endsWith("Port") && Number.isInteger(value)) || (!name.endsWith("Port") && typeof value === "string" && value.trim())) out[name] = value;
+    if (name === "smtpSecurity") { if (value === "tls" || value === "starttls") out[name] = value; }
+    else if (name === "smtpPassword") { if (typeof value === "string" && value && Buffer.byteLength(value) <= SECRET_VALUE_MAX_BYTES) out[name] = value; }
+    else if ((name.endsWith("Port") && Number.isInteger(value)) || (!name.endsWith("Port") && typeof value === "string" && value.trim())) out[name] = value;
   }
   return out as EmailServerFields;
+}
+
+function outgoingFields(fields: Record<string, unknown>): EmailOutgoingFields {
+  const server = emailServerFields(fields) as Record<string, unknown>;
+  return Object.fromEntries(OUTGOING_FIELDS.flatMap((name) => (server[name] === undefined ? [] : [[name, server[name]]]))) as EmailOutgoingFields;
 }
 
 function customRequest(body: Record<string, unknown>): { label: string; reason: string; placeholder: string; delivery: SecretDelivery } | { error: string } {
@@ -154,7 +180,8 @@ export function createSecretCards(deps: SecretCardsDeps) {
 
   function updateText(messageId: string, secret: SecretRequestCardData, outcome: "provided" | "dismissed"): string {
     if (!custom(secret)) return credentialUpdateText(secret.label, outcome);
-    if (secret.delivery === "email") return emailUpdateText(secret, outcome);
+    if (secret.delivery === "email" && secret.emailOutgoing && secret.address) return emailOutgoingUpdateText(secret.address, outcome, deps.email?.sendingProblem(secret.address));
+    if (secret.delivery === "email") return emailUpdateText(secret, outcome, secret.address ? deps.email?.sendingProblem(secret.address) : undefined);
     return outcome === "provided"
       ? `OpenMausBot secret update: ${savedSecretText(secret.label, vault.savedFor(messageId))} Continue the task that paused for it.`
       : `OpenMausBot secret update: the person declined to provide ${secret.label}. Continue without it if you can, or say briefly what you cannot do. Do not ask for it in chat.`;
@@ -202,27 +229,27 @@ export function createSecretCards(deps: SecretCardsDeps) {
   /** A value typed into a custom card in the app: kept, then the paused turn resumes. */
   function saveCustomSecret(botId: string, threadId: string, messageId: string, raw: unknown): { status: number; body: Record<string, unknown> } {
     const message = secretMessage(botId, threadId, messageId);
-    if (!message?.secret) return { status: 404, body: { error: "no such credential request" } };
+    if (!message?.secret) return { status: 404, body: { ...userError("serverError.secret.missing") } };
     const secret = message.secret;
-    if (!custom(secret)) return { status: 400, body: { error: "this card saves a key in Settings" } };
+    if (!custom(secret)) return { status: 400, body: { ...userError("serverError.secret.settingsCard") } };
     if (phoneSecretSubmissions.has(phoneSecretSubmissionKey(threadId, message.id, secret.requestKey))) {
-      return { status: 409, body: { error: "this secret is currently being saved from a phone" } };
+      return { status: 409, body: { ...userError("serverError.secret.savingFromPhone") } };
     }
-    if (secret.dismissed) return { status: 409, body: { error: "this request was declined" } };
-    if (secret.superseded) return { status: 409, body: { error: "this request was replaced by a newer one" } };
-    if (secret.stopped) return { status: 409, body: { error: "this request stopped with its task" } };
-    if (secret.provided || secret.savedAt !== undefined) return { status: 409, body: { error: "this secret was already saved" } };
+    if (secret.dismissed) return { status: 409, body: { ...userError("serverError.secret.declined") } };
+    if (secret.superseded) return { status: 409, body: { ...userError("serverError.secret.replaced") } };
+    if (secret.stopped) return { status: 409, body: { ...userError("serverError.secret.taskStopped") } };
+    if (secret.provided || secret.savedAt !== undefined) return { status: 409, body: { ...userError("serverError.secret.alreadySaved") } };
     const value = typeof raw === "string" ? raw.trim() : "";
     if (!value || Buffer.byteLength(value) > SECRET_VALUE_MAX_BYTES) {
-      return { status: 400, body: { error: `Enter the secret: up to ${SECRET_VALUE_MAX_BYTES} bytes.` } };
+      return { status: 400, body: { ...userError("serverError.secret.valueSize", { bytes: SECRET_VALUE_MAX_BYTES }) } };
     }
     try {
       storeCustomSecret(message, botId, threadId, value);
     } catch (error) {
       console.warn(`secret card: could not keep a secret: ${error instanceof Error ? error.message : String(error)}`);
-      return { status: 500, body: { error: "The secret could not be kept safely. Nothing was saved." } };
+      return { status: 500, body: { ...userError("serverError.secret.notKeptSafely") } };
     }
-    if (!resumeSecretCard(botId, threadId, message.id, "provided")) return { status: 409, body: { error: "this credential request is no longer available" } };
+    if (!resumeSecretCard(botId, threadId, message.id, "provided")) return { status: 409, body: { ...userError("serverError.secret.unavailableLower") } };
     return { status: 200, body: currentSecretState(botId, threadId, message.id) ?? { provided: true, resumed: false } };
   }
 
@@ -230,24 +257,48 @@ export function createSecretCards(deps: SecretCardsDeps) {
    * leaves the card open with why, so the person isn't sent back to a new card. */
   async function saveEmailSecret(botId: string, threadId: string, messageId: string, fields: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }> {
     const message = secretMessage(botId, threadId, messageId);
-    if (!message?.secret || message.secret.delivery !== "email") return { status: 404, body: { error: "no such credential request" } };
+    if (!message?.secret || message.secret.delivery !== "email") return { status: 404, body: userError("serverError.secret.missing") };
     const secret = message.secret;
-    if (phoneSecretSubmissions.has(phoneSecretSubmissionKey(threadId, message.id, secret.requestKey))) return { status: 409, body: { error: "this secret is currently being saved from a phone" } };
-    if (secret.dismissed) return { status: 409, body: { error: "this request was declined" } };
-    if (secret.superseded) return { status: 409, body: { error: "this request was replaced by a newer one" } };
-    if (secret.stopped) return { status: 409, body: { error: "this request stopped with its task" } };
-    if (secret.provided || secret.savedAt !== undefined) return { status: 409, body: { error: "this mailbox was already connected" } };
+    if (phoneSecretSubmissions.has(phoneSecretSubmissionKey(threadId, message.id, secret.requestKey))) return { status: 409, body: userError("serverError.secret.savingFromPhone") };
+    if (secret.dismissed) return { status: 409, body: userError("serverError.secret.declined") };
+    if (secret.superseded) return { status: 409, body: userError("serverError.secret.replaced") };
+    if (secret.stopped) return { status: 409, body: userError("serverError.secret.taskStopped") };
+    if (secret.provided || secret.savedAt !== undefined) return { status: 409, body: userError("serverError.secret.mailboxAlreadyConnected") };
+    if (secret.emailOutgoing) return saveOutgoingServer(botId, threadId, message.id, secret.address, outgoingFields(fields));
     const password = typeof fields.value === "string" ? fields.value : "";
     const address = typeof fields.address === "string" && fields.address.trim() ? fields.address.trim() : secret.address ?? "";
-    if (!address || !password.trim() || Buffer.byteLength(password) > SECRET_VALUE_MAX_BYTES) return { status: 400, body: { error: "Enter your email address and its password." } };
-    if (!deps.email) return { status: 409, body: { error: "Email can't be connected here." } };
-    const answer = await deps.email.connect({ address, password, ...emailServerFields(fields) });
-    if (!answer.ok) return { status: 400, body: { error: answer.error, ...(answer.needsServer ? { needsServer: true } : {}) } };
+    if (!address || !password.trim() || Buffer.byteLength(password) > SECRET_VALUE_MAX_BYTES) return { status: 400, body: userError("serverError.secret.emailAndPassword") };
+    if (!deps.email) return { status: 409, body: userError("serverError.secret.emailUnavailable") };
+    const reading = (emailReading: string) => {
+      const card = secretMessage(botId, threadId, messageId);
+      if (card?.secret && card.secret.savedAt === undefined) store.patchMessage(threadId, message.id, { secret: { ...card.secret, emailReading } });
+    };
+    const answer = await deps.email.connect({ address, password, ...emailServerFields(fields) }, reading);
     const current = secretMessage(botId, threadId, messageId);
-    if (!current?.secret) return { status: 409, body: { error: "this credential request is no longer available" } };
-    store.patchMessage(threadId, message.id, { secret: { ...current.secret, address: answer.account.address, savedAt: Date.now() } });
-    if (!resumeSecretCard(botId, threadId, message.id, "provided")) return { status: 409, body: { error: "this credential request is no longer available" } };
+    if (!answer.ok) {
+      if (current?.secret?.emailReading) { const { emailReading: _reading, ...rest } = current.secret; store.patchMessage(threadId, message.id, { secret: rest }); }
+      return { status: 400, body: { error: answer.error, ...(answer.needsServer ? { needsServer: true } : {}), ...(answer.signIn ? { signIn: answer.signIn } : {}) } };
+    }
+    if (!current?.secret) return { status: 409, body: userError("serverError.secret.unavailableLower") };
+    store.patchMessage(threadId, message.id, { secret: { ...current.secret, address: answer.account.address, emailReading: answer.account.imapHost, savedAt: Date.now() } });
+    if (!resumeSecretCard(botId, threadId, message.id, "provided")) return { status: 409, body: userError("serverError.secret.unavailableLower") };
     return { status: 200, body: { ...currentSecretState(botId, threadId, message.id), ...(answer.sending.ok ? {} : { sendingProblem: answer.sending.problem }) } };
+  }
+
+  /** The outgoing-server card: sending is checked at the server typed, and kept once it sends, as the mailbox's own form
+   * does. One that still can't send leaves the card open with why. */
+  async function saveOutgoingServer(botId: string, threadId: string, messageId: string, address: string | undefined, fields: EmailOutgoingFields): Promise<{ status: number; body: Record<string, unknown> }> {
+    if (!address || !deps.email) return { status: 409, body: userError("serverError.secret.emailUnavailable") };
+    const answer = await deps.email.checkOutgoing(address, fields);
+    const current = secretMessage(botId, threadId, messageId);
+    if (!current?.secret) return { status: 409, body: userError("serverError.secret.unavailableLower") };
+    if (!answer.ok) {
+      if (answer.account) store.patchMessage(threadId, messageId, { secret: { ...current.secret, emailOutgoing: outgoingFieldsOf(answer.account) } });
+      return { status: 400, body: { error: answer.error } };
+    }
+    store.patchMessage(threadId, messageId, { secret: { ...current.secret, emailOutgoing: outgoingFieldsOf(answer.account), savedAt: Date.now() } });
+    if (!resumeSecretCard(botId, threadId, messageId, "provided")) return { status: 409, body: userError("serverError.secret.unavailableLower") };
+    return { status: 200, body: currentSecretState(botId, threadId, messageId) ?? { provided: true, resumed: false } };
   }
 
   /** mcp_server's fields with every secretRef swapped for its value: only in env, headers and oauth.clientSecret. */
@@ -378,8 +429,10 @@ export function createSecretCards(deps: SecretCardsDeps) {
       if (opened !== null) {
         if (current.secret.stopped) throw new PhoneSecretError("This request stopped with its task", 409);
         if (current.secret.delivery === "email") {
-          if (!current.secret.address || !deps.email) throw new PhoneSecretError("Type your email address and password on your computer.", 409);
-          const answer = await deps.email.connect({ address: current.secret.address, password: opened });
+          if (!current.secret.address || !deps.email) throw new PhoneSecretError(serverLine(deps.threadLanguage?.(context.threadId), "server.connect.emailOnComputer"), 409);
+          const answer = current.secret.emailOutgoing
+            ? await deps.email.checkOutgoing(current.secret.address, { ...current.secret.emailOutgoing, smtpPassword: opened })
+            : await deps.email.connect({ address: current.secret.address, password: opened });
           if (!answer.ok) throw new PhoneSecretError(answer.error, 400);
           store.patchMessage(context.threadId, current.id, { secret: { ...current.secret, savedAt: Date.now() } });
         } else storeCustomSecret(current, context.botId, context.threadId, opened);
@@ -429,6 +482,13 @@ export function createSecretCards(deps: SecretCardsDeps) {
         target: credentialId,
         label: target.label,
         description: `${reason ? `${target.description} ${reason}` : target.description} ${serverLine(language, "server.connect.secretNeverRead", { bot: from.name })}`,
+        ...(credentialId === "greenferenceApiKey" || credentialId === "geminiTtsKey" ? {
+          descriptionParts: {
+            baseCode: credentialId === "greenferenceApiKey" ? "secretCard.greenference.description" as const : "secretCard.geminiTts.description" as const,
+            reason,
+            bot: from.name,
+          },
+        } : {}),
         placeholder: target.placeholder,
         helpUrl: target.helpUrl,
         requestKey: randomUUID(),
@@ -448,33 +508,50 @@ export function createSecretCards(deps: SecretCardsDeps) {
     const refusal = deps.email ? deps.email.refusal() : "Email can't be connected here.";
     if (refusal || !deps.email) return { status: 403, body: { error: refusal } };
     const named = typeof body.address === "string" && /^[^\s@]+@[^\s@]+$/u.test(body.address.trim()) ? body.address.trim() : undefined;
-    if (named && deps.email.connected(named)) return { status: 200, body: { alreadyConfigured: true, label: named } };
-    const address = named ?? deps.email.profileAddress();
     const reason = typeof body.reason === "string" ? body.reason.trim().slice(0, CUSTOM_SECRET_REASON_MAX) : "";
     const language = deps.threadLanguage?.(threadId);
-    const label = serverLine(language, "server.connect.emailLabel");
+    if (named && deps.email.connected(named)) {
+      const sending = deps.email.sendingProblem(named);
+      if (!sending) return { status: 200, body: { alreadyConfigured: true, label: named, text: `${named} is already connected. Use the email tools.` } };
+      const account = deps.email.account(named);
+      const note = serverLine(language, "server.connect.emailOutgoingNote", { bot: from.name });
+      const label = postEmailCard(from, threadId, room, {
+        label: serverLine(language, "server.connect.emailOutgoingLabel", { address: named }),
+        description: `${reason ? `${reason} ` : ""}${sending} ${note}`,
+        ...(reason ? { reason: `${reason} ${note}` } : {}),
+        placeholder: serverLine(language, "server.connect.emailOutgoingPlaceholder"),
+        address: named,
+        emailOutgoing: account ? outgoingFieldsOf(account) : {},
+      });
+      return { status: 201, body: { ...label, delivery: "email", outgoing: true } };
+    }
+    const address = named ?? deps.email.profileAddress();
+    const note = serverLine(language, "server.connect.emailNote", { bot: from.name });
+    const label = postEmailCard(from, threadId, room, {
+      label: serverLine(language, "server.connect.emailLabel"),
+      description: `${reason ? `${reason} ` : ""}${note}`,
+      ...(reason ? { reason: `${reason} ${note}` } : {}),
+      placeholder: serverLine(language, "server.connect.emailPlaceholder"),
+      ...(address ? { address } : {}),
+    });
+    return { status: 201, body: { ...label, delivery: "email" } };
+  }
+
+  /** Posts a mailbox card, which a newer one with the same title replaces while both wait. */
+  function postEmailCard(from: BotRecord, threadId: string, room: boolean,
+    card: Pick<SecretRequestCardData, "label" | "description" | "reason" | "placeholder" | "address" | "emailOutgoing">): { messageId: string; label: string } {
     const message = store.appendMessage(threadId, {
       role: "bot",
       kind: "secret",
-      text: credentialDesktopHandoff(label, language),
+      text: credentialDesktopHandoff(card.label, deps.threadLanguage?.(threadId)),
       ...(room ? { from: { botId: from.id, name: from.name, color: from.color } } : {}),
-      secret: {
-        target: CUSTOM_SECRET_TARGET,
-        label,
-        description: `${reason ? `${reason} ` : ""}${serverLine(language, "server.connect.emailNote", { bot: from.name })}`,
-        ...(reason ? { reason: `${reason} ${serverLine(language, "server.connect.emailNote", { bot: from.name })}` } : {}),
-        placeholder: serverLine(language, "server.connect.emailPlaceholder"),
-        helpUrl: "",
-        delivery: "email",
-        ...(address ? { address } : {}),
-        requestKey: randomUUID(),
-      },
+      secret: { target: CUSTOM_SECRET_TARGET, helpUrl: "", delivery: "email", requestKey: randomUUID(), ...card },
     });
     for (const prior of store.activePath(threadId)) {
-      if (prior.id === message.id || !prior.secret || !isPendingCustomSecretRequest(prior, label, from.id, room)) continue;
+      if (prior.id === message.id || !prior.secret || !isPendingCustomSecretRequest(prior, card.label, from.id, room)) continue;
       store.patchMessage(threadId, prior.id, { secret: { ...prior.secret, superseded: true } });
     }
-    return { status: 201, body: { messageId: message.id, label, delivery: "email" } };
+    return { messageId: message.id, label: card.label };
   }
 
   /** A secret OpenMausBot does not keep: the same bot asking again for one already saved here gets it back, and a newer

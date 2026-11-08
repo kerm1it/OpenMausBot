@@ -10,6 +10,7 @@ import { ApiKeyEngineManage, EngineSetup, EngineUpdateNotice, EngineWarningNotic
 import { AppCopyNotice } from "./EngineAppCopy";
 import { forgetAppCopySwitches } from "@/state/engine-install";
 import { AccountsCard, AddAccount, accountGroupOf, accountsReady, type AccountGroup } from "./EngineAccounts";
+import { ClaudeEndpoints, CodexEndpoints } from "./ClaudeEndpoints";
 import { DEVICE_SIGN_IN_COPY, deviceSignInProvider } from "./DeviceSignIn";
 import { AntigravityFreeSpace } from "./AntigravityFreeSpace";
 import { CacheKeepWarmSettings } from "./CacheKeepWarmSettings";
@@ -359,6 +360,16 @@ function AntigravityAccountAction({ instance, action }: { instance: InstanceInfo
   </>;
 }
 
+function AntigravityAddAccount({ source }: { source: InstanceInfo }) {
+  const { state } = useStore();
+  const [addedId, setAddedId] = useState<string | null>(null);
+  const added = addedId ? state.instances.find((instance) => instance.instanceId === addedId && instance.snapshot.authenticated !== true) : undefined;
+  return <>
+    <AddAccount label={t("engineSetup.antigravity.addAccount")} endpoint="/api/instances/antigravity-accounts" extra={{ sourceInstanceId: source.instanceId }} onAdded={setAddedId} />
+    {added && <div data-antigravity-added={added.instanceId}><EngineSetup instance={added} unframed /></div>}
+  </>;
+}
+
 function EngineRow({ instance, bare = false }: { instance: InstanceInfo; bare?: boolean }) {
   const policyNote = instance.policy && <p className="mb-2 text-[12px] leading-relaxed text-ink-secondary">
     <span className="font-medium text-ink">{t("policy.managedBy", { organization: instance.policy.organizationName })}</span> · {instance.policy.reason}
@@ -376,7 +387,7 @@ function EngineRow({ instance, bare = false }: { instance: InstanceInfo; bare?: 
   return (
     <EngineCard instance={instance} bare={bare}>
       {policyNote}
-      {!engineReady(instance) && <EngineSetup instance={instance} intent={instance.access === "custom" ? "inject" : "cloud"} unframed />}
+      {!engineReady(instance) && <EngineSetup instance={instance} intent={instance.access === "custom" ? "inject" : "cloud"} description={instance.codexEndpoint ? t("agentEndpoints.codexHint") : undefined} unframed />}
       {engineReady(instance) && <ApiKeyEngineManage instance={instance} className="mt-3" />}
       {/* The setup panel that first said so is gone once the engine is Ready. */}
       {engineReady(instance) && <AppCopyNotice instance={instance} className="mt-3" />}
@@ -393,7 +404,7 @@ function EngineRow({ instance, bare = false }: { instance: InstanceInfo; bare?: 
       {instance.driverKind === "antigravityAgent" && (
         <div className="mt-3 space-y-3">
           {instance.snapshot.authenticated && <p className="break-words text-[12px] text-ink-secondary">{instance.snapshot.account?.email ?? t("engineSetup.antigravity.emailUnavailable")}</p>}
-          <AddAccount label={t("engineSetup.antigravity.addAccount")} endpoint="/api/instances/antigravity-accounts" extra={{ sourceInstanceId: instance.instanceId }} onAdded={() => {}} />
+          <AntigravityAddAccount source={instance} />
           {instance.snapshot.authenticated === true && instance.authentication?.signOut === true && <AntigravityAccountAction instance={instance} action="signOut" />}
           {instance.instanceId.startsWith("antigravity-") && <AntigravityAccountAction instance={instance} action="remove" />}
         </div>
@@ -507,7 +518,7 @@ export function EnginesSettings({ simple = false, more }: { simple?: boolean; mo
   const { state } = useStore();
   // Leaving Settings ends the "now uses the copy OpenMausBot installed" lines.
   useEffect(() => forgetAppCopySwitches, []);
-  const listed = state.instances.filter((i) => i.readOnly || i.cli !== undefined || i.cliDefault !== undefined || i.snapshot.state === "unavailable" || isApiKeyEngine(i));
+  const listed = state.instances.filter((i) => i.readOnly || i.cli !== undefined || i.cliDefault !== undefined || i.snapshot.state === "unavailable" || isApiKeyEngine(i) || i.claudeEndpoint !== undefined || i.codexEndpoint !== undefined);
   // A provider's accounts share one card, which takes the place of its first account.
   const groups = new Map<AccountGroup, InstanceInfo[]>();
   for (const instance of listed) {
@@ -519,15 +530,25 @@ export function EnginesSettings({ simple = false, more }: { simple?: boolean; mo
     return group && groups.get(group)?.[0] === instance ? group : null;
   };
   const rows = listed.filter((instance) => !accountGroupOf(instance) || groupOf(instance));
+  // A hidden ordinary Claude instance takes its card, and the endpoint section inside it, away. A hosted
+  // workspace lists every engine read-only and refuses instance changes, so there the section has no Add.
+  const hostedWorkspace = rows.length > 0 && rows.every((instance) => instance.readOnly);
+  const orphanCodexEndpoints = !groups.has("chatgpt") && !hostedWorkspace;
+  const orphanEndpoints = !groups.has("claude") && !hostedWorkspace;
   const isReady = (instance: InstanceInfo) => { const group = groupOf(instance); return group ? accountsReady(groups.get(group)!) : engineReady(instance); };
   const renderEngine = (instance: InstanceInfo, bare = false) => {
     const group = groupOf(instance);
     return group
-      ? <AccountsCard group={group} accounts={groups.get(group)!} advanced={<EngineAdvanced instance={instance} />} bare={bare} />
+      ? <AccountsCard group={group} accounts={groups.get(group)!} bare={bare}
+        advanced={<>{group === "claude" ? <ClaudeEndpoints /> : <CodexEndpoints />}<EngineAdvanced instance={instance} /></>} />
       : <EngineRow instance={instance} bare={bare} />;
   };
 
-  if (simple && more) return <SimpleEngines rows={rows} isReady={isReady} renderEngine={renderEngine} more={more} />;
+  if (simple && more) return <>
+    <SimpleEngines rows={rows} isReady={isReady} renderEngine={renderEngine} more={more} />
+    {orphanEndpoints && <div className="px-4"><ClaudeEndpoints /></div>}
+    {orphanCodexEndpoints && <div className="px-4"><CodexEndpoints /></div>}
+  </>;
 
   return (
     <div className="flex min-w-0 flex-col gap-6 pb-2">
@@ -539,6 +560,8 @@ export function EnginesSettings({ simple = false, more }: { simple?: boolean; mo
         <RefreshEngines />
       </div>
       <EngineSections instances={rows} isReady={isReady} renderEngine={renderEngine} />
+      {orphanEndpoints && <div className="px-4"><ClaudeEndpoints /></div>}
+      {orphanCodexEndpoints && <div className="px-4"><CodexEndpoints /></div>}
       <HiddenEngines />
       <CacheKeepWarmSettings />
     </div>

@@ -1,3 +1,4 @@
+import { userError, type UserError } from "../user-errors.ts";
 import { withMcpSignIn, type McpOAuthManager } from "../mcp-oauth.ts";
 import { brokeredServer, type BrokerPath } from "../bot-box/broker-probe.ts";
 import { probeMcpServer, sendsCredentials, type McpProbeOptions, type McpProbeResult } from "../mcp-probe.ts";
@@ -34,9 +35,11 @@ export interface McpConfigDeps {
   botsPath?(): BrokerPath | null;
   /** How Test starts a command server when no bot asks: as the turns of its bot, or of any bot (server/mcp-probe.ts `asBot`). */
   probeAs?(server: { bot?: string }): NonNullable<McpProbeOptions["asBot"]>;
+  /** Test for a server that runs on another computer: on that computer, through lending, for whoever tests (`lender`). */
+  testElsewhere?(name: string, server: StoredMcpServer & { runsOn: McpRunsOn }, lender: string | null, signal: AbortSignal): Promise<McpConfigResult>;
 }
 
-export type McpConfigRefusal = { status: number; error: string; code?: string };
+export type McpConfigRefusal = { status: number; error: string; code?: string } & Partial<Pick<UserError, "errorKey" | "errorParams">>;
 export type McpConfigResult = { status: number; body: Record<string, unknown> } | McpConfigRefusal;
 
 export interface McpConfig {
@@ -56,6 +59,8 @@ export interface McpConfig {
     signal: AbortSignal;
     /** A person's own connection, asked for only when the server is theirs; null when there is no one to answer for it. */
     person?: (url: string) => { oauth: McpOAuthManager; key?: { header: string; value: string } } | null;
+    /** Whose lent computers a server that runs elsewhere is tested on; null or absent: nobody's. */
+    lender?: string | null;
   }): Promise<McpConfigResult>;
   /** The one flag every writer of `cfg.mcpServers` takes: two writers must not interleave a read with a save. */
   busy: BusyFlag;
@@ -83,7 +88,7 @@ export const runsElsewhere = (runsOn: McpRunsOn) => `This server runs on ${runsO
 
 const personalHeaderValueRefusal = (personal: string[], name: string, server: StoredMcpServer) =>
   personal.includes(name) && isRemoteMcpServer(server) && sendsCredentials(server)
-    ? "Personal MCP header values cannot be saved in shared configuration. Save your key in your personal connection."
+    ? userError("serverError.mcp.personalHeadersShared")
     : null;
 
 const MAX_CONCURRENT_MCP_PROBES = 2;
@@ -125,7 +130,7 @@ export function createMcpConfig(deps: McpConfigDeps & { changed(): void }): McpC
   };
   const refused = (name: string, server: StoredMcpServer): McpConfigResult | null => {
     const personalRefusal = personalHeaderRefusal(name, server);
-    if (personalRefusal) return { status: 400, error: personalRefusal };
+    if (personalRefusal) return { status: 400, ...personalRefusal };
     const refusal = mcpPolicyRefusal(name, server);
     return refusal ? { status: 403, error: refusal, code: "managed_policy" } : null;
   };
@@ -160,7 +165,7 @@ export function createMcpConfig(deps: McpConfigDeps & { changed(): void }): McpC
         return { status: 400, error: `You can add at most ${MAX_MCP_SERVERS} MCP servers.` };
       }
       const personalRefusal = names.map((name) => personalHeaderRefusal(name, servers[name]!)).find(Boolean);
-      if (personalRefusal) return { status: 400, error: personalRefusal };
+      if (personalRefusal) return { status: 400, ...personalRefusal };
       const blocked = names.filter((name) => mcpPolicyRefusal(name, servers[name] as object));
       if (blocked.length) return { status: 403, error: `${mcpPolicyRefusal(blocked[0]!, servers[blocked[0]!] as object)} Not approved: ${blocked.join(", ")}.`, code: "managed_policy" };
       persistMcpServers({ ...current, ...servers });
@@ -224,12 +229,13 @@ export function createMcpConfig(deps: McpConfigDeps & { changed(): void }): McpC
       deps.connectionsChanged?.("removed");
       return saved(200);
     }),
-    test: async (name, { signal, person, asBot }) => {
+    test: async (name, { signal, person, asBot, lender }) => {
       const raw = cfg.mcpServers?.[name];
       if (raw === undefined) return { status: 404, error: "MCP server not found." };
       const parsed = parseStoredMcpServer(name, raw);
       if (!parsed.ok) return { status: 400, error: parsed.error };
-      if (parsed.server.runsOn) return { status: 409, error: runsElsewhere(parsed.server.runsOn) };
+      const { runsOn } = parsed.server;
+      if (runsOn) return deps.testElsewhere ? deps.testElsewhere(name, { ...parsed.server, runsOn }, lender ?? null, signal) : { status: 409, error: runsElsewhere(runsOn) };
       if (mcpProbesInFlight >= MAX_CONCURRENT_MCP_PROBES) {
         return { status: 429, error: "Two MCP connection tests are already running." };
       }
@@ -240,7 +246,7 @@ export function createMcpConfig(deps: McpConfigDeps & { changed(): void }): McpC
         const personal = deps.teamConnections.personMcp().includes(name);
         if (personal && isRemoteMcpServer(target) && !target.oauth && Object.keys(target.headers).length > 0) {
           const own = person?.(target.url);
-          if (!own) return { status: 403, error: "Sign in to the team to test your own connection." };
+          if (!own) return { status: 403, ...userError("serverError.mcp.testSignInFirst") };
           oauth = own.oauth;
           target = { ...target, headers: own.key ? { [own.key.header]: own.key.value } : {} };
         } else if (!personal && isRemoteMcpServer(target)) {

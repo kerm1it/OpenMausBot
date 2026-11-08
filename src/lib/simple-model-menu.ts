@@ -1,8 +1,9 @@
 import type { InstanceInfo, ModelSelection } from "@/state/store";
 import { needsCli, needsSignIn } from "@/components/EngineSetup";
 import { t } from "./i18n";
+import { modelOptionLabel } from "./model-label";
 import { filterCustomModels, partitionCustomModels, suggestedModels } from "./custom-models";
-import { isCustomOnly, SIGN_IN_FAMILY_LABEL, signInFamily, splitEngineRail } from "./engine-rail";
+import { engineDisplayName, isCustomOnly, SIGN_IN_FAMILY_LABEL, signInFamily, splitEngineRail } from "./engine-rail";
 import { displayModelLabel, shortModelLabel } from "./model-friendly";
 import { choiceIsSelected, modelChoices, takesTypedModels, type ModelChoice } from "./model-choices";
 
@@ -42,6 +43,8 @@ export interface MenuGroup {
   label: string;
   provider: string;
   account?: string;
+  /** A short line under the heading, such as why this account is special here. */
+  note?: string;
   body: MenuGroupBody;
 }
 
@@ -77,19 +80,29 @@ export interface SimpleMenuInput {
   probing: ReadonlySet<string>;
   loading: boolean;
   refreshing?: string | null;
+  /** Picking a model also changes the bot's own model, not just this conversation's. */
+  updatesBotDefault?: boolean;
 }
 
 export function providerName(instance: InstanceInfo): string {
   const family = signInFamily(instance);
   if (family) return SIGN_IN_FAMILY_LABEL[family];
-  if (instance.access !== "api") return instance.displayName;
-  return instance.displayName.replace(/\s*\((?:API key|API)\)$/i, "") || instance.displayName;
+  if (instance.access !== "api") return engineDisplayName(instance);
+  return engineDisplayName(instance).replace(/\s*\((?:API key|API|chave de API)\)$/i, "") || engineDisplayName(instance);
 }
 
-export function modelName(instance: InstanceInfo | undefined, model: string): string {
+export function variantSuffix(instance: InstanceInfo | undefined, model: string, variant?: string): string {
+  const option = instance?.models.options.find((candidate) => candidate.id === model);
+  if (!instance || !option || variant === undefined) return "";
+  const listed = modelChoices(instance, [option]).some((choice) => choiceIsSelected(choice, { instanceId: instance.instanceId, model, variant }));
+  const label = listed ? option.variants?.find((candidate) => candidate.id === variant)?.label : undefined;
+  return label ? ` · ${label}` : "";
+}
+
+export function modelName(instance: InstanceInfo | undefined, model: string, variant?: string): string {
   const option = instance?.models.options.find((candidate) => candidate.id === model);
   if (!instance || !option) return model;
-  return displayModelLabel(option.label, providerName(instance), option.custom);
+  return displayModelLabel(modelOptionLabel(option), providerName(instance), option.custom) + variantSuffix(instance, model, variant);
 }
 
 export function repeatedModelLabels(options: readonly ModelOption[]): Set<string> {
@@ -117,7 +130,7 @@ function heading(instance: InstanceInfo, listed: readonly InstanceInfo[]): Pick<
   const family = signInFamily(instance);
   if (instance.access === "api") return { label: `${provider} · ${t("model.simple.apiKey")}`, provider };
   const several = family !== undefined && listed.filter((other) => signInFamily(other) === family).length > 1;
-  const account = several && instance.displayName !== provider ? instance.displayName : undefined;
+  const account = several && engineDisplayName(instance) !== provider ? engineDisplayName(instance) : undefined;
   return { label: account ? `${provider} · ${account}` : provider, provider, account };
 }
 
@@ -125,18 +138,18 @@ function currentRow(input: SimpleMenuInput): MenuCurrent {
   const { instances, selection, bot, loading } = input;
   const active = instances.find((instance) => instance.instanceId === selection.instanceId);
   const option = active?.models.options.find((candidate) => candidate.id === selection.model);
-  const name = option?.label ?? selection.model;
-  const row = { instance: active, label: modelName(active, selection.model), title: active ? `${active.displayName} · ${name}` : name, warning: false, pending: false };
+  const name = option ? modelOptionLabel(option) : selection.model;
+  const row = { instance: active, label: modelName(active, selection.model, selection.variant), title: active ? `${engineDisplayName(active)} · ${name}${variantSuffix(active, selection.model, selection.variant)}` : name, warning: false, pending: false };
   if (!active) return loading ? { ...row, pending: true } : { ...row, meta: t("model.simple.unavailable"), warning: true };
   if (!option && input.refreshing === active.instanceId) return { ...row, pending: true };
   if (option?.orgBlocked) return { ...row, meta: t("model.orgBlocked"), warning: true, blocked: true };
   if (active.policy) return { ...row, meta: t("policy.managedBy", { organization: active.policy.organizationName }), warning: true };
   if (needsCli(active)) return { ...row, meta: t("model.setupRequired"), warning: true };
   if (needsSignIn(active) && !isCustomOnly(active) && !option?.custom) return { ...row, meta: t("model.signInRequired"), warning: true };
-  if (bot.follows === true) return { ...row, meta: t("model.simple.botsModel", { name: bot.name }) };
+  if (bot.follows === true) return { ...row, meta: t(input.updatesBotDefault ? "model.simple.botsModelScope" : "model.simple.botsModel", { name: bot.name }) };
   const family = signInFamily(active);
   const accounts = family ? instances.filter((instance) => signInFamily(instance) === family).length : 0;
-  if (accounts > 1 || active.snapshot.chatgptPlan) return { ...row, meta: active.displayName };
+  if (accounts > 1 || active.snapshot.chatgptPlan) return { ...row, meta: engineDisplayName(active) };
   return option?.provider ? { ...row, meta: option.provider } : row;
 }
 
@@ -163,7 +176,7 @@ export function simpleModelMenu(input: SimpleMenuInput): SimpleMenu {
       option,
       ...(option.nativeModel ? { model: option.nativeModel } : {}),
       ...(option.variant ? { variant: option.variant } : {}),
-      label: shortModelLabel(option.label, provider),
+      label: shortModelLabel(modelOptionLabel(option), provider),
       ...(repeated.has(option.label) && option.provider ? { route: option.provider } : {}),
       current: currentSelection ? choiceIsSelected(option, currentSelection) : false,
       blocked: option.orgBlocked === true,

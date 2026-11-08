@@ -153,9 +153,14 @@ function Shell() {
       if (!mod) return;
       const bots = shortcutBots(state.bots.filter((b) => !b.hidden), shownBotIds(document.querySelector("[data-sidebar-root]")));
       const step = e.shiftKey ? botCycleStep(e) : null;
-      if (e.key === "n" && !e.shiftKey) {
+      if (e.key.toLowerCase() === "n" && !e.altKey) {
         e.preventDefault();
-        dispatch({ type: "newBot" });
+        if (e.shiftKey) {
+          const selected = state.bots.find((bot) => bot.id === state.selectedId && !bot.hidden);
+          if (!e.repeat && selected && selected.yourAccess !== "view") dispatch({ type: "newTask", botId: selected.id });
+        } else {
+          dispatch({ type: "newBot" });
+        }
       } else if (/^[1-9]$/.test(e.key)) {
         const target = bots[Number(e.key) - 1];
         if (target) {
@@ -331,14 +336,14 @@ function Shell() {
           onClose={() => setLocalVmWorkspaceBotId(null)}
           onOpenComputer={openComputerFromWorkspace}
         />
-      ) : noEngines ? (
-        <NoEngines />
       ) : chiefStep ? (
         <EmptyChatShell />
       ) : group ? (
         <GroupView key={group.id} group={group} />
       ) : bot ? (
         <ChatView bot={bot} />
+      ) : noEngines ? (
+        <NoEngines />
       ) : (
         <main data-app-loading={loading.text} className="relative flex h-full min-w-0 flex-1 flex-col items-center justify-center gap-3 bg-app text-ink-secondary">
           <WindowDragStrip />

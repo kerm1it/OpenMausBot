@@ -7,17 +7,18 @@ import { pinTaskSkillLinks, releaseTaskSkillLinks, syncTaskSkillLinks } from "..
 import type { SkillFile } from "../skill-files.ts";
 
 import { skillCalls, skillCommandTurnText } from "../../shared/skill-command.ts";
-import type { SkillRequestCardData, SkillShareRecord } from "../../shared/skill-request.ts";
+import { isSkillSwitchAction, type SkillRequestCardData, type SkillShareRecord } from "../../shared/skill-request.ts";
 import { narrowestAudience, intersectAudience } from "../bot-visibility.ts";
 import { DATA_DIR, type AppConfig } from "../config.ts";
 import { appendDecision } from "../decision-log.ts";
 import { UNDO_STALE, type DirectApply } from "../direct-apply.ts";
 import {
-  importedSkillListings, importedSkillsFor, importedSkillsPrompt, nativeSkillFolders, readImportedSkillFile, readImportedSkills,
-  type ImportedSkillView, type SkillTurnEngine,
+  importedSkillListings, importedSkillsFor, importedSkillsPrompt, listedImportedSkills, nativeSkillFolders, readImportedSkillFile,
+  readImportedSkills, type ImportedSkillView, type SkillTurnEngine,
 } from "../imported-skills.ts";
 import { nativeSkillListing, nativeSkills, readNativeSkillFile } from "../native-skills.ts";
 import { redactSecretsInText } from "../redact.ts";
+import { readSectionContext } from "../section-context.ts";
 import { listLibrarySkills, readLibrarySkillFile, readSkillLibraryIndex, skillsLibraryEnabled } from "../skill-library.ts";
 import {
   conversationAssignedSkills,
@@ -90,9 +91,15 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
   /** The bot's own skills, and its library skills while the library is on; an imported skill of the same name yields. */
   const ownSkills = (bot: BotRecord) =>
     skillsLibraryEnabled(cfg) ? resolveBotSkills(bot.id, bot.assignedSkills ?? []) : listSkills(bot.id);
+  /** What the bot is for, as its settings and its department's shared instructions say: what its skills from this
+   * computer are picked by. */
+  const aboutBot = (bot: BotRecord): string => {
+    const live = store.bot(bot.id) ?? bot;
+    return [live.name, live.description, live.soul, live.section, readSectionContext(live.section)?.text].filter(Boolean).join("\n");
+  };
   const listBotSkills = (bot: BotRecord, threadId = bot.threadId): SkillListing[] => {
     const own = ownSkills(bot);
-    const listed = [...own, ...importedSkillListings(bot.id, new Set(own.map((skill) => skill.name)))];
+    const listed = [...own, ...importedSkillListings(bot.id, new Set(own.map((skill) => skill.name)), aboutBot(bot))];
     const names = new Set(listed.map((skill) => skill.name));
     return [...listed, ...nativesFor(bot, threadId).filter((skill) => !names.has(skill.name)).map(nativeSkillListing)];
   };
@@ -146,6 +153,8 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
   const importsFor = (bot: BotRecord, assigned: readonly string[] | undefined, instance: TurnInstance | undefined): ImportedSkillView[] =>
     importedSkillsFor(bot.id, new Set(resolveBotSkills(bot.id, assigned).map((skill) => skill.name)),
       nativeSkillFolders(engineOf(instance), { claudeUserSkills: claudeUserSkillsEnabled(cfg) }));
+  /** The ones of those the turn's prompt lists and links into its task folder; it searches for the rest. */
+  const listedImports = (bot: BotRecord, available: readonly ImportedSkillView[]) => listedImportedSkills(bot.id, available, aboutBot(bot));
 
   /** The folder a thread's turns run in, as the store pins it on its first turn; null for a thread pinned to none. */
   const threadFolder = (bot: BotRecord, threadId: string): string | null => {
@@ -305,13 +314,16 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
     skillsIndex(bot: BotRecord, threadId: string | undefined, instance?: TurnInstance): string {
       const assigned = threadId === undefined ? (skillsLibraryEnabled(cfg) ? bot.assignedSkills ?? [] : undefined) : conversationSkills(bot, threadId);
       const pinned = threadId ? turns.get(turnKey(bot.id, threadId)) : undefined;
+      const available = importsFor(bot, assigned, instance);
+      const listed = listedImports(bot, available);
       return (pinned?.prompt ?? skillsSystemPrompt(bot.id, assigned, threadId === undefined ? undefined : conversationStartedAt(threadId))) +
-        importedSkillsPrompt(importsFor(bot, assigned, instance));
+        importedSkillsPrompt(listed, available.length - listed.length);
     },
 
-    /** The imported skills a turn links into its task folder: the same ones its index lists. */
+    /** The imported skills a turn links into its task folder: the same ones its index lists, so an engine that loads
+     * skill folders by itself sees no more than the prompt does. */
     turnImports(bot: BotRecord, threadId: string, instance?: TurnInstance): ImportedSkillView[] {
-      return importsFor(bot, conversationSkills(bot, threadId), instance);
+      return listedImports(bot, importsFor(bot, conversationSkills(bot, threadId), instance));
     },
 
     expandSkillCommand(bot: BotRecord, threadId: string, text: string, instance?: TurnInstance, lines: ReadonlyArray<{ sendId?: string; text?: string }> = [], ownStart = false): string {
@@ -422,8 +434,8 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
       const card = message?.card;
       const request = card?.skillRequest;
       if (!message || !card || !request) return { ok: false, status: 404, error: "this skill is no longer in the conversation" };
-      if (!card.autoApplied || card.answered !== "allow" || card.undone) {
-        return { ok: false, status: 409, error: "only a skill change that applied and was not undone can be shared" };
+      if (!card.autoApplied || card.answered !== "allow" || card.undone || isSkillSwitchAction(request.action)) {
+        return { ok: false, status: 409, error: "only a new or updated skill that applied and was not undone can be shared" };
       }
       if (request.shared) return { ok: true, shared: request.shared };
       const botId = message.from?.botId ?? store.botByThread(threadId)?.id;
@@ -435,7 +447,7 @@ export function createSkillsLibraryHost(deps: SkillsLibraryHostDeps) {
 
     shareFromBot,
 
-    undoReceipt(botId: string, threadId: string, message: Message, request: SkillRequestCardData & { shared: SkillShareRecord }): UndoResult {
+    undoReceipt(botId: string, threadId: string, message: Message, request: SkillRequestCardData & { action: "create" | "update"; shared: SkillShareRecord }): UndoResult {
       const undone = undoSharedLearnedSkill({
         authorId: botId,
         name: request.name,

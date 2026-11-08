@@ -4,6 +4,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { CalendarSidebar } from "@/components/routines/CalendarSidebar";
 import type { CalendarCall } from "@/lib/calendar-calls";
 import { cn } from "@/lib/cn";
+import { botInDepartment } from "@/lib/department-filter";
 import { t } from "@/lib/i18n";
 import { addDays, calendarRangeLabel, projectCalls, projectedRoutineItems, scheduleAt, startOfDay, startOfWeek } from "@/lib/routine-calendar";
 import { resetMarkers, useEngineLimits, type ResetMarker } from "@/lib/limit-resets";
@@ -16,8 +17,9 @@ import type { ResetDrop } from "../routines/LimitResetMarkers";
 
 /** The schedules (and scheduled calls) on a week or day grid. An automation opens the same panel as the list; a call
  * keeps its own details. */
-export function AutomationsCalendar({ botFilter, selectedAutomationId, onOpenAutomation, onOpenRoom }: {
+export function AutomationsCalendar({ botFilter, department = "all", selectedAutomationId, onOpenAutomation, onOpenRoom }: {
   botFilter: string;
+  department?: string;
   selectedAutomationId?: string | null;
   onOpenAutomation: (id: string) => void;
   onOpenRoom: (id: string) => void;
@@ -50,10 +52,14 @@ export function AutomationsCalendar({ botFilter, selectedAutomationId, onOpenAut
     const routineItems = projectedRoutineItems(routines, state.routineRuns.filter((run) => botIds.has(run.botId)), rangeStart, rangeEnd)
       .map((item) => ({ ...item, kind: "routine" as const, needsYou: Boolean(item.routine && !item.run && needsYou.has(item.routine.id)) }));
     const callItems = projectCalls(calls, rangeStart, rangeEnd).map((item) => ({ ...item, kind: "call" as const }));
+    const botOf = (id: string | undefined) => state.bots.find((bot) => bot.id === id);
     return [...routineItems, ...callItems]
+      .filter((item) => item.kind === "call"
+        ? item.call.botIds.some((id) => botInDepartment(botOf(id), department))
+        : botInDepartment(botOf(item.routine?.botId ?? item.run?.botId), department))
       .filter((item) => botFilter === "all" || (item.kind === "call" ? item.call.botIds.includes(botFilter) : (item.routine?.botId ?? item.run?.botId) === botFilter))
       .sort((left, right) => left.at - right.at);
-  }, [state.routines, state.routineRuns, state.bots, calls, rangeStart, rangeEnd, botFilter]);
+  }, [state.routines, state.routineRuns, state.bots, calls, rangeStart, rangeEnd, botFilter, department]);
 
   const liveSelected = selected?.kind === "call"
     ? (() => { const call = calls.find((candidate) => candidate.id === selected.call.id); return call ? { ...selected, call } : null; })()
@@ -73,14 +79,14 @@ export function AutomationsCalendar({ botFilter, selectedAutomationId, onOpenAut
       if (dragged.kind === "routine") {
         const routine = state.routines.find((candidate) => candidate.id === dragged.id);
         if (!routine) return;
-        if (routine.schedule.type === "cron") throw new Error("Open this automation to change its repeating schedule.");
-        if (routine.schedule.type !== "once" && !window.confirm("Move every time it repeats?")) return;
+        if (routine.schedule.type === "cron") throw new Error(t("automations.calendar.cronMove"));
+        if (routine.schedule.type !== "once" && !window.confirm(t("automations.calendar.moveSeries"))) return;
         const response = await api(`/api/routines/${routine.id}`, { method: "PATCH", body: JSON.stringify({ schedule: scheduleAt(routine.schedule, dragged.at, nextAt) }) });
         dispatch({ type: "routinePatched", routine: response.routine });
       } else {
         const call = calls.find((candidate) => candidate.id === dragged.id);
         if (!call) return;
-        if (call.schedule.type === "daily" && !window.confirm("Move every time it repeats?")) return;
+        if (call.schedule.type === "daily" && !window.confirm(t("automations.calendar.moveSeries"))) return;
         const response = await api(`/api/calendar-calls/${call.id}`, { method: "PATCH", body: JSON.stringify({ schedule: scheduleAt(call.schedule, dragged.at, nextAt) }) });
         upsertCall(response.call);
       }

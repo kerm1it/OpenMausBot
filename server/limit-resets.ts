@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 
 import { NEAR_LIMIT_PERCENT, type EngineLimit, type EngineLimitsReport, type LimitWindowName } from "../shared/limit-reset.ts";
 import { writeFileAtomic } from "./atomic.ts";
-import { loadPlanUsage, type PlanAccount, type PlanProviderRow, type PlanUsageReport, type PlanWindow } from "./plan-usage.ts";
+import { claudeHasExtraUsageRoom, loadPlanUsage, type PlanAccount, type PlanProviderRow, type PlanUsageReport, type PlanWindow } from "./plan-usage.ts";
 import type { RuntimeEvent } from "../shared/runtime-events.ts";
 
 /** How often a waiting limit-reset automation checks usage again, and how fresh a shown limit must be. */
@@ -16,6 +16,9 @@ const SOON_AFTER_REFUSAL_MS = 5_000;
 
 type Driver = EngineLimit["driver"];
 
+/** The drivers whose plan usage gives a limit to show and to route around. */
+const REPORTED_DRIVERS: ReadonlySet<string> = new Set(["claude", "codex", "grok", "opencode"]);
+
 function windowLine(name: LimitWindowName, window: PlanWindow): { window: LimitWindowName; used: number; resetsAt: number | null } | null {
   if (!window.available || window.usedPercent === null) return null;
   const resetsAt = window.resetsAt ? Date.parse(window.resetsAt) : NaN;
@@ -25,7 +28,7 @@ function windowLine(name: LimitWindowName, window: PlanWindow): { window: LimitW
 /** An engine's limit from its plan-usage row. The windows at their limit decide, and all must reset, so the latest of
  * their resets counts; with none at the limit, the fullest window counts. Null when the row has no usage. */
 export function engineLimitFromUsage(row: PlanProviderRow): EngineLimit | null {
-  if (!row.ok || (row.driver !== "claude" && row.driver !== "codex" && row.driver !== "grok")) return null;
+  if (!row.ok || !REPORTED_DRIVERS.has(row.driver)) return null;
   const windows = [windowLine("5-hour", row.fiveHour), windowLine("weekly", row.weekly)].filter((line) => line !== null);
   const base = { engine: row.id, name: row.name, driver: row.driver as Driver,
     windows: windows.map(({ window, used, resetsAt }) => ({ window, usedPercent: used, resetsAt })) };
@@ -33,7 +36,8 @@ export function engineLimitFromUsage(row: PlanProviderRow): EngineLimit | null {
   const full = windows.filter((line) => line.used >= 100);
   if (full.length) {
     const latest = full.reduce((left, right) => (right.resetsAt ?? 0) > (left.resetsAt ?? 0) ? right : left);
-    return { ...base, window: latest.window, usedPercent: 100, resetsAt: full.some((line) => line.resetsAt === null) ? null : latest.resetsAt, blocked: true };
+    // Claude goes on past a full window on its paid extra usage while that has room; its own refusal still holds it.
+    return { ...base, window: latest.window, usedPercent: 100, resetsAt: full.some((line) => line.resetsAt === null) ? null : latest.resetsAt, blocked: !claudeHasExtraUsageRoom(row) };
   }
   const fullest = [...windows].sort((left, right) => right.used - left.used || (left.resetsAt ?? Infinity) - (right.resetsAt ?? Infinity))[0]!;
   return { ...base, window: fullest.window, usedPercent: fullest.used, resetsAt: fullest.resetsAt, blocked: false };
@@ -51,7 +55,7 @@ function codexHoldGone(row: PlanProviderRow, limit: EngineLimit, held: number | 
   return windows.every((line) => line === null || (line.resetsAt !== null && Math.abs(line.resetsAt - held) > SAME_RESET_MS));
 }
 
-const PRODUCT_NAMES: Record<string, string> = { claudeAgent: "Claude", codex: "Codex", grokAgent: "Grok" };
+const PRODUCT_NAMES: Record<string, string> = { claudeAgent: "Claude", codex: "Codex", grokAgent: "Grok", opencodeGo: "OpenCode" };
 
 /** "Claude", "Codex", or the name the person gave that engine. */
 export function engineLabel(engine: string, instance?: { displayName?: string; driverKind: string }): string {
@@ -180,7 +184,7 @@ export class LimitResetClock {
   noteRefusal(engine: string | undefined, resetsAt: number | undefined): void {
     if (!engine || resetsAt === undefined || !Number.isFinite(resetsAt) || resetsAt <= this.now()) return;
     // Without this refresh, a usage read between two refusals would end the hold.
-    if (this.refusals.get(engine) === resetsAt && !this.guessed.has(engine)) { this.heldAt.set(engine, this.now()); return; }
+    if (this.refusals.get(engine) === resetsAt && !this.guessed.has(engine)) { this.heldAt.set(engine, this.now()); this.saveHolds(); return; }
     this.hold(engine, resetsAt, false);
   }
 
@@ -206,6 +210,7 @@ export class LimitResetClock {
       next.set(limit.engine, limit);
       if (fetchedAt >= (this.heldAt.get(limit.engine) ?? 0) && codexHoldGone(row, limit, this.refusals.get(limit.engine), this.guessed.has(limit.engine))) {
         this.refusals.delete(limit.engine);
+        this.heldAt.delete(limit.engine);
         released = true;
       }
     }
@@ -274,17 +279,20 @@ export class LimitResetClock {
     let saved: unknown;
     try { saved = JSON.parse(readFileSync(this.options.file, "utf8")); } catch { return; }
     if (!saved || typeof saved !== "object" || Array.isArray(saved)) return;
-    for (const [engine, hold] of Object.entries(saved as Record<string, { until?: unknown; guessed?: unknown } | null>)) {
+    for (const [engine, hold] of Object.entries(saved as Record<string, { until?: unknown; guessed?: unknown; heldAt?: unknown } | null>)) {
       const until = hold?.until;
       if (typeof until !== "number" || !Number.isFinite(until) || until < this.now() - REFUSAL_GRACE_MS) continue;
       this.refusals.set(engine, until);
       if (hold?.guessed === true) this.guessed.add(engine);
+      // A file from before heldAt was kept: only a usage read made after this start can end the hold.
+      const heldAt = hold?.heldAt;
+      this.heldAt.set(engine, typeof heldAt === "number" && Number.isFinite(heldAt) ? heldAt : this.now());
     }
   }
 
   private saveHolds(): void {
     if (!this.options.file) return;
-    const holds = Object.fromEntries([...this.refusals].map(([engine, until]) => [engine, { until, guessed: this.guessed.has(engine) }]));
+    const holds = Object.fromEntries([...this.refusals].map(([engine, until]) => [engine, { until, guessed: this.guessed.has(engine), heldAt: this.heldAt.get(engine) ?? this.now() }]));
     try {
       writeFileAtomic(this.options.file, JSON.stringify(holds), { mode: 0o600 });
     } catch (error) {
