@@ -3,11 +3,11 @@ import { useStore, type Message } from "@/state/store";
 import { t } from "@/lib/i18n";
 import { cn } from "@/lib/cn";
 import type { AppDocument, AppPayload } from "../../../shared/app";
-import { appBlockedText } from "../../../shared/app";
+import { appBlockedLine } from "./app-blocked";
 import { APP_FRAME_LIMITS } from "../../../shared/app-frame/bridge";
 import { AppDocumentError, fetchAppDocument, type AppFetchFailure } from "./app-api";
 import { APP_POOL_LIMITS, useAppPoolSlot, type AppPool } from "./app-pool";
-import { AppHeader, AppInfo, AppOpenButton, AppPlaceholder, AppStrip, APP_SURFACE } from "./AppChrome";
+import { AppDone, AppHeader, AppInfo, AppOpenButton, AppPlaceholder, AppStrip, APP_SURFACE } from "./AppChrome";
 import { AppFrame, type AppFrameHandle, type AppFrameProblem } from "./AppFrame";
 import { PAGE_HEIGHT, PageFullScreen, PageNotes, PageToolbar, usePagePoint, usePageShare, usePageVersion } from "./PageTools";
 
@@ -46,12 +46,14 @@ function useAutoMount(botId: string, threadId: string | undefined, messageId: st
   return !newest || newest.has(messageId) || !messages?.some((message) => message.id === messageId);
 }
 
-export function AppMessage({ botId, botName, threadId, message, pool }: {
+export function AppMessage({ botId, botName, threadId, message, pool, room }: {
   botId: string;
   botName: string;
   threadId?: string;
   message: Message;
   pool?: AppPool;
+  /** Shown in a room: view-only. */
+  room?: boolean;
 }) {
   const payload = message.app;
   if (!isAppPayload(payload) || !threadId) {
@@ -59,20 +61,21 @@ export function AppMessage({ botId, botName, threadId, message, pool }: {
       ? <div className="chat-text w-fit max-w-[min(42rem,78%)] rounded-2xl bg-card px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap text-ink">{message.text}</div>
       : null;
   }
-  return <AppRow botId={botId} botName={botName} threadId={threadId} message={message} payload={payload} pool={pool} />;
+  return <AppRow botId={botId} botName={botName} threadId={threadId} message={message} payload={payload} pool={pool} room={room} />;
 }
 
 type Loaded =
   | { key: string; doc: AppDocument; failure?: undefined }
   | { key: string; doc?: undefined; failure: AppFetchFailure };
 
-function AppRow({ botId, botName, threadId, message, payload, pool }: {
+function AppRow({ botId, botName, threadId, message, payload, pool, room }: {
   botId: string;
   botName: string;
   threadId: string;
   message: Message;
   payload: AppPayload;
   pool?: AppPool;
+  room?: boolean;
 }) {
   const { dispatch } = useStore();
   const uid = useId();
@@ -151,7 +154,7 @@ function AppRow({ botId, botName, threadId, message, payload, pool }: {
     threadId, appId: message.id, rev, title: payload.title, picked: () => setFullScreen(false),
   });
   const share = usePageShare(threadId, message.id, message.publishedPage);
-  const tools = { version, point, share, ready: Boolean(current), fullScreen: { open: fullScreen, toggle: () => { point.stop(); setFullScreen((open) => !open); } } };
+  const tools = { version, point, share, room, ready: Boolean(current), fullScreen: { open: fullScreen, toggle: () => { point.stop(); setFullScreen((open) => !open); } } };
 
   const reloadNow = () => {
     setProblem(null);
@@ -178,15 +181,18 @@ function AppRow({ botId, botName, threadId, message, payload, pool }: {
   const strip = (() => {
     if (problem?.kind === "sign-in") return { text: t("app.strip.signIn", { server: serverName || problem.server }), action: { label: t("app.strip.signInAction"), onClick: signIn } };
     if (problem?.kind === "offline") return { text: t("app.strip.offline"), action: { label: t("app.strip.retry"), onClick: reloadNow } };
-    if (problem?.kind === "blocked") return { text: problem.text || appBlockedText(problem.reason, serverName) };
+    if (problem?.kind === "blocked") return { text: appBlockedLine(problem.reason, serverName, problem.text) };
     if (loaded?.failure) {
       return loaded.failure.offline
         ? { text: t("app.strip.offline"), action: { label: t("app.strip.retry"), onClick: reloadNow } }
         : { text: loaded.failure.error };
     }
     const blocked = current?.blocked;
-    if (blocked) return blocked.reason === "signed-out" ? { text: blocked.text, action: { label: t("app.strip.signInAction"), onClick: signIn } } : { text: blocked.text };
-    if (payload.blocked) return { text: appBlockedText(payload.blocked, serverName) };
+    if (blocked) {
+      const text = appBlockedLine(blocked.reason, serverName, blocked.text);
+      return blocked.reason === "signed-out" ? { text, action: { label: t("app.strip.signInAction"), onClick: signIn } } : { text };
+    }
+    if (payload.blocked) return { text: appBlockedLine(payload.blocked, serverName) };
     return null;
   })();
 
@@ -231,6 +237,7 @@ function AppRow({ botId, botName, threadId, message, payload, pool }: {
       data-app-state={state}
       data-app-source={payload.source}
       {...(page ? { "data-app-rev": rev } : {})}
+      {...(room ? { "data-app-room": "" } : {})}
       className={cn("w-full text-start", WIDTH)}
     >
       <div className={cn(bordered ? APP_SURFACE : "w-full")}>
@@ -245,7 +252,7 @@ function AppRow({ botId, botName, threadId, message, payload, pool }: {
           bordered={bordered}
         />
         {page && <PageToolbar {...tools} className={bordered ? "px-4 pb-3" : "pb-2"} />}
-        {page && <PageNotes version={version} point={point} share={share} className={bordered ? "px-4 pb-3" : "pb-2"} />}
+        {page && <PageNotes version={version} point={point} share={share} room={room} className={bordered ? "px-4 pb-3" : "pb-2"} />}
         {infoOpen && <AppInfo id={infoId} network={payload.network ?? { connect: [], resources: [] }} bytes={payload.bytes ?? 0} bordered={bordered} />}
         {collapsed && (
           <div className={cn("flex", bordered ? "px-4 pb-3.5" : "pb-2")}>
@@ -253,6 +260,7 @@ function AppRow({ botId, botName, threadId, message, payload, pool }: {
           </div>
         )}
         {body}
+        {payload.done && <AppDone done={payload.done} bordered={bordered} />}
         {strip && <AppStrip text={strip.text} action={strip.action} bordered={bordered} />}
       </div>
       {page && fullScreen && current && (

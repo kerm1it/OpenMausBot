@@ -54,6 +54,7 @@ function profiles(): Record<string, Profile> {
   all["skills+shared+voice+escalations+x"] = { env: { ...all["skills+shared+voice+escalations"]!.env, OMB_X_RESEARCH: "1", OMB_RESEARCH: "1" } };
   // A Team Cloud mounts message_person; the fullest profile carries it.
   all["skills+shared+voice+escalations+x+team"] = { env: { ...all["skills+shared+voice+escalations+x"]!.env, OMB_TEAM_PEOPLE: "1" } };
+  all["skills+shared+voice+escalations+x+team+images"] = { env: { ...all["skills+shared+voice+escalations+x+team"]!.env, OMB_IMAGE_GENERATION: "1" } };
   all["default+legacy-switches"] = {
     env: { ...all.default!.env, OMB_ROOM_TURN: "1", OMB_OWN_THREAD_CREATION: "1", OMB_EXTERNAL_RUNTIME: "1", OMB_ACTIVE_WAITS: "0" },
   };
@@ -62,6 +63,7 @@ function profiles(): Record<string, Profile> {
   // A chat that can never pick its computer: its Works on is Off, or it works on its team's computer. A room is one too.
   all["default+no-computer-pick"] = { env: { ...all.default!.env, OMB_COMPUTER_SELECTION: "0" } };
   for (const name of ["default", "non-chief"]) all[`${name}+room`] = { env: { ...all[name]!.env, OMB_COMPUTER_SELECTION: "0", OMB_ROOM: "1" } };
+  all["default+images"] = { env: { ...all.default!.env, OMB_IMAGE_GENERATION: "1" } };
   return all;
 }
 
@@ -77,37 +79,39 @@ const RESEARCH_TOOLS = ["x_search", "research_search", "research_endpoint", "res
 /** Only on the person's own Cloud: never on the fullest profile, a Team Cloud's. */
 const OWN_CLOUD_TOOLS = ["ask_for_computer"];
 /** The fullest profile, checked in whole; every other one is pinned by tool names, bytes and sha256. */
-const FULL = "skills+shared+voice+escalations+x+team";
+const FULL = "skills+shared+voice+escalations+x+team+images";
 
 /** Bytes when the budget was last set; a profile may move at most 2% either way (lower it to lock in a win). */
 const BUDGET_BASELINE: Record<string, number> = {
-  "default": 60552,
-  "voice": 61333,
-  "shared": 62817,
-  "shared+voice": 63598,
-  "skills": 64198,
-  "skills+voice": 64979,
-  "skills+shared": 66463,
-  "skills+shared+voice": 67244,
-  "non-chief": 51004,
-  "voice+non-chief": 51785,
-  "shared+non-chief": 53269,
-  "shared+voice+non-chief": 54050,
-  "skills+non-chief": 54650,
-  "skills+voice+non-chief": 55431,
-  "skills+shared+non-chief": 56915,
-  "skills+shared+voice+non-chief": 57696,
-  "skills+shared+voice+cloud-home": 67010,
-  "skills+shared+voice+non-chief+cloud-home": 57462,
-  "skills+shared+voice+escalations": 68074,
-  "skills+shared+voice+escalations+x": 71913,
-  "skills+shared+voice+escalations+x+team": 71913,
-  "default+legacy-switches": 60552,
-  "default+mausbot": 61203,
-  "skills+shared+voice+mausbot": 67895,
-  "default+no-computer-pick": 59340,
-  "default+room": 52250,
-  "non-chief+room": 42702
+  "default": 60887,
+  "voice": 61668,
+  "shared": 63152,
+  "shared+voice": 63933,
+  "skills": 63814,
+  "skills+voice": 64595,
+  "skills+shared": 66079,
+  "skills+shared+voice": 66860,
+  "non-chief": 51339,
+  "voice+non-chief": 52120,
+  "shared+non-chief": 53604,
+  "shared+voice+non-chief": 54385,
+  "skills+non-chief": 54266,
+  "skills+voice+non-chief": 55047,
+  "skills+shared+non-chief": 56531,
+  "skills+shared+voice+non-chief": 57312,
+  "skills+shared+voice+cloud-home": 66626,
+  "skills+shared+voice+non-chief+cloud-home": 57078,
+  "default+legacy-switches": 60887,
+  "default+mausbot": 61538,
+  "skills+shared+voice+mausbot": 67511,
+  "skills+shared+voice+escalations": 67690,
+  "skills+shared+voice+escalations+x": 71529,
+  "skills+shared+voice+escalations+x+team": 71529,
+  "default+no-computer-pick": 59675,
+  "default+room": 58031,
+  "non-chief+room": 48483,
+  "skills+shared+voice+escalations+x+team+images": 72302,
+  "default+images": 61660,
 };
 
 const RPC_PREFIX = '{"jsonrpc":"2.0","id":1,"result":';
@@ -265,6 +269,14 @@ describe("agents proxy tools/list golden", () => {
     expect(availableTools(team).map((tool) => tool.name)).not.toContain("ask_for_computer");
   });
 
+  it("mounts generate_image only when an image provider is set up, and adds nothing else", () => {
+    const names = (wire: string) => toolsOf(wire).map((tool) => tool.name);
+    expect(names(wires["default+images"]!).filter((tool) => tool !== "generate_image")).toEqual(names(wires.default!));
+    for (const [name, profile] of Object.entries(PROFILES)) {
+      expect(names(wires[name]!).includes("generate_image"), name).toBe(profile.env.OMB_IMAGE_GENERATION === "1");
+    }
+  });
+
   it("ignores the switches that once picked a catalog profile", () => {
     expect(wires["default+legacy-switches"]).toBe(wires.default);
     const profile = catalogProfileFromEnv({ OMB_BOT_ID: "bot-golden", OMB_CHIEF_OF_STAFF: "1", OMB_COMPUTER_SELECTION: "1", OMB_ROOM_TURN: "1", OMB_OWN_THREAD_CREATION: "1", OMB_EXTERNAL_RUNTIME: "1", OMB_ACTIVE_WAITS: "0" });
@@ -323,11 +335,12 @@ describe("agents proxy tools/list golden", () => {
     const names = (name: string) => toolsOf(wires[name]!).map((tool) => tool.name);
     expect(names("default+no-computer-pick")).toEqual(names("default").filter((tool) => tool !== "select_computer"));
     for (const name of ["default", "non-chief"]) {
-      expect(names(`${name}+room`), name).toEqual(names(name).filter((tool) => !["select_computer", "show_widget", "show_html", "wait_until", "list_waits", "cancel_wait"].includes(tool)));
+      expect(names(`${name}+room`), name).toEqual(names(name).filter((tool) => !["select_computer", "wait_until", "list_waits", "cancel_wait"].includes(tool)));
     }
     for (const [name, profile] of Object.entries(PROFILES)) {
       expect(names(name).includes("select_computer"), name).toBe(profile.env.OMB_COMPUTER_SELECTION === "1");
-      expect(names(name).includes("show_widget"), name).toBe(profile.env.OMB_ROOM !== "1");
+      expect(names(name).includes("show_widget"), name).toBe(true);
+      expect(names(name).includes("show_html"), name).toBe(true);
       expect(names(name).includes("wait_until"), name).toBe(profile.env.OMB_ROOM !== "1");
     }
   });

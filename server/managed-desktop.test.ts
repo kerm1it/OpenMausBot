@@ -243,7 +243,7 @@ it("runs native Codex with Company Responses routing, isolated home and no OAuth
     await native.adapter.sendTurn({ threadId: "company-codex-fixture", text: "Fixture request", model: "gpt-fixture" });
     await events.until(event => event.type === "turn.completed"); events.stop();
     const spawned = JSON.parse(readFileSync(dump, "utf8"));
-    expect(spawned.env.CODEX_HOME).toBe(isolatedHome);
+    expect(spawned.env.CODEX_HOME).toBe(join(DATA_DIR, "providers", "codex"));
     expect(spawned.env.OPENMAUSBOT_COMPANY_API_KEY).toBe(value.token);
     expect(spawned.env.OPENAI_API_KEY).toBeUndefined();
     expect(spawned.argv).toEqual(expect.arrayContaining(managedCodexArgs(config.managed!)));

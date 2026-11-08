@@ -82,6 +82,7 @@ const PENDING_WORDS: readonly Word[] = [
 
 const ALLOWED: Record<string, string> = {
   "settings.section.desktopWorkspaces": "the Servers page shares its name with the app menu's Server menu; both change with the one-workspace switcher",
+  "settings.section.thisServer": "the title of a person's own server's Phone & devices page, seen only on that server's own pages",
   "sidebar.servers": "the switcher's own Servers list, renamed with the one-workspace switcher",
   "sidebar.switchServer": "the switcher's own Servers list, renamed with the one-workspace switcher",
   "sidebar.switchServerError": "points at the app menu's Server menu",
@@ -89,6 +90,9 @@ const ALLOWED: Record<string, string> = {
   "sidebar.update.howOtherRestart": "a server added from the app menu's Server menu: its update is for whoever runs it, not this app",
   "cloudPhone.step1": "points at the app menu's Server menu, entry by entry",
   "botAccess.tools.syntax": "the tool names people type, such as mcp:SERVER:NAME",
+  "chat.notice.modelServerStoppedAnswering": "the person's model server at a named host, not the app's internal server",
+  "rail.local": "the owner's own name for the ＋ choice that adds a workspace of this computer's own",
+  "rail.localNumbered": "a new workspace's first name, which the person may change, in the owner's word for it",
 };
 
 const prefixes = Object.values(EVERYDAY_PREFIXES).flat();

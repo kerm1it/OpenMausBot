@@ -12,6 +12,8 @@ import {
 } from "../skills.ts";
 import type { BotRecord, Store } from "../store.ts";
 import { readSkillDirectoryFiles, skillFileBytes } from "../skill-files.ts";
+import { skillFileFromBytes } from "../skill-files.ts";
+import { skillImportSummary } from "../skill-folder.ts";
 import { skillDirectoryReview } from "../skill-directory-review.ts";
 import { PASS, type RouteHandler } from "./table.ts";
 
@@ -21,10 +23,11 @@ export interface BotSkillsRouteDeps {
   listBotSkills(bot: BotRecord, threadId?: string): SkillListing[];
   readBotSkillFile(bot: BotRecord, name: string): string | null;
   stagedSkillListing(staged: StagedSkillWrite): Omit<StagedSkillWrite, "files" | "baseSha256" | "baseAppliedStageId">;
+  fetchSkills?: typeof fetchSkillFromSource;
 }
 
 export function createBotSkillsRoutes(deps: BotSkillsRouteDeps): RouteHandler {
-  const { store, cfg, listBotSkills, readBotSkillFile, stagedSkillListing } = deps;
+  const { store, cfg, listBotSkills, readBotSkillFile, stagedSkillListing, fetchSkills = fetchSkillFromSource } = deps;
   return async ({ req, res, url, path, method, json, readBody }) => {
     let m: RegExpMatchArray | null = null;
     const fileMatch = path.match(/^\/api\/(?:bots\/([\w-]+)\/(skills|staged-skills)\/([\w-]+)|skills-library\/([a-z0-9-]+))\/files$/);
@@ -88,13 +91,23 @@ export function createBotSkillsRoutes(deps: BotSkillsRouteDeps): RouteHandler {
       if (!store.bot(m[1])) return json(res, 404, { error: "no such bot" });
       const parsed = z.object({ source: z.string().min(1).max(2000) }).safeParse(await readBody(req));
       if (!parsed.success) return json(res, 400, { error: "source must be a GitHub or skills.sh URL, or owner/repo" });
-      const fetched = await fetchSkillFromSource(parsed.data.source);
+      const fetched = await fetchSkills(parsed.data.source);
       if ("error" in fetched) return json(res, 422, { error: fetched.error });
-      const results = fetched.skills.map((skill) => installSkill(m![1]!, skill.source, skill.files));
-      const installed = results.filter((entry): entry is Exclude<typeof entry, { error: string }> => !("error" in entry));
-      const errors = results.flatMap((entry) => ("error" in entry ? [entry.error] : []));
-      if (!installed.length) return json(res, 422, { error: errors.join("; ") || "nothing importable found" });
-      return json(res, 201, { installed, errors });
+      const results = fetched.skills.map((skill) => ({
+        skill,
+        result: installSkill(
+          m![1]!,
+          skill.source,
+          skill.files.map(file => skillFileFromBytes(file.path, file.content, file.executable)),
+          skill.github,
+          skill.skipped.map(file => file.path),
+        ),
+      }));
+      const errors = results.flatMap(({ result }) => ("error" in result ? [result.error] : []));
+      const done = results.flatMap(({ skill, result }) => "error" in result ? [] : [{ skill, installed: result }]);
+      if (!done.length) return json(res, 422, { error: errors.join("; ") || "nothing importable found" });
+      const imported = done.map(({ skill, installed }) => skillImportSummary(installed.name, skill.files, skill.skipped));
+      return json(res, 201, { installed: done.map(({ installed }) => installed), imported, errors });
     }
     m = path.match(/^\/api\/bots\/([\w-]+)\/skills\/([a-z0-9-]+)$/);
     if (m && method === "GET") {
@@ -159,9 +172,12 @@ export function createBotSkillsRoutes(deps: BotSkillsRouteDeps): RouteHandler {
         const fetched = await fetchSkillFromSource(parsed.data.source);
         if ("error" in fetched) return json(res, 422, fetched);
         const results = fetched.skills.map(fetched => {
-          const instructions = fetched.files.find(file => file.path === "SKILL.md")?.content ?? "";
+          const rawInstructions = fetched.files.find(file => file.path === "SKILL.md")?.content;
+          const instructions = rawInstructions === undefined ? "" : Buffer.from(rawInstructions).toString("utf8");
           const skill = parseSkillMd(instructions);
-          return "error" in skill ? skill : installLibrarySkill({ name: skill.name, instructions, files: fetched.files,
+          return "error" in skill ? skill : installLibrarySkill({ name: skill.name, instructions,
+            files: fetched.files.map(file => skillFileFromBytes(file.path, file.content, file.executable)),
+            skippedFiles: fetched.skipped.map(file => file.path), github: fetched.github,
             source: fetched.source, license: skill.license, compatibility: skill.compatibility, tags: skill.tags, reviewState: "disabled" });
         });
         const installed = results.filter(result => !("error" in result));

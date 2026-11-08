@@ -33,6 +33,7 @@ import { parseConnectorTools } from "../connector-tools.ts";
 import { sectionKey, type BotRecord, type GroupRecord, type Store, type TaskRecord } from "../store.ts";
 import * as vps from "../vps-computer.ts";
 import { vpsSshAliasForBot } from "../vps-hosts.ts";
+import { refusalBody, userError } from "../user-errors.ts";
 import { pinnedClientThreadGuard } from "./pinned-client-thread.ts";
 import type { ModelSelectionCheck } from "./bots-create.ts";
 import { PASS, type RouteHandler } from "./table.ts";
@@ -164,11 +165,11 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
           movedTask ? { selection: movedTask.modelSelection, busy: threadBusy(movedTask.id, movedTask.threadId) } : undefined,
           body.requireAvailableModel === true,
         );
-        if (!checked.ok) return json(res, checked.status, { error: checked.error });
+        if (!checked.ok) return json(res, checked.status, refusalBody(checked));
         normalizedSelection = checked.selection;
         if (existingBot && activeGroupTurnForBot(existingBot.id)) {
           const groupChecked = checkedModelSelection(normalizedSelection, { selection: existingBot.modelSelection, busy: true });
-          if (!groupChecked.ok) return json(res, groupChecked.status, { error: groupChecked.error });
+          if (!groupChecked.ok) return json(res, groupChecked.status, refusalBody(groupChecked));
         }
       }
       const profile = parseBotProfilePatch(body);
@@ -238,8 +239,9 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
             return json(res, 400, { error: "fallback must be a list of up to five { instanceId, model } entries" });
           }
           if (!registry.get(row.instanceId)) return json(res, 400, { error: `fallback engine "${row.instanceId}" is not available` });
-          if (chain.some((seen) => seen.instanceId === row.instanceId)) continue;
-          chain.push({ instanceId: row.instanceId, model: row.model.trim() });
+          const model = row.model.trim();
+          if (chain.some((seen) => seen.instanceId === row.instanceId && seen.model === model)) continue;
+          chain.push({ instanceId: row.instanceId, model });
         }
         patch.fallback = chain;
       }
@@ -262,7 +264,7 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
       }
       if (body.outbound !== undefined) {
         const policy = normalizeOutboundPolicy(body.outbound);
-        if (!policy) return json(res, 400, { error: "outbound must be { policy: ask | allow, dailyCap: 1..1000 }" });
+        if (!policy) return json(res, 400, { error: "outbound must be { policy: ask | allow }" });
         patch.outbound = policy;
       }
       if (body.composio !== undefined) {
@@ -273,6 +275,11 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
       if (body.voiceNotes !== undefined) {
         if (typeof body.voiceNotes !== "boolean") return json(res, 400, { error: "voiceNotes must be true or false" });
         patch.voiceNotes = body.voiceNotes;
+      }
+      // null: follow the Voice setting again.
+      if (body.voiceNoteEveryReply !== undefined) {
+        if (body.voiceNoteEveryReply !== null && typeof body.voiceNoteEveryReply !== "boolean") return json(res, 400, { error: "voiceNoteEveryReply must be true, false or null" });
+        patch.voiceNoteEveryReply = body.voiceNoteEveryReply ?? undefined;
       }
       // Spends the Cloud plan's monthly X research calls: an admin decision too.
       if (body.xResearch !== undefined) {
@@ -560,9 +567,7 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
           Array.isArray(currentPeers) &&
           (nextPeers === undefined || nextPeers.some((peerId) => !currentPeers.includes(peerId)));
         if (widensReach && body.acknowledgePeerScope !== true) {
-          return json(res, 400, {
-            error: "Letting a bot talk to more bots requires confirming it first (acknowledgePeerScope)",
-          });
+          return json(res, 400, userError("serverError.department.confirmPeers"));
         }
         patch.peers = nextPeers;
       }
@@ -572,13 +577,13 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
         const sections = [...new Set(parsed.data)];
         const newSections = sections.filter(section => !(existingBot?.managedSections ?? []).includes(section));
         if (newSections.some(section => section !== "" && !store.sections.includes(section))) {
-          return json(res, 400, { error: "Create the named department before making a Chief responsible for it" });
+          return json(res, 400, userError("serverError.department.createFirst"));
         }
         if (sections.length && !(body.chiefOfStaff === true || (existingBot?.chiefOfStaff && body.chiefOfStaff !== false))) {
-          return json(res, 400, { error: "Only a Chief of Staff can be made responsible for additional departments" });
+          return json(res, 400, userError("serverError.department.chiefResponsibility"));
         }
         if (newSections.length && body.acknowledgePeerScope !== true) {
-          return json(res, 400, { error: "Confirm which additional departments this Chief is responsible for (acknowledgePeerScope)" });
+          return json(res, 400, userError("serverError.department.confirmResponsibility"));
         }
         patch.managedSections = sections;
       }
@@ -601,8 +606,7 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
       // the bot they constrain. An originless, session-less loopback caller may loosen only while every bot is idle.
       const loosened: string[] = [];
       const trustPatch = patch as Pick<Partial<BotRecord>, "outbound" | "connectorScopes" | "fallback">;
-      if (body.outbound !== undefined && trustPatch.outbound?.policy === "allow" &&
-          (existingBot?.outbound?.policy !== "allow" || trustPatch.outbound.dailyCap > existingBot.outbound.dailyCap)) loosened.push("outbound");
+      if (body.outbound !== undefined && trustPatch.outbound?.policy === "allow" && existingBot?.outbound?.policy !== "allow") loosened.push("outbound");
       if (body.connectorScopes !== undefined && existingBot?.connectorScopes &&
           (!trustPatch.connectorScopes || Object.entries(trustPatch.connectorScopes.apps).some(([slug, scope]) =>
             !existingBot.connectorScopes!.apps[slug] || (scope === "write" && existingBot.connectorScopes!.apps[slug] === "read")))) loosened.push("connectorScopes");
@@ -619,7 +623,7 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
       }
       // A shell can forge an Origin header: new cross-team authority from local scripts only while every bot is idle.
       if (loosened.includes("managedSections") && auth.kind === "loopback" && !DESKTOP_MANAGED && store.bots.some(bot => bot.busy)) {
-        return json(res, 409, { error: "Stop running bots before granting access to another department, or use the desktop app or a paired Full-access session." });
+        return json(res, 409, userError("serverError.department.stopBots"));
       }
       if (body.peers !== undefined && Array.isArray(existingBot?.peers)) {
         const nextPeers = patch.peers;
@@ -703,10 +707,10 @@ export function createBotPatchRoutes(deps: BotPatchRouteDeps): RouteHandler {
         const current = store.projectBotForTask(movedTask.id, movedTask.threadId);
         if (!current) return json(res, 404, { error: "no such task" });
         const checked = checkedModelSelection(normalizedSelection, { selection: current.modelSelection, busy: threadBusy(current.id, current.threadId) });
-        if (!checked.ok) return json(res, checked.status, { error: checked.error });
+        if (!checked.ok) return json(res, checked.status, refusalBody(checked));
         if (freshBrowserBot && activeGroupTurnForBot(freshBrowserBot.id)) {
           const groupChecked = checkedModelSelection(normalizedSelection, { selection: freshBrowserBot.modelSelection, busy: true });
-          if (!groupChecked.ok) return json(res, groupChecked.status, { error: groupChecked.error });
+          if (!groupChecked.ok) return json(res, groupChecked.status, refusalBody(groupChecked));
         }
       }
       if (freshBrowserBot && body.browserProfile !== undefined &&

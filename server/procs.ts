@@ -11,7 +11,7 @@ import {
 } from "node:child_process";
 import { closeSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import type { Readable, Writable } from "node:stream";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { botBox, type WrappedSpawn } from "./bot-box/box.ts";
 import type { BoxRequest } from "./bot-box/plan.ts";
 import { engineMemory } from "./engine-memory.ts";
@@ -153,6 +153,19 @@ function rememberEngineSession(child: ChildProcess): void {
   });
 }
 
+const liveSpawns = new Set<readonly string[]>();
+
+/** The command line of every process spawnCli started that has not exited yet. */
+export function liveCliCommands(): Iterable<readonly string[]> {
+  return liveSpawns;
+}
+
+function rememberLiveSpawn(child: ChildProcess, line: readonly string[]): void {
+  if (!child.pid) return;
+  liveSpawns.add(line);
+  child.once("exit", () => liveSpawns.delete(line));
+}
+
 /** `bot`: an engine running bots' turns, whose own servers that bot's browser may open on a server host.
  * `openmausbot`: everything else (logins, probes, the browser engine itself). */
 export type CliOwner = "bot" | "openmausbot";
@@ -160,7 +173,7 @@ export type CliOwner = "bot" | "openmausbot";
 /** The bot box (server/bot-box): a `bot` spawn runs in it where it is on; `box` asks for one for another owner, with more
  * paths or the host's network, and `false` keeps a spawn out of it. */
 export interface BoxSpawnOptions {
-  box?: boolean | Pick<BoxRequest, "rw" | "ro" | "net" | "botId" | "allowEnv">;
+  box?: boolean | Pick<BoxRequest, "rw" | "ro" | "net" | "botId" | "botThreads" | "allowEnv" | "relay">;
   /** On a Team Cloud, runs in its conversation's engine home though it is not a bot's engine (a keep-warm ping). */
   engineHome?: boolean;
   /** A bot's own work that is not its engine (its browser, a helper engine): memory runs out on it first, as on a `bot`
@@ -175,6 +188,14 @@ export function boxedSpawn(resolved: ResolvedSpawn, opts: CliSpawnOptions, owner
   const request = typeof opts.box === "object" ? opts.box : {};
   const home = homed ? { home: homed.home, shared: homed.shared } : {};
   return botBox.wrap({ command: resolved.command, args: resolved.args, cwd: typeof opts.cwd === "string" ? opts.cwd : undefined, env: opts.env ?? process.env, ...request, ...home });
+}
+
+/** What a process several conversations share must be boxed with to serve `cwd` (null with the box off): all of the bot's
+ * conversation folders for a conversation folder (task-workspaces/<bot>/<thread>, BoxRequest.botThreads), else `cwd`. */
+export function sharedBoxScope(cwd: string): string | null {
+  if (!botBox.enabled()) return null;
+  const parent = dirname(resolve(cwd));
+  return basename(dirname(parent)) === "task-workspaces" ? parent : resolve(cwd);
 }
 
 export function spawnCli(
@@ -203,6 +224,7 @@ export function spawnCli(
   } finally {
     for (const fd of boxed?.extraFds ?? []) try { closeSync(fd); } catch {}
   }
+  rememberLiveSpawn(child, [resolved.command, ...resolved.args]);
   // The broker token minted for this process dies with it.
   if (boxed?.token) child.once("exit", boxed.release);
   if (process.platform !== "win32") cliGroups.add(child);
@@ -265,7 +287,8 @@ function cutOffError(cli: string, timeout: number | undefined): Error {
   return Object.assign(new Error(`${cli} timed out after ${timeout} ms`), { killed: true, code: null, signal: null });
 }
 
-/** Concurrent probes on a busy machine can outlast the timeout, so a CLI that answered before keeps its last version. */
+export const CLI_VERSION_TIMEOUT_MS = 30_000;
+
 export function cliVersionReader(cli: string): (err: Error | null, stdout: string) => { version: string } | { reason: string } {
   let last: string | null = null;
   return (err, stdout) => {
@@ -273,8 +296,18 @@ export function cliVersionReader(cli: string): (err: Error | null, stdout: strin
     if (version) return { version: (last = version) };
     const failure = err as (NodeJS.ErrnoException & { killed?: boolean }) | null;
     const timedOut = failure?.killed === true && typeof failure.code !== "string";
-    if (timedOut && last) return { version: last };
-    return { reason: timedOut ? `\`${cli}\` took longer than 8 seconds to answer --version. The machine may be busy; check again.` : `\`${cli}\` CLI not found` };
+    if (failure?.code === "ENOENT") {
+      last = null;
+      return { reason: `\`${cli}\` CLI not found` };
+    }
+    if (failure?.code === "EACCES" || failure?.code === "EPERM") {
+      last = null;
+      return { reason: `\`${cli}\` could not run --version. Check its file permissions.` };
+    }
+    if (last && (timedOut || !err || typeof failure?.code === "number")) return { version: last };
+    return { reason: timedOut
+      ? `\`${cli}\` took longer than ${CLI_VERSION_TIMEOUT_MS / 1000} seconds to answer --version. The machine may be busy; check again.`
+      : !err ? `\`${cli}\` returned no version. Check again.` : `\`${cli}\` could not report its version. Check that it starts in a terminal, then check again.` };
   };
 }
 

@@ -9,6 +9,8 @@ import { writeFileAtomic } from "./atomic.ts";
 import { DATA_DIR, type AppConfig } from "./config.ts";
 import { isSkillName, parseSkillMd, SKILL_FILE_MAX_BYTES } from "../shared/skill-md.ts";
 import { prepareSkillFiles, readSkillDirectoryFiles, skillDirectorySha256, writeSkillDirectoryFiles, type SkillFile } from "./skill-files.ts";
+import { githubSkillOriginSchema, skillFolderDigest } from "./skill-folder.ts";
+import type { GitHubSkillOrigin } from "../shared/skill-import.ts";
 import type { SkillPackageStamp } from "./skills.ts";
 
 export function skillsLibraryEnabled(cfg: AppConfig): boolean {
@@ -144,6 +146,9 @@ export interface SkillLibraryEntry {
   sha256: string;
   directorySha256?: string;
   storageRevision?: string;
+  files?: string[];
+  filesSha256?: string;
+  github?: GitHubSkillOrigin;
   importedAt: string;
   reviewState: LibraryReviewState;
   /** Available to every existing and future bot, unless a private skill shadows it. */
@@ -177,6 +182,8 @@ export interface LibrarySkillListing {
   sha256: string;
   directorySha256?: string;
   storageRevision?: string;
+  files?: string[];
+  github?: GitHubSkillOrigin;
   importedAt: string;
   license?: string;
   compatibility?: string;
@@ -192,6 +199,9 @@ const skillLibraryEntrySchema = z.object({
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
   directorySha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   storageRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  files: z.array(z.string()).optional(),
+  filesSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  github: githubSkillOriginSchema.optional(),
   importedAt: z.string(),
   reviewState: z.enum(["approved", "disabled"]),
   everyBot: z.boolean().optional(),
@@ -275,6 +285,11 @@ function libraryContentMatches(root: string, entry: SkillLibraryEntry): boolean 
   try {
     const directory = libraryEntryDirectory(root, entry);
     if (entry.directorySha256) return skillDirectorySha256(readSkillDirectoryFiles(directory)) === entry.directorySha256;
+    if (entry.filesSha256) {
+      const file = join(directory, "SKILL.md");
+      return existsSync(file) && sha256Hex(readFileSync(file, "utf8")) === entry.sha256
+        && skillFolderDigest(directory, entry.files ?? []) === entry.filesSha256;
+    }
     if (readdirSync(directory).some(file => file !== "SKILL.md")) return false;
     const file = join(directory, "SKILL.md");
     if (!existsSync(file)) return false;
@@ -286,6 +301,9 @@ function libraryContentMatches(root: string, entry: SkillLibraryEntry): boolean 
 
 function librarySkillListing(root: string, entry: SkillLibraryEntry): LibrarySkillListing {
   const intact = libraryContentMatches(root, entry);
+  const changedWarning = entry.directorySha256 || entry.filesSha256
+    ? "stored skill files changed after review — enablement is blocked"
+    : "stored SKILL.md changed after review — enablement is blocked";
   return {
     name: entry.name,
     description: entry.description,
@@ -295,13 +313,15 @@ function librarySkillListing(root: string, entry: SkillLibraryEntry): LibrarySki
     source: entry.source,
     sha256: entry.sha256,
     ...(entry.directorySha256 ? { directorySha256: entry.directorySha256 } : {}),
+    ...(entry.files ? { files: entry.files } : {}),
+    ...(entry.github ? { github: entry.github } : {}),
     importedAt: entry.importedAt,
     ...(entry.license ? { license: entry.license } : {}),
     ...(entry.compatibility ? { compatibility: entry.compatibility } : {}),
     tags: entry.tags ?? [],
     warnings: intact
       ? entry.warnings
-      : [...entry.warnings, "stored SKILL.md changed after review — enablement is blocked"],
+      : [...entry.warnings, changedWarning],
     skippedFiles: entry.skippedFiles,
   };
 }
@@ -387,6 +407,8 @@ function installLibrarySkillContents(input: {
   compatibility?: string;
   tags?: string[];
   warnings?: string[];
+  skippedFiles?: string[];
+  github?: GitHubSkillOrigin;
   reviewState?: LibraryReviewState;
   package?: SkillPackageStamp;
   root?: string;
@@ -399,7 +421,12 @@ function installLibrarySkillContents(input: {
   const parsed = parseSkillMd(input.instructions);
   if ("error" in parsed) return parsed;
   if (parsed.name !== input.name) return { error: `the skill is named "${parsed.name}", not "${input.name}"` };
-  const prepared = prepareSkillFiles(input.directory ? readSkillDirectoryFiles(input.directory) : input.files ?? [{ path: "SKILL.md", content: input.instructions }]);
+  const suppliedFiles = input.directory
+    ? readSkillDirectoryFiles(input.directory)
+    : input.files?.some(file => file.path === "SKILL.md")
+      ? input.files
+      : [{ path: "SKILL.md", content: input.instructions }, ...(input.files ?? [])];
+  const prepared = prepareSkillFiles(suppliedFiles);
   if ("error" in prepared) return prepared;
   if (prepared.parsed.name !== input.name || prepared.files[0]?.content !== input.instructions) return { error: "Skill directory SKILL.md does not match its instructions" };
   const directorySha256 = skillDirectorySha256(prepared.files);
@@ -419,13 +446,16 @@ function installLibrarySkillContents(input: {
     source: input.source,
     sha256,
     ...publishLibraryFiles(root, input.name, prepared.files),
+    files: prepared.files.filter(file => file.path !== "SKILL.md").map(file => file.path),
+    filesSha256: directorySha256,
     importedAt: new Date().toISOString(),
     reviewState: input.reviewState ?? "disabled",
     ...(input.license ? { license: input.license } : {}),
     ...(input.compatibility ? { compatibility: input.compatibility } : {}),
     ...(tags?.length ? { tags } : {}),
     warnings: input.warnings ?? [],
-    skippedFiles: [],
+    skippedFiles: input.skippedFiles ?? [],
+    ...(input.github ? { github: input.github } : {}),
     ...(input.package ? { package: { ...input.package } } : {}),
   };
   // Bytes first, index second: the index is the commit point, so a crash leaves unreferenced bytes, never a dangling entry.
@@ -474,7 +504,7 @@ export function setLibrarySkillReviewState(
     entry.skippedFiles = [];
   }
   if (reviewState === "approved" && !libraryContentMatches(root, entry)) {
-    return { error: "stored SKILL.md changed after review — the library entry cannot be approved" };
+    return { error: `${entry.directorySha256 || entry.filesSha256 ? "stored skill files" : "stored SKILL.md"} changed after review — the library entry cannot be approved` };
   }
   entry.reviewState = reviewState;
   writeSkillLibraryIndex(root, index);

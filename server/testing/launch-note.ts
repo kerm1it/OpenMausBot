@@ -3,7 +3,7 @@
 // prompt file stays the same for every session of the bot. Fakes fold it back
 // into "the system prompt" they record and drop it from "the prompt", so a
 // test reads both as the model receives them.
-const LAUNCH_NOTE = /^<system-reminder>\nThis part of your instructions changes from turn to turn, so it arrives here instead of in the system prompt\. It replaces any earlier copy:\n\n([\s\S]*?)\n<\/system-reminder>(?:\n\n)?/;
+const LAUNCH_NOTE = /^<system-reminder>\nThis part of your instructions (?:changes from turn to turn, so it arrives here instead of in the system prompt\. It replaces any earlier copy|changed since this session started\. It replaces the earlier copy):\n\n([\s\S]*?)\n<\/system-reminder>(?:\n\n)?/;
 
 export function splitLaunchNote<T>(prompt: T): { note: string | null; prompt: T } {
   const message = (prompt as { message?: { content?: unknown } } | null)?.message;

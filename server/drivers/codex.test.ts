@@ -24,7 +24,7 @@ import { unsupportedCallsNotice } from "./codex-unsupported-calls.ts";
 import { rebuiltSessionNotice } from "../resume-recovery.ts";
 import { startFakeHttpMcp, type FakeHttpMcp } from "../testing/fake-http-mcp-server.ts";
 import * as procs from "../procs.ts";
-import * as nativePlugins from "./codex-plugins.ts";
+import { botBox } from "../bot-box/box.ts";
 import { autoVerdict } from "../auto-approve.ts";
 import { formatQuestionAnswers } from "../../shared/ask-question.ts";
 
@@ -161,87 +161,11 @@ describe("CodexDriver turns (fake app-server)", () => {
     scratch = mkdtempSync(join(tmpdir(), "omb-codex-test-"));
   });
 
-  it.each([false, true])("checks empty plugin snapshots before sending a prompt (extra enabled=%s)", async extra => {
-    const dump = join(scratch, "empty-plugin-discovery.json"); process.env.FAKE_CODEX_DUMP = dump;
-    await create({ environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex"), FAKE_CODEX_EXTRA_ENABLED_PLUGIN: extra ? "1" : "0" } });
-    const { turnId } = await instance.adapter.sendTurn({ threadId: "empty-plugins", text: "Fixture", pluginLibrary: { root: join(scratch, "library"), installed: [] } });
-    expect(await recorder.until(event => event.type === "turn.completed" && event.turnId === turnId)).toMatchObject({ ok: !extra });
-    const methods = JSON.parse(readFileSync(dump, "utf8")).calls.map((call: { method: string }) => call.method);
-    expect(methods).toContain("plugin/installed");
-    if (extra) expect(methods).not.toContain("turn/start");
-    else expect(methods).toContain("turn/start");
-  });
-
-  it("reports native plugin preparation failure and releases the turn", async () => {
-    await create();
-    vi.spyOn(nativePlugins, "prepareCodexPlugins").mockRejectedValueOnce(new Error("fixture plugin install failed"));
-    const { turnId } = await instance.adapter.sendTurn({ threadId: "prepare-failure", text: "Fixture" });
-    expect(await recorder.until(event => event.type === "turn.completed" && event.turnId === turnId)).toMatchObject({ ok: false, stopReason: "startup_error" });
-    expect(recorder.events).toContainEqual(expect.objectContaining({ type: "runtime.error", message: "fixture plugin install failed" }));
-    expect(instance.adapter.hasSession?.("prepare-failure")).toBe(false);
-    const next = await instance.adapter.sendTurn({ threadId: "prepare-failure", text: "Retry" });
-    expect(await recorder.until(event => event.type === "turn.completed" && event.turnId === next.turnId)).toMatchObject({ ok: true });
-  });
-
-  it("stops while native plugin preparation is pending without spawning later", async () => {
-    await create();
-    const dump = join(scratch, "must-not-spawn.json"); process.env.FAKE_CODEX_DUMP = dump;
-    let finish!: (value: nativePlugins.CodexPluginLaunch) => void;
-    vi.spyOn(nativePlugins, "prepareCodexPlugins").mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
-    const { turnId } = await instance.adapter.sendTurn({ threadId: "prepare-stop", text: "Never send" });
-    await instance.adapter.interruptTurn("prepare-stop");
-    expect(await recorder.until(event => event.type === "turn.completed" && event.turnId === turnId)).toMatchObject({ ok: false, stopReason: "interrupted" });
-    finish({ args: [], expected: {} });
-    await new Promise(resolve => setTimeout(resolve, 50));
-    expect(existsSync(dump)).toBe(false);
-    expect(recorder.events.filter(event => event.type === "turn.completed" && event.turnId === turnId)).toHaveLength(1);
-  });
-
   it("says once when its team tools did not start", async () => {
     await create({ environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex"), FAKE_CODEX_MCP_FAILED: "agents" } });
     await instance.adapter.sendTurn({ threadId: "team-tools", text: "Fixture" });
     await recorder.until((event) => event.type === "turn.completed");
     expect(recorder.events.filter((e) => e.type === "runtime.notice").map((e) => (e as { message: string }).message)).toEqual([TEAM_TOOLS_FAILED]);
-  });
-
-  it("defaults to the application home even when the parent process points at personal Codex", async () => {
-    const personal = join(scratch, ".codex");
-    mkdirSync(personal);
-    writeFileSync(join(personal, "config.toml"), "# personal sentinel\n");
-    vi.stubEnv("CODEX_HOME", personal);
-    process.env.FAKE_CODEX_DUMP = join(scratch, "runtime-home.json");
-    await create();
-    const { turnId } = await instance.adapter.sendTurn({ threadId: "home-isolation", text: "fixture" });
-    await recorder.until(event => event.type === "turn.completed" && event.turnId === turnId);
-    const seen = JSON.parse(readFileSync(process.env.FAKE_CODEX_DUMP, "utf8"));
-    expect(seen.env.CODEX_HOME).toBe(join(DATA_DIR, "providers", "codex"));
-    expect(readFileSync(join(personal, "config.toml"), "utf8")).toBe("# personal sentinel\n");
-  });
-
-  it.each([false, true])("verifies native plugin selection before start/resume (ignored=%s)", async ignored => {
-    const dump = join(scratch, "plugins.json"); process.env.FAKE_CODEX_DUMP = dump;
-    const nativeHome = join(scratch, ".codex");
-    await create({ mode: "resume", environment: { HOME: scratch, CODEX_HOME: nativeHome,
-      FAKE_CODEX_IGNORE_PLUGIN_OVERRIDES: ignored ? "1" : "0" } });
-    vi.spyOn(nativePlugins, "prepareCodexPlugins").mockResolvedValue({ args: ["-c", "plugins.alpha@openmausbot.enabled=false"], expected: { "alpha@openmausbot": false } });
-    for (const resumeCursor of [undefined, "codex-thread-1"]) {
-      const { turnId } = await instance.adapter.sendTurn({ threadId: "plugin-selection", text: "fixture", resumeCursor });
-      const completed = await recorder.until(event => event.type === "turn.completed" && event.turnId === turnId);
-      expect(completed).toMatchObject({ ok: !ignored });
-      const seen = JSON.parse(readFileSync(dump, "utf8"));
-      expect(seen.env.CODEX_HOME).toBe(nativeHome);
-      expect(seen.argv.indexOf("plugins.alpha@openmausbot.enabled=false")).toBeGreaterThan(seen.argv.findIndex((arg: string) => arg.startsWith("plugins={")));
-      const methods = seen.calls.map((call: { method: string }) => call.method);
-      expect(methods).toContain("plugin/installed");
-      if (ignored) {
-        expect(methods).not.toContain("thread/start");
-        expect(methods).not.toContain("thread/resume");
-        expect(methods).not.toContain("turn/start");
-        expect(recorder.events.some(event => event.type === "runtime.error" && event.message.includes("shared CODEX_HOME"))).toBe(true);
-      } else {
-        expect(methods.indexOf("plugin/installed")).toBeLessThan(methods.indexOf(resumeCursor ? "thread/resume" : "thread/start"));
-      }
-    }
   });
 
   const startupMounts = {
@@ -319,37 +243,37 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(existsSync(dump)).toBe(false);
   });
 
-  it("gates raw custom identities before mount renaming and disables ambient MCP servers", async () => {
+  it("gates raw custom identities without loading MCP servers from the external credential home", async () => {
     const dump = join(scratch, "scope-mcp.json"); process.env.FAKE_CODEX_DUMP = dump;
     mkdirSync(join(scratch, ".codex")); writeFileSync(join(scratch, ".codex/config.toml"), '[mcp_servers.notes]\nurl="https://example.test/ambient"\n');
     await create({ environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex"), FAKE_CODEX_MCP_OVERRIDES: "1" } });
     await instance.adapter.sendTurn({ threadId: "scope-mcp", text: "Fixture", toolScope: { allow: ["native:*", "mcp:notes:read"] }, integrations: { custom: { notes: { type: "sse", url: "https://example.test/notes", headers: {} } } } });
     await recorder.until((event) => event.type === "turn.completed");
     const seen = JSON.parse(readFileSync(dump, "utf8"));
-    expect(seen.argv).toContain("mcp_servers.notes.enabled=false");
+    expect(seen.argv).not.toContain("mcp_servers.notes.enabled=false");
     expect(JSON.stringify(seen.argv)).toContain("OMB_GATE_CONFIG_");
     expect(JSON.stringify(seen.argv)).not.toContain("https://example.test/notes");
     const before = seen.calls.filter((call: { method: string }) => call.method === "turn/start").length;
     expect(before).toBe(1);
-    expect(Object.keys(seen.calls.find((call: { method: string }) => call.method === "thread/start").params.config.mcp_servers)).toEqual(["notes_openmausbot"]);
-    expect(seen.calls.find((call: { method: string }) => call.method === "thread/start").params.config.mcp_servers.notes_openmausbot.default_tools_approval_mode).toBe("prompt");
+    expect(Object.keys(seen.calls.find((call: { method: string }) => call.method === "thread/start").params.config.mcp_servers)).toEqual(["notes"]);
+    expect(seen.calls.find((call: { method: string }) => call.method === "thread/start").params.config.mcp_servers.notes.default_tools_approval_mode).toBe("prompt");
     recorder.events.length = 0;
     await instance.adapter.sendTurn({ threadId: "scope-mcp", text: "Continue", resumeCursor: "old-session", toolScope: { allow: ["native:*", "mcp:notes:read"] }, integrations: { custom: { notes: { type: "sse", url: "https://example.test/notes", headers: {} } } } });
     await recorder.until((event) => event.type === "turn.completed");
     const restored = JSON.parse(readFileSync(dump, "utf8"));
-    expect(Object.keys(restored.calls.find((call: { method: string }) => call.method === "thread/resume").params.config.mcp_servers)).toEqual(["notes_openmausbot"]);
-    expect(restored.calls.find((call: { method: string }) => call.method === "thread/resume").params.config.mcp_servers.notes_openmausbot.default_tools_approval_mode).toBe("prompt");
+    expect(Object.keys(restored.calls.find((call: { method: string }) => call.method === "thread/resume").params.config.mcp_servers)).toEqual(["notes"]);
+    expect(restored.calls.find((call: { method: string }) => call.method === "thread/resume").params.config.mcp_servers.notes.default_tools_approval_mode).toBe("prompt");
   });
 
-  it("still mounts its own copy of a config.toml server when a tool selection switches config.toml's off", async () => {
+  it("mounts a selected server independently of the external credential home's config.toml", async () => {
     const dump = join(scratch, "scope-same.json"); process.env.FAKE_CODEX_DUMP = dump;
     mkdirSync(join(scratch, ".codex"), { recursive: true }); writeFileSync(join(scratch, ".codex/config.toml"), '[mcp_servers.notes]\nurl="https://example.test/notes"\n');
     await create({ environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex"), FAKE_CODEX_MCP_OVERRIDES: "1" } });
     await instance.adapter.sendTurn({ threadId: "scope-same", text: "Fixture", toolScope: { allow: ["native:*", "mcp:notes:read"] }, integrations: { custom: { notes: { type: "http", url: "https://example.test/notes", headers: {} } } } });
     await recorder.until((event) => event.type === "turn.completed");
     const seen = JSON.parse(readFileSync(dump, "utf8"));
-    expect(seen.argv).toContain("mcp_servers.notes.enabled=false");
-    expect(Object.keys(seen.calls.find((call: { method: string }) => call.method === "thread/start").params.config.mcp_servers)).toEqual(["notes_openmausbot"]);
+    expect(seen.argv).not.toContain("mcp_servers.notes.enabled=false");
+    expect(Object.keys(seen.calls.find((call: { method: string }) => call.method === "thread/start").params.config.mcp_servers)).toEqual(["notes"]);
   });
 
   it("refuses a scoped prompt when effective Codex configuration still has an ambient MCP server", async () => {
@@ -1185,7 +1109,7 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     await recorder.until((event) => event.type === "turn.completed");
   });
 
-  it("uses the instance environment for the Codex process", async () => {
+  it("uses the shared application CODEX_HOME for the Codex process", async () => {
     const codexHome = join(scratch, "custom-codex-home");
     await create({ environment: { CODEX_HOME: codexHome } });
     const dump = join(scratch, "environment.json");
@@ -1194,7 +1118,7 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     await instance.adapter.sendTurn({ threadId: "t-environment", text: "hi" });
     await recorder.until((event) => event.type === "turn.completed");
 
-    expect(JSON.parse(readFileSync(dump, "utf8")).env.CODEX_HOME).toBe(codexHome);
+    expect(JSON.parse(readFileSync(dump, "utf8")).env.CODEX_HOME).toBe(join(DATA_DIR, "providers", "codex"));
   });
 
   it("mounts connected apps without placing credential values in argv", async () => {
@@ -1262,7 +1186,7 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     expect(argv).not.toContain('mcp_servers.notes.default_tools_approval_mode');
   });
 
-  it("mounts a custom server under its own name when the user's config.toml already has one by that name", async () => {
+  it("does not let the external credential home's config.toml rename a custom server", async () => {
     const codexHome = join(scratch, "collision-codex-home");
     mkdirSync(codexHome, { recursive: true });
     writeFileSync(join(codexHome, "config.toml"), '[mcp_servers.fibery]\nurl = "https://mcp-eu-svc.fibery.io/mcp"\n');
@@ -1282,12 +1206,12 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     });
     await recorder.until((event) => event.type === "turn.completed");
     const argv = JSON.parse(readFileSync(dump, "utf8")).argv.join(" ");
-    expect(argv).toContain("mcp_servers.fibery_openmausbot.command");
-    expect(argv).not.toContain("mcp_servers.fibery.command");
+    expect(argv).not.toContain("mcp_servers.fibery_openmausbot.command");
+    expect(argv).toContain("mcp_servers.fibery.command");
     expect(argv).toContain("mcp_servers.notes.command");
   });
 
-  it("does not mount a second copy of a server the user's config.toml already runs, as one brought in from there", async () => {
+  it("mounts a server selected in OpenMausBot even when external config.toml declares it", async () => {
     const codexHome = join(scratch, "same-server-codex-home");
     mkdirSync(codexHome, { recursive: true });
     writeFileSync(join(codexHome, "config.toml"), '[mcp_servers.sentry]\ncommand = "npx"\nargs = ["-y", "@sentry/mcp-server"]\n');
@@ -1303,9 +1227,25 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     await recorder.until((event) => event.type === "turn.completed");
     const argv = JSON.parse(readFileSync(dump, "utf8")).argv.join(" ");
     expect(argv).not.toContain("mcp_servers.sentry_openmausbot");
-    expect(argv).not.toContain("mcp_servers.sentry.command");
+    expect(argv).toContain("mcp_servers.sentry.command");
     expect(argv).toContain("mcp_servers.notes.command");
   });
+
+  it("hands a person's own stdio server the bot box's proxy, its only way out of the box's network", async () => {
+    await create();
+    const servers = { custom: { todo: { command: "python3", args: ["todo.py"], env: { LIST: "x" } } } };
+    const envVars = async (threadId: string) => {
+      const dump = join(scratch, `${threadId}.json`);
+      process.env.FAKE_CODEX_DUMP = dump;
+      await instance.adapter.sendTurn({ threadId, text: "go", integrations: servers });
+      await recorder.until((event) => event.type === "turn.completed" && event.threadId === threadId);
+      const argv: string[] = JSON.parse(readFileSync(dump, "utf8")).argv;
+      return JSON.parse(argv.find((arg) => arg.startsWith("mcp_servers.todo.env_vars="))!.split("=").slice(1).join("="));
+    };
+    expect(await envVars("t-unboxed-proxy")).toEqual(["LIST"]);
+    vi.spyOn(botBox, "enabled").mockReturnValue(true);
+    expect(await envVars("t-boxed-proxy")).toEqual(["LIST", "HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy"]);
+  }, 20_000);
 
   it("reaches a url server through OpenMausBot's connector on Codex's own login, header values off argv", async () => {
     await create();
@@ -1538,7 +1478,10 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
       await recorder.until((event) => event.type === "turn.completed" && event.turnId === first.turnId);
       const errors = recorder.events.filter((event) => event.type === "runtime.error" && event.turnId === first.turnId);
       expect(errors).toHaveLength(1);
-      expect((errors[0] as { message: string }).message).toContain("isn't available on your ChatGPT plan");
+      expect(errors[0]).toMatchObject({
+        message: "This model isn't available on your ChatGPT plan, so it's now hidden from this account's model list. Pick another model.",
+        text: { key: "chat.notice.codexModelUnavailable" },
+      });
       expect(refuse).toHaveBeenCalledExactlyOnceWith("gpt-6.1-sol");
       const dump = join(scratch, "plan-refused.json");
       process.env.FAKE_CODEX_DUMP = dump;
@@ -1574,10 +1517,9 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     });
 
     it("passes the person's proxy settings to the proxy, which Codex would otherwise drop", async () => {
-      vi.stubEnv("NO_PROXY", undefined);
-      vi.stubEnv("no_proxy", undefined);
-      vi.stubEnv("NODE_USE_ENV_PROXY", undefined);
       plan();
+      vi.stubEnv("NO_PROXY", "");
+      vi.stubEnv("no_proxy", "");
       await create({ authMode: "chatgpt-plan", environment: { HTTPS_PROXY: "http://proxy.example.test:3128", NODE_EXTRA_CA_CERTS: "/etc/corp-ca.pem" } });
       const dump = join(scratch, "plan-proxy-env.json");
       process.env.FAKE_CODEX_DUMP = dump;
@@ -1872,6 +1814,8 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
 
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     expect(seen.argv.join(" ")).toContain("mcp_servers.computer.command");
+    // Codex would end a cloud computer file copy after its own 60 s default.
+    expect(seen.argv).toContain("mcp_servers.computer.tool_timeout_sec=560");
     expect(seen.argv.join(" ")).toContain("/tmp/container-mcp.js");
     expect(seen.argv.join(" ")).toContain("OMB_VM_TOKEN");
     expect(seen.argv.join(" ")).not.toContain("vm-secret");
@@ -2032,9 +1976,10 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
       expect(seen.env.OPENMAUSBOT_CHATGPT_TOKEN).toBe(plan ? "synthetic-chatgpt-token" : undefined);
       expect(JSON.stringify({ argv: seen.argv, calls: seen.calls })).not.toContain("synthetic-chatgpt-token");
       if (plan) {
-        expect(seen.env.CODEX_HOME).toBe(join(scratch, ".codex"));
+        expect(seen.env.CODEX_HOME).toBe(join(DATA_DIR, "providers", "codex"));
+        expect(seen.env.CODEX_HOME).not.toBe(join(scratch, ".codex"));
         expect(seen.argv.some((arg: string) => arg.startsWith("shell_environment_policy.exclude="))).toBe(false);
-      } else expect(seen.env.CODEX_HOME).toBe(join(scratch, ".codex"));
+      } else expect(seen.env.CODEX_HOME).toBe(join(DATA_DIR, "providers", "codex"));
       const threadCalls = seen.calls.filter((call: { method: string }) => ["thread/start", "thread/resume"].includes(call.method));
       expect(threadCalls).toHaveLength(1);
       if (plan) expect(threadCalls[0].params.config["shell_environment_policy.exclude"]).toEqual(["OPENMAUSBOT_CHATGPT_TOKEN"]);
@@ -2213,6 +2158,69 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     expect(calls.map((call: { method: string }) => call.method)).toEqual(["initialize", "initialized", "config/read", "thread/resume", "thread/unarchive", "thread/start", "turn/start"]);
     expect(calls.find((call: { method: string }) => call.method === "turn/start").params.input).toEqual([{ type: "text", text: recoveryText }]);
     expect(recorder.events.filter((e) => e.type === "session.started")).toMatchObject([{ sessionId: "codex-thread-1", rebuilt: true }]);
+  });
+
+  // codex-cli 0.167.0's words for a session saved under another provider than the one Codex runs on.
+  const PROVIDER_MISMATCH = {
+    code: -32600,
+    data: { type: "modelProviderMismatch", modelProvider: "custom", currentModelProvider: "magpie" },
+    message: "This chat uses custom, but your current provider is magpie. Switch to custom to continue.",
+  };
+
+  it("rebuilds a thread Codex keeps under another provider, once, from the chat", async () => {
+    await create({ mode: "resume" });
+    const dump = join(scratch, "provider-mismatch.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    process.env.FAKE_CODEX_RESUME_ERROR = JSON.stringify(PROVIDER_MISMATCH);
+    const recoveryText = "History\nUser: go on";
+    await instance.adapter.sendTurn({ threadId: "t-provider-moved", text: "go on", resumeCursor: "custom-thread", recoveryText, model: "magpie::m1" });
+    await expect(recorder.until((e) => e.type === "turn.completed")).resolves.toMatchObject({ ok: true });
+    const calls = JSON.parse(readFileSync(dump, "utf8")).calls;
+    expect(calls.map((call: { method: string }) => call.method)).toEqual(["initialize", "initialized", "config/read", "thread/resume", "thread/start", "turn/start"]);
+    expect(calls.find((call: { method: string }) => call.method === "thread/start").params).toMatchObject({ model: "m1", modelProvider: "magpie" });
+    expect(calls.find((call: { method: string }) => call.method === "turn/start").params.input).toEqual([{ type: "text", text: recoveryText }]);
+    expect(recorder.events.filter((e) => e.type === "session.started")).toMatchObject([{ rebuilt: true }]);
+  });
+
+  it.each([
+    { ...PROVIDER_MISMATCH, data: undefined },
+    { ...PROVIDER_MISMATCH, code: -32603 },
+    { ...PROVIDER_MISMATCH, data: { type: "somethingElse" } },
+  ])("does not rebuild on a resume rejection that is not a provider mismatch: %j", async (error) => {
+    await create({ mode: "resume" });
+    const dump = join(scratch, "not-provider-mismatch.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    process.env.FAKE_CODEX_RESUME_ERROR = JSON.stringify(error);
+    process.env.FAKE_CODEX_RETRY_SCALE = "0.001";
+    await instance.adapter.sendTurn({ threadId: "t-not-mismatch", text: "go on", resumeCursor: "custom-thread", recoveryText: "History\nUser: go on", model: "magpie::m1" });
+    await expect(recorder.until((e) => e.type === "turn.completed")).resolves.toMatchObject({ ok: false });
+    const calls = JSON.parse(readFileSync(dump, "utf8")).calls;
+    expect(calls.some((call: { method: string }) => ["thread/start", "turn/start"].includes(call.method))).toBe(false);
+  });
+
+  it.each([
+    ["custom::m1", "custom"],
+    ["gpt-6-luna", "openai"],
+  ])("starts Codex on the provider of the chosen model %s, not config.toml's", async (model, provider) => {
+    await create();
+    const dump = join(scratch, "launch-provider.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-launch-provider", text: "hi", model });
+    await expect(recorder.until((e) => e.type === "turn.completed")).resolves.toMatchObject({ ok: true });
+    const seen = JSON.parse(readFileSync(dump, "utf8")) as { argv: string[]; calls: Array<{ method: string; params: any }> };
+    const override = `model_provider=${JSON.stringify(provider)}`;
+    expect(seen.argv[seen.argv.indexOf(override) - 1]).toBe("-c");
+    expect(seen.calls.find((call) => call.method === "thread/start")?.params).toMatchObject({ modelProvider: provider });
+  });
+
+  it("leaves Codex on config.toml's provider when no model is chosen", async () => {
+    await create();
+    const dump = join(scratch, "launch-no-model.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    await instance.adapter.sendTurn({ threadId: "t-launch-no-model", text: "hi" });
+    await expect(recorder.until((e) => e.type === "turn.completed")).resolves.toMatchObject({ ok: true });
+    const seen = JSON.parse(readFileSync(dump, "utf8")) as { argv: string[] };
+    expect(seen.argv.some((arg) => arg.startsWith("model_provider="))).toBe(false);
   });
 
   it("completes a turn whose process exit could not be confirmed without waiting for the stall watchdog", async () => {
@@ -2833,6 +2841,30 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     });
   });
 
+  it("carries the app-access fallback code to the approval card", async () => {
+    process.env.FAKE_CODEX_APPROVAL_REQUEST = JSON.stringify({ method: "mcpServer/elicitation/request", params: {
+      mode: "form", _meta: { app_name: "Safari" },
+      requestedSchema: { properties: { approval: { enum: ["once"] } }, required: ["approval"] },
+    } });
+    await create({ mode: "approval" });
+    await instance.adapter.sendTurn({ threadId: "t-app-fallback", text: "use Safari" });
+    const opened = await recorder.until((event) => event.type === "request.opened");
+    expect(opened).toMatchObject({ summary: "App access requested", summaryCode: "chat.notice.appAccessRequested" });
+    await instance.adapter.respondToRequest("t-app-fallback", opened.requestId!, { behavior: "deny" });
+    await recorder.until((event) => event.type === "turn.completed");
+  });
+
+  it("codes a declined generic MCP elicitation without an English server-name param", async () => {
+    process.env.FAKE_CODEX_APPROVAL_REQUEST = JSON.stringify({ method: "mcpServer/elicitation/request", params: { mode: "url" } });
+    await create({ mode: "approval" });
+    await instance.adapter.sendTurn({ threadId: "t-generic-elicitation", text: "go" });
+    await recorder.until((event) => event.type === "turn.completed");
+    expect(recorder.events.find((event) => event.type === "runtime.notice")).toMatchObject({
+      message: "An MCP server asked for input OpenMausBot can't show yet, so the request was declined.",
+      text: { key: "chat.notice.codexElicitationDeclinedGeneric" },
+    });
+  });
+
   it("auto-approves a schema-backed app-access form only once in Full access", async () => {
     await create({ mode: "mcp-app-approval" });
     const dump = join(scratch, "mcp-app-full.json");
@@ -2866,7 +2898,10 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
 
     expect(recorder.events.some((event) => event.type === "request.opened")).toBe(false);
     expect(JSON.parse(readFileSync(dump, "utf8")).decision).toEqual({ action: "decline" });
-    expect(recorder.events.find((event) => event.type === "runtime.notice")?.message).toBe("example asked for input OpenMausBot can't show yet, so the request was declined.");
+    expect(recorder.events.find((event) => event.type === "runtime.notice")).toMatchObject({
+      message: "example asked for input OpenMausBot can't show yet, so the request was declined.",
+      text: { key: "chat.notice.codexElicitationDeclined", params: { server: "example" } },
+    });
   });
 
   it("grants Codex additional permissions with their native response shape", async () => {

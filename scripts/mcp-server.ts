@@ -2,12 +2,34 @@
 // Model Context Protocol (MCP) server for OpenMausBot over JSON-RPC 2.0 stdio,
 // for external agents (Hermes, Claude Desktop, Cursor, etc.).
 import readline from "node:readline";
+import { allowedServerOrigin, EXAMPLE_ADDRESS } from "../electron/server-address.mjs";
 import { NATIVE_PLUGIN_TOOLS } from "../shared/plugin-tools.ts";
 import { callPluginTool } from "./mcp-plugin-tools.ts";
 import { isRecord, projectMessage } from "./mcp-message-projection.ts";
 
-import { validateBaseUrl } from "./mcp-url.ts";
-export { validateBaseUrl } from "./mcp-url.ts";
+/** A server's base URL: https anywhere, http only on loopback or a private network (LAN, Tailscale). */
+export function validateBaseUrl(url: string): string {
+  const trimmed = url.trim().replace(/\/+$/, "");
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(`Invalid OpenMausBot URL: '${url}'. Start it with http:// or https://, like ${EXAMPLE_ADDRESS}`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("OpenMausBot URL must use http:// or https://");
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("OpenMausBot URL must not contain credentials; use OPENMAUSBOT_TOKEN instead");
+  }
+  if ((parsed.pathname !== "/" && parsed.pathname !== "") || parsed.search || parsed.hash) {
+    throw new Error("OpenMausBot URL must be an origin without a path, query, or fragment");
+  }
+  if (!allowedServerOrigin(parsed.origin)) {
+    throw new Error(`${parsed.origin} is on the open internet and plain http isn't encrypted. Use the server's https:// address, or put HTTPS in front (cloudflared, Caddy or Tailscale).`);
+  }
+  return parsed.origin;
+}
 
 const configuredUrl = process.env.OPENMAUSBOT_URL ||
   (process.env.OMB_PORT ? `http://127.0.0.1:${process.env.OMB_PORT}` : undefined);

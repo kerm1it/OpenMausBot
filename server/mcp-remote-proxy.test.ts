@@ -501,7 +501,7 @@ describe("remote MCP tool directory", () => {
     const record = `OMB_REMOTE_MCP_CONFIG_${"a".repeat(64)}`;
     const descriptor = mcpStdioServer(spec(fake.url), { directory: { name: "whop" }, configEnvName: record })!;
     expect(descriptor.args!.slice(1)).toEqual(["--config-env", record]);
-    expect(Object.keys(descriptor.env!)).toEqual([record]);
+    expect(Object.keys(descriptor.env!).filter((name) => !/^(https?_proxy|no_proxy|node_use_env_proxy)$/i.test(name))).toEqual([record]);
     expect(descriptor.args!.join(" ")).not.toContain("directory-fixture-token");
     start(descriptor);
     await initialize();

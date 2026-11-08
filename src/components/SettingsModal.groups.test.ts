@@ -50,7 +50,7 @@ vi.mock("@/lib/interface-mode", () => ({
   useAdvancedMode: () => fixture.advancedMode,
   setAdvancedMode: fixture.setAdvancedMode,
 }));
-
+vi.mock("@/lib/analytics", () => ({ analyticsEnabled: () => false, setAnalyticsEnabled: vi.fn() }));
 vi.mock("./SettingsPrimitives", async (importOriginal) => {
   const original = await importOriginal<typeof import("./SettingsPrimitives")>();
   return {
@@ -102,7 +102,7 @@ describe("Settings rail groups", () => {
     expect(SETTINGS_GROUPS.map((group) => group.id)).toEqual(["you", "ai", "computers", "account"]);
     const ids = SECTIONS.map((entry) => entry.id);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(19);
+    expect(ids).toHaveLength(21);
     for (const entry of SECTIONS) expect(SETTINGS_GROUPS.map((group) => group.id)).toContain(entry.group);
   });
 
@@ -113,9 +113,9 @@ describe("Settings rail groups", () => {
     expect(html).toContain("glass-surface");
     expect(rail(html)).toEqual({
       you: ["general", "appearance", "companion"],
-      ai: ["engines", "connections", "decisionModel", "plugins"],
+      ai: ["engines", "connections", "decisionModel", "imageGeneration", "plugins"],
       computers: ["desktopWorkspaces", "computer", "logins"],
-      account: [ "usage", "backups", "import", "experimental"],
+      account: ["organization", "usage", "backups", "import", "experimental"],
     });
     expect(html).toContain('<optgroup label="AI">');
   });
@@ -144,9 +144,11 @@ describe("Settings rail groups", () => {
     expect(rail(render())).toEqual({ you: ["appearance", "companion"], computers: ["desktopWorkspaces"] });
   });
 
-  it("keeps the old deep links landing on the same page", () => {
+  it("lands the old deep links where their cards now live", () => {
     vi.stubGlobal("window", { ogb: { environments: {} } });
     fixture.section = "remote" as AppSettingsSection;
+    expect(render()).toContain('data-settings-section="desktopWorkspaces" aria-current="page"');
+    vi.stubGlobal("window", { ogb: {} });
     expect(render()).toContain('data-settings-section="companion" aria-current="page"');
     fixture.section = "connections";
     expect(render()).toContain('data-settings-section="connections" aria-current="page"');

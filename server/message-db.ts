@@ -9,6 +9,7 @@ import type { ResolvedSender, SteerQueueReason } from "../shared/wire.ts";
 import type { Message } from "./store.ts";
 import type { UsageTrigger } from "./usage-ledger.ts";
 import { ensureMemoryIndex } from "./message-db-memory-index.ts";
+import { attentionSelect } from "./message-db-attention.ts";
 import { MessageSearchWorker } from "./message-search-worker.ts";
 import { searchMessagesInDatabase, type SearchHit } from "./message-search-query.ts";
 import type { Notification, NotificationLogEntry } from "../shared/notification.ts";
@@ -540,6 +541,8 @@ export interface AttentionRow {
   name: string | null;
   setup: number | null;
   place: string | null;
+  nameCode: string | null;
+  nameParams: string | null;
   output: string | null;
   input: string | null;
   card: string | null;
@@ -547,10 +550,7 @@ export interface AttentionRow {
 
 
 export function attentionRows(since: number): AttentionRow[] {
-  const columns = "SELECT thread_id AS threadId, id, at, kind, json_extract(json, '$.from.botId') AS fromBotId, json_extract(json, '$.digest.botId') AS digestBotId, " +
-    "json_extract(json, '$.tool.name') AS name, json_extract(json, '$.tool.setup') AS setup, json_extract(json, '$.tool.place') AS place, " +
-    `substr(json_extract(json, '$.tool.output'), 1, 2000) AS output, ${MULTI_EXECUTE_INPUT}, ` +
-    "CASE WHEN kind = 'options' THEN json_extract(json, '$.card') END AS card";
+  const columns = attentionSelect(MULTI_EXECUTE_INPUT);
   return db().prepare(
     `${columns} FROM messages INDEXED BY messages_work_at WHERE ${WORK_KINDS} AND kind = 'options' AND at >= ? ` +
     "AND json_extract(json, '$.card.answered') IS NULL AND coalesce(json_extract(json, '$.card.dismissed'), 0) = 0 " +
@@ -693,6 +693,11 @@ export function optionCardsForTools(tools: readonly string[]): Array<{ threadId:
 export function appDocRefs(): string[] {
   const rows = db().prepare("SELECT json_extract(json, '$.app.doc') AS doc FROM messages WHERE kind = 'app' UNION SELECT h.value FROM messages m, json_each(m.json, '$.app.history') h WHERE m.kind = 'app'").all() as Array<{ doc: unknown }>;
   return rows.flatMap((row) => (typeof row.doc === "string" && row.doc ? [row.doc] : []));
+}
+
+/** Pages shown with show_html `live`, newest first: the rows a server picks up again after a restart. */
+export function liveAppRows(limit = 100): Array<{ threadId: string; messageId: string }> {
+  return db().prepare("SELECT thread_id AS threadId, id AS messageId FROM messages WHERE kind = 'app' AND json_extract(json, '$.app.live') = 1 ORDER BY rowid DESC LIMIT ?").all(limit) as Array<{ threadId: string; messageId: string }>;
 }
 
 export function threadsReferencing(fragment: string): string[] {

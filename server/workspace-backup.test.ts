@@ -370,7 +370,7 @@ describe("encrypted full workspace backups", () => {
       "vm-home/.browser-profiles/chrome/Cookies", "vm-homes/abc/.browser-profiles/chromium/Cookies",
       "tmp/omb-mcp-123/mcp.json", ".tmp/secret",
       "logins.json.enc", "logins-key", "logins.json.enc.123.05a7b3e0-1234.tmp",
-      "highlevel.json.enc", "highlevel-key", "connected-apps-installation.json", "webhook-key",
+      "connected-apps-installation.json", "webhook-key",
     ];
     for (const root of [source, target]) {
       for (const path of authPaths) {
@@ -682,7 +682,11 @@ describe("encrypted full workspace backups", () => {
     expect(readFileSync(join(data, "CLAUDE.md"), "utf8")).toBe("Be brief.");
 
     symlinkSync(".", join(project, "loop"), process.platform === "win32" ? "junction" : "dir");
-    await expect(createWorkspaceBackup(root, { password: PASSWORD })).rejects.toThrow(/folder that contains it: workspaces\/ws\/project\/loop/);
+    await expect(createWorkspaceBackup(root, { password: PASSWORD })).rejects.toMatchObject({
+      message: "Cannot back up a symbolic link to the folder that contains it: workspaces/ws/project/loop",
+      errorKey: "serverError.backup.recursiveLink",
+      errorParams: { path: "workspaces/ws/project/loop" },
+    });
     rmSync(join(project, "loop"));
     mkdirSync(join(root, "workspaces", "other"), { recursive: true });
     writeFileSync(join(root, "workspaces", "other", "notes.md"), "theirs");
