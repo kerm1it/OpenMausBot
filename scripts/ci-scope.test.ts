@@ -294,7 +294,7 @@ describe("CI outputs", () => {
     ]);
     expect(out.vitest_matrix.include).toEqual([1, 2].map((shard) => ({
       os: "ubuntu-latest", part: `locale tests ${shard}/2`, shard, shards: 2,
-      files: VITEST_SUBSETS["locale-tests"].files.join(" "), e2e: "all", node_tests: shard === 1, workers: 4,
+      files: VITEST_SUBSETS["locale-tests"].files.join(" "), e2e: "all", node_tests: shard === 1, workers: 1,
     })));
     expect(ciOutputs(selectCiScope(["src/locales/de.json", "src/App.tsx"]), PR).vitest_matrix).toEqual(vitestMatrix(["ubuntu-latest"]));
   });
@@ -303,7 +303,7 @@ describe("CI outputs", () => {
     const out = ciOutputs(selectCiScope(["docs/analytics.md"]), PR);
     expect(out).toMatchObject({ jobs: ["vitest"] });
     expect(out.vitest_matrix.include).toEqual([{
-      os: "ubuntu-latest", part: "docs tests", shard: 1, shards: 1, files: VITEST_SUBSETS["docs-tests"].files.join(" "), e2e: "all", node_tests: false, workers: 4,
+      os: "ubuntu-latest", part: "docs tests", shard: 1, shards: 1, files: VITEST_SUBSETS["docs-tests"].files.join(" "), e2e: "all", node_tests: false, workers: 1,
     }]);
     expect(ciOutputs(selectCiScope(["docs/analytics.md", "src/locales/de.json"]), PR).vitest_matrix.include.map((entry: { part: string }) => entry.part))
       .toEqual(["locale tests 1/2", "locale tests 2/2", "docs tests"]);
