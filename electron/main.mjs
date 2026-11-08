@@ -1,5 +1,5 @@
 import { installWorkspaceRail, workspacePlaces, visibleWorkspaceState, isManagedCloudEnvironment } from "./workspace-rail.mjs";
-import { Tray, globalShortcut, app, autoUpdater as nativeAutoUpdater, BrowserWindow, Notification, WebContentsView, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, utilityProcess, nativeTheme } from "electron";
+import { Tray, globalShortcut, app, autoUpdater as nativeAutoUpdater, BrowserWindow, Notification, WebContentsView, clipboard, desktopCapturer, dialog, ipcMain, Menu, nativeImage, net, powerMonitor, powerSaveBlocker, safeStorage, screen, session, shell, systemPreferences, utilityProcess, nativeTheme } from "electron";
 import { createRequire } from "node:module";
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
@@ -60,7 +60,7 @@ import { buildApplicationMenu } from "./menu.mjs";
 import { createComputerSharing, isHomeFolder, validateSharedFolders } from "./computer-sharing.mjs"; import { installServerLending } from "./server-lending.mjs";
 import { createHostScreenLease } from "./host-screen-lease.mjs";
 import { acquireDataDirLease } from "./data-dir-lease.mjs";
-import { switchLocalEnvironment } from "./environment-switch.mjs";
+import { reviveAfterFailedSwitch, switchLocalEnvironment } from "./environment-switch.mjs";
 
 
 import { createDesktopText, DESKTOP_PORTS, registerDesktopPrefs, relabelDesktop } from "./desktop-prefs.mjs";
@@ -68,13 +68,14 @@ import { createDesktopText, DESKTOP_PORTS, registerDesktopPrefs, relabelDesktop 
 
 
  import { createOpenAtLogin, installOpenAtLogin } from "./open-at-login.mjs";
+import { cleanWorkspaceDir, profilesDir } from "./clean-workspace.mjs";
 import { handSaved } from "./own-home-main.mjs"; import { serverOpens } from "./saved-server.mjs";
 import { askForMicrophone, openPrivacySettings } from "./privacy-settings.mjs";
 
 
    import { createPlaceInboxWatch } from "./place-inbox-watch.mjs";  import { installPlaceLook } from "./place-look.mjs"; import { CHROME_RAIL_PATH, createChromeRail } from "./chrome-rail.mjs";
 import { createWindowStateFile } from "./window-state-file.mjs";
-import { createEnvironmentsFile } from "./environments-file.mjs";
+import { createEnvironmentsFile, ENVIRONMENTS_SAVE_FAILED } from "./environments-file.mjs";
 
 
 import { installServerSessions, reportOwnListeners } from "./server-session.mjs";
@@ -390,7 +391,9 @@ const DESKTOP_CRASH_LOG = path.join(LOG_DIR, "desktop-crashes.log");
 const DESKTOP_CRASH_LOG_MAX_BYTES = 512 * 1024;
 let logStream = null;
 let desktopShutdownStarted = false;
-import { companionAdvertisedHostedUrl, companionEnabledAtRest, companionOriginTarget, companionPairing, companionCloudDesktopAccess, companionBrowserControlAccess, companionRevoke, companionRunning, companionState, rememberCompanionKeepAwake, setCompanionHostedUrl, setCompanionLifecycleListener, startCompanion, stopCompanion } from "./companion.mjs";
+import { companionAdvertisedHostedUrl, companionEnabledAtRest, companionOriginTarget, companionPairing, companionPairingRenew, companionDeviceRoutes, companionStartsAtLaunch, companionCloudDesktopAccess, companionRouteOn, dismissCompanionNotice, rememberCompanionRoute, setCompanionMigrationFacts,
+  companionBrowserControlAccess, companionRevoke, companionRunning, companionState, rememberCompanionKeepAwake, setCompanionHostedUrl, setCompanionLifecycleListener, startCompanion, stopCompanion } from "./companion.mjs";
+import { createDesktopCompanionE2E, deviceCounts } from "./companion-e2e-desktop.mjs";
 import { autoStartCompanion } from "./companion-autostart.mjs";
 import { createPhoneLinkRoutes } from "./phone-link-routes.mjs";
 import { createRoutineWakeHold, rememberRoutineWake, routineWakeSettings } from "./routine-wake.mjs";
@@ -590,7 +593,7 @@ async function startManagedCompanionConnection({ waitForVerification = true } = 
   return publicManagedCompanionState();
 }
 
-async function startDesktopCompanion({ waitForHosted = true, remember = true } = {}) {
+async function startDesktopCompanion({ waitForHosted = true, remember = true, routes = ["wifi", "relay"] } = {}) {
   companionDesiredThisLaunch = true;
   companionLaunchGeneration += 1;
   const localState = await startCompanion(companionLaunchOptions());
@@ -1878,7 +1881,7 @@ const talk = installTalk({ ipcMain, localOnly, localOrHome, BrowserWindow, apple
 
 ipcMain.handle("companion:state", localOnly("companion:state", () => desktopCompanionState()));
 
-ipcMain.handle("companion:start", localOnly("companion:start", () => startDesktopCompanion()));
+ipcMain.handle("companion:start", localOnly("companion:start", (_event, routes) => startDesktopCompanion({ routes: Array.isArray(routes) ? routes : undefined })));
 ipcMain.handle("companion:stop", localOnly("companion:stop", () => stopDesktopCompanion()));
 ipcMain.handle("companion:keep-awake", localOnly("companion:keep-awake", async (_event, enabled) => {
   rememberCompanionKeepAwake(Boolean(enabled));
@@ -1891,6 +1894,7 @@ ipcMain.handle("routines:keep-awake", localOnly("routines:keep-awake", async (_e
 }));
 phoneLinkRoutes.install(ipcMain, localOnly);
 ipcMain.handle("companion:pairing", localOnly("companion:pairing", (_event, open, expectedToken) => {
+  phoneLinkRoutes.touched();
   return companionPairing(Boolean(open), expectedToken).then(decorateDesktopCompanionState);
 }));
 ipcMain.handle("companion:cloud-desktop", localOnly("companion:cloud-desktop", (_event, deviceId, allowed) =>
@@ -1968,7 +1972,7 @@ ipcMain.handle("companion-account:verify-code", localOnly("companion-account:ver
 ));
 ipcMain.handle("companion-account:retry", localOnly("companion-account:retry", () => ensureCompanionAccountService().retry()));
 ipcMain.handle("companion-account:prepare", localOnly("companion-account:prepare", () => {
-  return ensureCompanionAccountService().prepare();
+  return rememberCompanionRoute("https", true).then(() => ensureCompanionAccountService().prepare());
 }));
 ipcMain.handle("companion-account:sign-out", localOnly("companion-account:sign-out", () => ensureCompanionAccountService().signOut()));
 
