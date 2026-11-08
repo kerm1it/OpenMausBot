@@ -7,8 +7,8 @@ import { activeLocale, t } from "@/lib/i18n";
 import { api, useStore, type Bot, type ConfigStatus, type Message } from "@/state/store";
 import { ASK_FIELD, askPrimary, ASK_QUIET_BUTTON, AskCard, AskSettledLine, returnFocusToComposer } from "./AskCard";
 import { EmailConnectForm, type EmailConnectRefusal } from "./EmailCard";
-import { EmailRequestSettled } from "./EmailRequestCard";
-import type { EmailConnectRequest } from "../../shared/email";
+import { EmailOutgoingRequestForm, EmailRequestSettled } from "./EmailRequestCard";
+import type { EmailConnectRequest, EmailOutgoingFields } from "../../shared/email";
 import { productName } from "@/lib/brand";
 
 // Security: the value goes straight to the host's settings, never into the chat.
@@ -129,6 +129,16 @@ export function SecretRequestCard({
     }
   };
 
+  const saveOutgoing = async (fields: EmailOutgoingFields): Promise<string | null> => {
+    try {
+      await api(`${endpoint}/save`, { method: "POST", body: JSON.stringify({ threadId, ...fields }) });
+      returnFocusToComposer();
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  };
+
   const save = async (event?: FormEvent) => {
     event?.preventDefault();
     if (custom) return saveCustom();
@@ -227,6 +237,15 @@ export function SecretRequestCard({
         <div className="text-[13px] leading-relaxed text-ink-secondary">
           {t("chat.secret.remoteClient")}
         </div>
+      ) : email && secret.emailOutgoing && secret.address ? (
+        <EmailOutgoingRequestForm
+          address={secret.address}
+          initial={secret.emailOutgoing}
+          submit={saveOutgoing}
+          fieldClassName={cn(ASK_FIELD, "w-full")}
+          submitClassName={askPrimary(color).className}
+          submitStyle={askPrimary(color).style}
+        />
       ) : email ? (
         <EmailConnectForm
           initialAddress={secret.address ?? ""}
