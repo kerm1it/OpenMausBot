@@ -1,15 +1,11 @@
 name: Connector image
 
-# The MausBot connector (connector/), published with every OpenMausBot release as
+# The MausBot connector (connector/) can be published manually as
 # ghcr.io/milind-soni/mausbot-connector for linux/amd64 and linux/arm64. The
-# Admin pins it by digest; the summary prints it. Only a release tag publishes:
-# no pull request starts this, and a manual run on a branch builds nothing.
+# Admin pins it by digest; the summary prints it. Publishing requires selecting
+# a release tag when the workflow is started.
 on:
-  # release.yml dispatches this on the tag it just published: a tag created
-  # with the workflow token never fires push events on its own.
   workflow_dispatch:
-  push:
-    tags: ["v*"]
 
 permissions:
   contents: read

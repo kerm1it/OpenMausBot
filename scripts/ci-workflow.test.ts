@@ -167,6 +167,27 @@ describe("CI concurrency", () => {
     expect(source).not.toContain("latest-mac.yml");
   });
 
+  it("keeps desktop releases separate from package and image publishing", () => {
+    const releaseSource = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
+    const release = parse(releaseSource);
+    const npm = parse(readFileSync(new URL("../.github/workflows/npm-package.yml", import.meta.url), "utf8"));
+    const docker = parse(readFileSync(new URL("../.github/workflows/docker.yml", import.meta.url), "utf8"));
+    const connector = parse(readFileSync(new URL("../.github/workflows/connector-release.yml", import.meta.url), "utf8"));
+
+    expect(release.jobs.assemble.permissions).toEqual({ contents: "write" });
+    expect(releaseSource).not.toContain("npm-package.yml");
+    expect(releaseSource).not.toContain("docker.yml");
+    expect(releaseSource).not.toContain("connector-release.yml");
+    expect(npm.on).not.toHaveProperty("push");
+    expect(npm.on).toHaveProperty("workflow_dispatch");
+    expect(docker.on.push).toEqual(expect.objectContaining({ branches: ["main"] }));
+    expect(docker.on.push).not.toHaveProperty("tags");
+    expect(docker.on).toHaveProperty("workflow_dispatch");
+    expect(docker.jobs.publish.if).toBe("github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/v')");
+    expect(connector.on).toEqual({ workflow_dispatch: null });
+    expect(connector.jobs.publish.if).toBe("startsWith(github.ref, 'refs/tags/v')");
+  });
+
   it("checks out every module the release gate imports", () => {
     const release = parse(readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8"));
     const checkout = release.jobs.ci.steps.find((step: { uses?: string }) => step.uses?.startsWith("actions/checkout@"));
