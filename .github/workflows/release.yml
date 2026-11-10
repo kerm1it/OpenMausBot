@@ -410,8 +410,6 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: write
-      # to dispatch the npm, Docker and connector publishes on the new tag
-      actions: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -504,10 +502,3 @@ jobs:
           gh release view "v$VERSION" \
             --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft | grep -q false
           echo "v$VERSION is live in $GITHUB_REPOSITORY"
-          # Publishing created the tag with this workflow's token, and GitHub
-          # starts no workflow from events that token creates. Start the
-          # tag-driven publishes by hand, on the tag, so they see refs/tags/v*.
-          for workflow in npm-package.yml docker.yml connector-release.yml; do
-            gh workflow run "$workflow" --repo "$GITHUB_REPOSITORY" --ref "v$VERSION"
-          done
-          echo "dispatched the npm package, Docker image and connector image publishes on v$VERSION"
