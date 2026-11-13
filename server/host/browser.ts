@@ -118,11 +118,12 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     url: (port) => relay(port, { action: "cdp_url" }, { timeoutMs: 5_000, maxBytes: 65_536 }).then((answer) => answer.data?.cdpUrl),
   } });
   const host: HostKind = DESKTOP_MANAGED ? "desktop" : CLOUD_HOME || existsSync("/.dockerenv") ? "container" : "server";
+  const egressPort = (key: string): Promise<number | null> => DESKTOP_MANAGED ? Promise.resolve(null) : browserEgress.open(key);
   const idleMs = () => browserIdleMs(cfg, { cloudHome: Boolean(CLOUD_HOME) });
   const chromeEngine = new ChromeEngine({
     dataDir: DATA_DIR,
     host,
-    egressPort: (key) => browserEgress.open(key),
+    egressPort,
     egressNotice: (key) => browserEgress.takeNotice(key),
     idleMs,
     held: (session) => !turnResources.free(`browser:${session}`),
@@ -362,7 +363,7 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     }
     const session = currentBrowserSession(botId, profile, audience);
     const cdpUrl = lentChromeSession(browserProfileId) ? await lentChromeDoor(session) : undefined;
-    const spec = browserSessionSpec(status.binaryPath, session, browserProfileId, usesMyChrome(browserProfileId) ? undefined : await browserEgress.open(session), cdpUrl);
+    const spec = browserSessionSpec(status.binaryPath, session, browserProfileId, usesMyChrome(browserProfileId) ? undefined : await egressPort(session) ?? undefined, cdpUrl);
     usedBrowserSessions.set(session, spec);
     await prepareBrowserSessionState(status.binaryPath, session, { env: spec.env, persistent: profile !== "guest" && !attachesToChrome(spec.env), isCurrent: () => {
       const current = store.bot(botId);
@@ -383,7 +384,7 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     if (used) return { session, spec: used };
     const profileId = browserProfileIdOf(profile);
     const cdpUrl = lentChromeSession(profileId) ? await lentChromeDoor(session) : undefined;
-    return { session, spec: browserSessionSpec(engine.binaryPath, session, profileId, usesMyChrome(profileId) ? undefined : await browserEgress.open(session), cdpUrl) };
+    return { session, spec: browserSessionSpec(engine.binaryPath, session, profileId, usesMyChrome(profileId) ? undefined : await egressPort(session) ?? undefined, cdpUrl) };
   }
   /** fill_login's reads and typing, on whichever engine runs the session. */
   function loginInput(session: string, spec: Spec, env: NodeJS.ProcessEnv): Pick<FillLoginDeps, "engine" | "insertText" | "press" | "click"> {
@@ -537,7 +538,7 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     }
     const refusal = signedInSitesRefusal(profile);
     if (refusal) return { status: 409, error: refusal };
-    return { binaryPath: engine.binaryPath, session, env: browserSessionSpec(engine.binaryPath, session, profile, await browserEgress.open(session)).env, encryptionKey: browserEngineEncryptionKey() };
+    return { binaryPath: engine.binaryPath, session, env: browserSessionSpec(engine.binaryPath, session, profile, await egressPort(session) ?? undefined).env, encryptionKey: browserEngineEncryptionKey() };
   }
   /** What Settings shows of the engine that runs bots' browsers here; My Chrome stays on agent-browser. */
   function engineSummary<T extends { myChrome: boolean }>(agentBrowser: T): (T | (ReturnType<ChromeEngine["summary"]> & { myChrome: boolean })) & { engine: BrowserEngineKind; serverSites?: boolean } {

@@ -96,24 +96,30 @@ and [MausBot Cloud](cloud-pro.md#your-chrome).
 
 ## What a bot's browser can reach
 
-Every Chrome OpenMausBot launches for a bot sends all of its connections
-through an egress gate: a SOCKS5 server on `127.0.0.1`, one per browser
-session, run by the OpenMausBot server (`server/browser/egress/`). The gate
-resolves names itself and checks every address a name resolves to before it
-connects, so redirects and DNS rebinding reach nothing it would refuse. It
-carries bytes only, so TLS, HTTP/2 and WebSockets are unchanged. Chrome sends
-loopback traffic through it too (`--proxy-bypass-list=<-loopback>`), and
-WebRTC sends no UDP around it. If the gate is not running, the browser
-connects nowhere.
+On a self-hosted server or MausBot Cloud, every Chrome OpenMausBot launches for
+a bot sends all of its connections through an egress gate: a SOCKS5 server on
+`127.0.0.1`, one per browser session, run by the OpenMausBot server
+(`server/browser/egress/`). The gate resolves names itself and checks every
+address a name resolves to before it connects, so redirects and DNS rebinding
+reach nothing it would refuse. It carries bytes only, so TLS, HTTP/2 and
+WebSockets are unchanged. Chrome sends loopback traffic through it too
+(`--proxy-bypass-list=<-loopback>`), and WebRTC sends no UDP around it. If the
+gate is not running, the browser connects nowhere.
+
+The desktop app does not put its built-in Chrome behind this gate and does not
+set an OpenMausBot proxy. Chrome uses the operating system's DNS, proxy and
+network routes directly, like another local Chrome profile. Consequently the
+desktop browser has the local person's network reachability; OpenMausBot's
+destination restrictions below apply only to self-hosted and Cloud browsers.
 
 | Destination | Desktop | Self-hosted server | MausBot Cloud |
 |---|---|---|---|
 | Public internet | yes | yes | yes |
-| OpenMausBot's own ports (loopback and this machine's addresses) | no | no | no |
-| Other ports on this computer | yes, by `localhost` or an address, not by a public name | only servers a bot's own processes opened (Linux), or allowed below; with "Open sites on this server" on, yes, by `localhost`, an address or a name that points at this server's own addresses, not a public name that points at loopback | only servers a bot's own processes opened |
-| Local network: 10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7 | yes, unless `browserEngine.egress.localNetwork` is `false` | only what `browserEngine.egress.allow` lists, or all of it with "Open sites on this server" on | no |
-| Link-local and cloud metadata (169.254/16, fe80::/10, `fd00:ec2::254`, 100.100.100.200) | no | no | no |
-| 0/8, 198.18/15, multicast | no | no | no |
+| OpenMausBot's own ports (loopback and this machine's addresses) | not filtered by OpenMausBot | no | no |
+| Other ports on this computer | not filtered by OpenMausBot | only servers a bot's own processes opened (Linux), or allowed below; with "Open sites on this server" on, yes, by `localhost`, an address or a name that points at this server's own addresses, not a public name that points at loopback | only servers a bot's own processes opened |
+| Local network: 10/8, 172.16/12, 192.168/16, 100.64/10, fc00::/7 | not filtered by OpenMausBot | only what `browserEngine.egress.allow` lists, or all of it with "Open sites on this server" on | no |
+| Link-local and cloud metadata (169.254/16, fe80::/10, `fd00:ec2::254`, 100.100.100.200) | not filtered by OpenMausBot | no | no |
+| 0/8, 198.18/15, multicast | operating system and network decide | no | no |
 
 OpenMausBot's own ports are the server's and its webhook receiver's, the
 desktop client relay, the companion and its control page and gateway, the Vite

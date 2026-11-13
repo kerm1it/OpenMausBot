@@ -506,6 +506,21 @@ describe("the bots' browser host by default", () => {
     expect(host.signedInSitesRefusal("work")).toBeNull();
     expect(host.engineSummary({ kind: "engine", version: "0.37.0", myChrome: true })).toEqual({ kind: "engine", version: "0.37.0", myChrome: true, engine: "agent-browser" });
   });
+
+  it("launches the desktop built-in browser without opening an egress gate", async () => {
+    vi.mocked(browserEngineStatus).mockReturnValue({ kind: "ready", binaryPath: "/usr/local/bin/agent-browser", version: "0.37.0", managed: false });
+    const open = vi.spyOn(browserEgress, "open");
+    try {
+      const { host } = setup(undefined);
+      const browser = await host.browserIntegration("scout", undefined, turn);
+      expect(browser?.spec.env).not.toHaveProperty("AGENT_BROWSER_PROXY");
+      expect(browser?.spec.env).not.toHaveProperty("AGENT_BROWSER_PROXY_BYPASS");
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+      vi.mocked(browserEngineStatus).mockReset();
+    }
+  });
 });
 
 describe("a deleted bot's browser", () => {

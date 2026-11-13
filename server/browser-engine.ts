@@ -13,7 +13,7 @@ import { BROWSER_VIEWPORT, viewportArgs, type PageSize } from "./browser-page-si
 import { browserRuntimeEnv, ownsBrowserViewport } from "./browser-runtime.ts";
 import { spawnBotWork } from "./oom-score.ts";
 import { SIGN_IN_PROMPT } from "./system-prompt.ts";
-import { gateChromeSettings } from "./browser/egress/gate.ts";
+import { credentialStoreFlags, gateChromeSettings } from "./browser/egress/gate.ts";
 import {
   AGENT_BROWSER_VERSION,
   agentBrowserReleaseUrl,
@@ -552,7 +552,7 @@ export function browserEngineStatus(options: BrowserLookupOptions = {}): Browser
 const PROFILE_CACHE_ARG = `--disk-cache-size=${64 * 1024 * 1024}`;
 
 /** agent-browser 0.37 relaunches a running Chrome without a word when a command's launch settings differ, so every
- * command for a session must carry these same ones. Chrome fails every connection through port 0. */
+ * command for a session must carry these same ones. */
 function agentBrowserEgressEnv(env: Record<string, string>, port: number, platform: NodeJS.Platform): Record<string, string> {
   const gate = gateChromeSettings(port, platform);
   return {
@@ -570,7 +570,7 @@ export function agentBrowserIntegration(input: {
   /** Guest sessions must never save cookies or localStorage to disk. */
   persistent?: boolean;
   headless?: boolean;
-  /** The egress gate port a launched Chrome connects through; without one the browser connects nowhere. */
+  /** The egress gate port a launched Chrome connects through; without one Chrome uses the operating system's route. */
   egressPort?: number;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
@@ -624,7 +624,15 @@ export function agentBrowserIntegration(input: {
     const launch = { ...env, ...input.launcher };
     // A kept profile's disk cache would otherwise grow to Chrome's default of several hundred megabytes per profile.
     if (env.AGENT_BROWSER_PROFILE) launch.AGENT_BROWSER_ARGS = [launch.AGENT_BROWSER_ARGS, PROFILE_CACHE_ARG].filter(Boolean).join("\n");
-    Object.assign(env, input.launcher, agentBrowserEgressEnv(launch, input.egressPort ?? 0, input.platform ?? process.platform));
+    Object.assign(env, input.launcher);
+    if (input.egressPort === undefined) {
+      delete env.AGENT_BROWSER_PROXY;
+      delete env.AGENT_BROWSER_PROXY_BYPASS;
+      const directArgs = (launch.AGENT_BROWSER_ARGS ?? "").split("\n").filter((arg) => arg && !/^--proxy-(?:server|bypass-list)=/.test(arg));
+      env.AGENT_BROWSER_ARGS = [...directArgs, ...credentialStoreFlags(input.platform ?? process.platform)].join("\n");
+    } else {
+      Object.assign(env, agentBrowserEgressEnv(launch, input.egressPort, input.platform ?? process.platform));
+    }
   }
   return { command: input.binaryPath, args: ["mcp", "--tools", "core", "--no-webmcp"], env };
 }
