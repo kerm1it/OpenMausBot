@@ -326,7 +326,7 @@ test("a purge of a missing folder still removes the entry (rm runs with force)",
   assert.deepEqual(plain(rmOptions), [{ recursive: true, force: true }]);
 });
 
-function switchFixture(t, { startResults = [], releaseLeaseThrows = false, stopUtilityServer = async () => true, acquireThrowsOn = [] } = {}) {
+function switchFixture(t, { startResults = [], releaseLeaseThrows = false, stopUtilityServer = async () => true, acquireThrowsOn = [], previousPort = 8799, targetPorts = [18799] } = {}) {
   const targetDir = mkdtempSync(join(tmpdir(), "omb-switch-fixture-"));
   t.after(() => rmSync(targetDir, { recursive: true, force: true }));
   const forks = [];
@@ -337,7 +337,7 @@ function switchFixture(t, { startResults = [], releaseLeaseThrows = false, stopU
     localSwitchInFlight: false,
     runningDataDir: null,
     serverProc: null,
-    SERVER_PORT: 8799,
+    SERVER_PORT: previousPort,
     serverSupervisor: {
       calls: [],
       pause() { this.calls.push("pause"); },
@@ -363,10 +363,13 @@ function switchFixture(t, { startResults = [], releaseLeaseThrows = false, stopU
     environmentsState: { environments: [{ id: "l1", kind: "local", name: "Work", dataDir: targetDir }], activeId: "local" },
     desktopDataDir: () => "/Users/me/.openmausbot",
     startupEnvironmentDir: env.startupEnvironmentDir,
+    serverPortsForDataDir: (dir) => dir === targetDir ? targetPorts : [8799, 18799, 28799],
     withActive: env.withActive,
     persistEnvironments: (next) => { context.environmentsState = next; },
     navigateMainWindow: () => {},
-    rendererOrigin: () => "http://127.0.0.1:8799",
+    rendererOrigin: () => `http://127.0.0.1:${context.SERVER_PORT}`,
+    useServerPort: (port) => { context.SERVER_PORT = port; context.localOrigin = context.rendererOrigin(); },
+    showLocalServer: (port) => { context.shownFromPort = port; },
     dialog: { showErrorBox: () => {} },
     slog: () => {},
     nativeT: englishText.t,
@@ -411,7 +414,18 @@ test("a successful switch never runs the safety net", async (t) => {
   const { context, forks, targetDir } = switchFixture(t);
   const result = await context.switchLocalEnvironmentTo(targetDir, "l1");
   assert.deepEqual(plain(result), { ok: true });
-  assert.equal(forks.length, 1, "only the switch's own startChild fork");
+  assert.deepEqual(plain(forks), [[18799, targetDir]], "the target starts on its pinned port");
+  assert.equal(context.SERVER_PORT, 18799, "future navigation and supervisor restarts use the target's port");
+  assert.equal(context.localOrigin, "http://127.0.0.1:18799", "IPC trusts the target before its ready callbacks run");
+  assert.equal(context.shownFromPort, 8799, "a port change recreates the local window");
+});
+
+test("an unpinned environment keeps the current fallback port", async (t) => {
+  const { context, forks, targetDir } = switchFixture(t, { previousPort: 18799, targetPorts: [8799, 18799, 28799] });
+  const result = await context.switchLocalEnvironmentTo(targetDir, "l1");
+  assert.deepEqual(plain(result), { ok: true });
+  assert.deepEqual(plain(forks), [[18799, targetDir]]);
+  assert.equal(context.SERVER_PORT, 18799);
 });
 
 test("a child that will not stop aborts the switch before its lease is handed away", async (t) => {

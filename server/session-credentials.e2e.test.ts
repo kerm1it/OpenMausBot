@@ -14,9 +14,10 @@ const withBrowser = process.platform !== "win32";
 // Auto may land on this computer only on macOS and Windows.
 const itAutoThisComputer = process.platform === "linux" ? it.skip : it;
 
-async function fixture(test: (f: any) => Promise<void>, { thisComputer = false } = {}) {
+async function fixture(test: (f: any) => Promise<void>, { thisComputer = false, desktopManaged = false, customDomain, managedPolicy }: { thisComputer?: boolean; desktopManaged?: boolean; customDomain?: string; managedPolicy?: unknown } = {}) {
   const session = await launchVerificationServer();
   const { dataDir, url, logPath } = session.info;
+  const desktopOwnerToken = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG";
   let server: ChildProcess | undefined;
   try {
     const launchesPath = join(dataDir, "launches.jsonl");
@@ -44,6 +45,7 @@ async function fixture(test: (f: any) => Promise<void>, { thisComputer = false }
     await waitForExit(session.child, { signal: "SIGTERM" });
     const configPath = join(dataDir, "config.json");
     const config = JSON.parse(readFileSync(configPath, "utf8"));
+    if (customDomain) config.customDomain = customDomain;
     config.instances.claude.config.cli = claude;
     config.instances.opencodeGo = {
       driver: "opencodeGo", displayName: "ACP fixture",
@@ -60,14 +62,18 @@ async function fixture(test: (f: any) => Promise<void>, { thisComputer = false }
       }), { mode: 0o600 });
     }
     const log = openSync(logPath, "a", 0o600);
-    // With this computer, started as the desktop app starts its own server, which hears the driver record over its parent port.
     server = spawn(process.execPath, ["--experimental-strip-types",
-      ...(thisComputer ? ["--import", pathToFileURL(fileURLToPath(new URL("./testing/desktop-parent.mjs", import.meta.url))).href] : []),
+      ...(thisComputer || desktopManaged ? ["--import", pathToFileURL(fileURLToPath(new URL("./testing/desktop-parent.mjs", import.meta.url))).href] : []),
       fileURLToPath(new URL("./index.ts", import.meta.url))], {
       cwd: fileURLToPath(new URL("..", import.meta.url)),
       env: {
         ...verificationServerEnvironment({ FAKE_CLAUDE_MODE: "hang", FAKE_CLAUDE_RELEASE: release }, dataDir, Number(new URL(url).port)),
         ...(withBrowser ? { OMB_AGENT_BROWSER_PATH: browser } : {}),
+        ...(desktopManaged ? {
+          OMB_DESKTOP_PARENT: "1",
+          OMB_TEST_DESKTOP_OWNER_TOKEN: desktopOwnerToken,
+          ...(managedPolicy ? { OMB_TEST_DESKTOP_POLICY: JSON.stringify(managedPolicy) } : {}),
+        } : {}),
         ...(thisComputer ? { OMB_TEST_DESKTOP_CUA_CONNECTION: join(userData, "cua-connection.json") } : {}),
       },
       stdio: ["ignore", log, log],
@@ -81,7 +87,20 @@ async function fixture(test: (f: any) => Promise<void>, { thisComputer = false }
     const api = async (method: string, path: string, body?: unknown, token?: string) => {
       const response = await fetch(url + path, {
         method,
-        headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : { origin: url }) },
+        headers: {
+          "content-type": "application/json",
+          ...(token ? { authorization: `Bearer ${token}` } : { origin: url }),
+          ...(desktopManaged ? { "x-openmausbot-desktop-owner": desktopOwnerToken } : {}),
+        },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        signal: AbortSignal.timeout(30_000),
+      });
+      return { status: response.status, body: await response.json().catch(() => ({})) as any };
+    };
+    const unowned = async (method: string, path: string, body?: unknown) => {
+      const response = await fetch(url + path, {
+        method,
+        headers: { "content-type": "application/json", origin: url },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: AbortSignal.timeout(30_000),
       });
@@ -105,12 +124,42 @@ async function fixture(test: (f: any) => Promise<void>, { thisComputer = false }
     };
     const agents = async (token: string) => (await api("GET", "/api/internal/agents", undefined, token)).status;
     const acpServers = () => (JSON.parse(readFileSync(`${acpDump}.mcp.json`, "utf8")) as Array<{ name: string }>).map((server) => server.name);
-    await test({ dataDir, cli, api, turn, hold, finish, agents, launches: () => jsonl(launchesPath), rpc: () => jsonl(rpcPath), acpServers });
+    await test({ dataDir, cli, api, unowned, turn, hold, finish, agents, launches: () => jsonl(launchesPath), rpc: () => jsonl(rpcPath), acpServers });
   } finally {
     if (server) await waitForExit(server, { signal: "SIGTERM" });
     await session.close();
   }
 }
+
+it("offers self-hosted domain settings from the desktop-owned server", () => fixture(async (f) => {
+  const status = await f.api("GET", "/api/settings/custom-domain");
+  expect(status.status).toBe(200);
+  expect(status.body).toMatchObject({ supported: true, customDomain: "https://desktop.example.com" });
+  const pairing = await f.api("POST", "/api/auth/pairing", { scopes: ["client"] });
+  expect(pairing.status).toBe(200);
+  expect(pairing.body.url).toBe(`https://desktop.example.com/pair#code=${pairing.body.code}`);
+  const invite = new URL(pairing.body.inviteUrl);
+  expect(invite.protocol).toBe("openmausbot:");
+  expect(invite.searchParams.get("address")).toBe("https://desktop.example.com");
+  expect(await f.unowned("POST", "/api/settings/custom-domain", { domain: "other.example.com" })).toMatchObject({
+    status: 403,
+    body: { error: expect.stringContaining("desktop app or a paired device") },
+  });
+  const invalid = await f.api("POST", "/api/settings/custom-domain", { domain: "not-a-domain" });
+  expect(invalid.status).toBe(400);
+  expect(invalid.body.error).toMatch(/public domain|HTTPS/);
+  expect((await f.api("DELETE", "/api/settings/custom-domain")).status).toBe(200);
+}, { desktopManaged: true, customDomain: "https://desktop.example.com" }), 120_000);
+
+it("enforces managed remote-access policy on the desktop domain route", () => fixture(async (f) => {
+  const refused = await f.api("POST", "/api/settings/custom-domain", { domain: "not-a-domain" });
+  expect(refused).toMatchObject({ status: 403, body: { code: "managed_policy" } });
+  expect((await f.api("DELETE", "/api/settings/custom-domain")).status).toBe(200);
+}, { desktopManaged: true, managedPolicy: {
+  organizationId: "fixture-agency", organizationName: "Fixture Agency", expiresAt: Date.now() + 60_000, version: 1,
+  companyModelsOnly: false, allowedEngines: "all", mcp: { allowCustom: true, allowlist: [] },
+  computers: { thisComputer: true, localVm: true, box: true, vps: true }, remoteAccess: false,
+} }), 120_000);
 
 it("keeps a thread's Claude process and ACP session across turns, with agents and the browser mounted", () => fixture(async (f) => {
   const { bot } = await f.cli("new-bot", "--name", "Warm Claude");

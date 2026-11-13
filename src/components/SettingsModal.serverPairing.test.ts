@@ -5,7 +5,7 @@ import type { AppSettingsSection } from "@/state/store";
 import { SettingsModal } from "./SettingsModal";
 
 // These pin the card as always offered; the server decides who may act.
-const fixture = vi.hoisted(() => ({ section: "companion" as AppSettingsSection, config: undefined as { cloudHome?: boolean } | undefined, phonePairing: 0 }));
+const fixture = vi.hoisted(() => ({ section: "companion" as AppSettingsSection, config: undefined as { cloudHome?: boolean; managedPolicy?: { remoteAccess: boolean; organizationName: string } } | undefined, phonePairing: 0 }));
 // Pinned to Advanced: these cover the Advanced rail; Simple has its own suite.
 vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => true, setAdvancedMode: () => {} }));
 vi.mock("./DesktopCapabilities", () => ({ useDesktopCapabilities: () => ({ capabilities: {} }) }));
@@ -16,9 +16,9 @@ vi.mock("@/state/store", async (importOriginal) => ({
   useStore: () => ({ state: { appSettingsSection: fixture.section, config: fixture.config, appSettingsPhonePairing: fixture.phonePairing }, dispatch: vi.fn() }),
 }));
 vi.mock("./RemoteComputerSection", () => ({ RemoteComputerSection: () => null }));
-vi.mock("./CustomDomainSettings", () => ({ CustomDomainSettings: () => null }));
+vi.mock("./CustomDomainSettings", () => ({ CustomDomainSettings: ({ blocked }: { blocked?: string | null }) => `CUSTOM_DOMAIN_MARKER blocked=${blocked ?? ""}` }));
 vi.mock("./PhoneDevicesSection", () => ({ PhoneDevicesSection: ({ focusRequest }: { focusRequest?: number }) => `COMPANION_SECTION focus=${focusRequest ?? 0}` }));
-vi.mock("./ServerPairingCard", () => ({ ServerPairingCard: ({ cloudHome, focusRequest }: { cloudHome?: boolean; focusRequest?: number }) => `SERVER_PAIRING_CARD_MARKER${cloudHome ? " cloud" : ""} focus=${focusRequest ?? 0}` }));
+vi.mock("./ServerPairingCard", () => ({ ServerPairingCard: ({ cloudHome, focusRequest, remoteAccessBlocked }: { cloudHome?: boolean; focusRequest?: number; remoteAccessBlocked?: string | null }) => `SERVER_PAIRING_CARD_MARKER${cloudHome ? " cloud" : ""} focus=${focusRequest ?? 0} blocked=${remoteAccessBlocked ?? ""}` }));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -45,6 +45,22 @@ describe("Settings → Remote access: server pairing card visibility", () => {
     expect(render()).toContain("SERVER_PAIRING_CARD_MARKER");
   });
 
+  it("offers this computer's server pairing and custom domain beside its companion pairing", () => {
+    vi.stubGlobal("window", { ogb: { companion: {} } });
+    const html = render();
+    expect(html).toContain("COMPANION_SECTION");
+    expect(html).toContain("SERVER_PAIRING_CARD_MARKER");
+    expect(html).toContain("CUSTOM_DOMAIN_MARKER");
+  });
+
+  it("carries a managed remote-access refusal into both self-hosted controls", () => {
+    fixture.config = { managedPolicy: { remoteAccess: false, organizationName: "Fixture Agency" } };
+    vi.stubGlobal("window", { ogb: { companion: {} } });
+    const html = render();
+    expect(html).toContain("SERVER_PAIRING_CARD_MARKER focus=0 blocked=Managed by Fixture Agency");
+    expect(html).toContain("CUSTOM_DOMAIN_MARKER blocked=Managed by Fixture Agency");
+  });
+
   it("is offered when this desktop is a remote client of a hosted workspace, whose phones pair only here", () => {
     vi.stubGlobal("window", { ogb: { remoteClient: { active: true } } });
     expect(render()).toContain("SERVER_PAIRING_CARD_MARKER");
@@ -66,7 +82,7 @@ describe("Settings → Phone & devices opened by Connect your phone", () => {
     vi.stubGlobal("window", { ogb: { companion: {} } });
     const html = render();
     expect(html).toContain("COMPANION_SECTION focus=3");
-    expect(html).not.toContain("SERVER_PAIRING_CARD_MARKER");
+    expect(html).toContain("SERVER_PAIRING_CARD_MARKER focus=0");
   });
 
   it("on the person's own Cloud in this window, reveals the Cloud's own pairing code", () => {
@@ -92,7 +108,7 @@ describe("Settings → Phone & devices opened by Connect your phone", () => {
     vi.stubGlobal("window", { ogb: { companion: {} } });
     const html = render();
     expect(html).toContain("COMPANION_SECTION focus=0");
-    expect(html).not.toContain("SERVER_PAIRING_CARD_MARKER");
+    expect(html).toContain("SERVER_PAIRING_CARD_MARKER focus=0");
   });
 
   it("this computer's page is Phone & devices; a server's own page is This server", () => {

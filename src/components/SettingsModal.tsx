@@ -316,11 +316,15 @@ export function SettingsModal() {
 
   const phoneFocus = state.appSettingsPhonePairing;
   const computerPairs = currentPhonePairingTarget(state.config?.cloudHome === true) === "computer";
+  const remoteAccessBlocked = state.config?.managedPolicy?.remoteAccess === false
+    ? t("policy.remoteBlocked", { organization: state.config.managedPolicy.organizationName })
+    : null;
   const remoteAccess = {
+    thisComputer,
     client: <RemoteComputerSection hideWhenUnavailable legacyOnly />,
-    domain: remoteActive || thisComputer ? null : <CustomDomainSettings />,
+    domain: remoteActive ? null : <CustomDomainSettings blocked={remoteAccessBlocked} />,
     // Security: the server decides who may pair (an owner or admin session), not this gate.
-    pairing: thisComputer ? null : <ServerPairingCard cloudHome={state.config?.cloudHome === true} focusRequest={computerPairs ? 0 : phoneFocus} team={state.config?.team?.name} teamPhoneBlocked={state.config?.managedPolicy?.remoteAccess === false ? t("policy.teamRemoteBlocked", { organization: state.config.managedPolicy.organizationName }) : null} simple={!advanced} />,
+    pairing: <ServerPairingCard cloudHome={state.config?.cloudHome === true} focusRequest={computerPairs ? 0 : phoneFocus} team={state.config?.team?.name} remoteAccessBlocked={remoteAccessBlocked} simple={!advanced} />,
     companion: thisComputer ? <PhoneDevicesSection profileEmail={state.config?.profile?.email} focusRequest={phoneFocus} simple={!advanced} /> : null,
   };
 
@@ -404,7 +408,13 @@ export function SettingsModal() {
       case "backups": return <AdminOnly><WorkspaceBackupSettings /><CompanyBackupSettings /></AdminOnly>;
       case "import": return <AdminOnly><ImportSettings /></AdminOnly>;
       case "companion":
-        return <>{remoteAccess.companion}{remoteAccess.pairing}{remoteAccess.domain}{window.ogb?.environments ? null : remoteAccess.client}</>;
+        return remoteAccess.thisComputer
+          ? <>
+              <SettingsGroup label={t("settings.section.phoneDevices")}>{remoteAccess.companion}</SettingsGroup>
+              <SettingsGroup label={t("settings.section.thisServer")}>{remoteAccess.pairing}{remoteAccess.domain}</SettingsGroup>
+              {window.ogb?.environments ? null : remoteAccess.client}
+            </>
+          : <>{remoteAccess.pairing}{remoteAccess.domain}{window.ogb?.environments ? null : remoteAccess.client}</>;
       case "computer":
         return <><BuiltInBrowserRow /><ServerSitesRow /><BrowserProfilesRow /><AdminOnly><LocalComputerSection /></AdminOnly></>;
       case "logins":

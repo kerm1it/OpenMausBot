@@ -50,7 +50,7 @@ export function shownDevices(devices: PairedDevice[], cloudHome: boolean): Paire
 const button = "ui-button ui-button-primary";
 const quiet = "ui-button";
 
-export function ServerPairingCard({ initialSession = null, initialPairingCodes = true, cloudHome = false, focusRequest = 0, team, teamPhoneBlocked = null, simple = false }: { initialSession?: SessionState | null; initialPairingCodes?: boolean; cloudHome?: boolean; focusRequest?: number; team?: string; teamPhoneBlocked?: string | null; simple?: boolean }) {
+export function ServerPairingCard({ initialSession = null, initialPairingCodes = true, cloudHome = false, focusRequest = 0, team, remoteAccessBlocked = null, simple = false }: { initialSession?: SessionState | null; initialPairingCodes?: boolean; cloudHome?: boolean; focusRequest?: number; team?: string; remoteAccessBlocked?: string | null; simple?: boolean }) {
   const [session, setSession] = useState<SessionState | null>(initialSession);
   const [pairingCodes, setPairingCodes] = useState(initialPairingCodes);
   const [computerName, setComputerName] = useState<string | null>(null);
@@ -102,7 +102,7 @@ export function ServerPairingCard({ initialSession = null, initialPairingCodes =
   if (team && session?.kind === "session" && session.team) {
     return (
       <div ref={root} tabIndex={-1} data-phone-pairing="server" className="scroll-mt-4 rounded-xl focus:outline-none">
-        <TeamPhoneCard team={team} blocked={teamPhoneBlocked} />
+        <TeamPhoneCard team={team} blocked={remoteAccessBlocked} />
       </div>
     );
   }
@@ -188,6 +188,7 @@ export function ServerPairingCard({ initialSession = null, initialPairingCodes =
     return (
       <div ref={root} tabIndex={-1} data-phone-pairing="server" className="flex scroll-mt-4 flex-col gap-1.5 focus:outline-none">
         <div data-settings-rows="" className={cn(SIMPLE_CARD, "flex flex-col")}>
+          {remoteAccessBlocked ? <p role="status" className="px-4 py-2.5 text-[13px] leading-5 text-ink-secondary">{remoteAccessBlocked}</p> : null}
           {nameRow("px-4 py-2.5")}
           <SettingRow title={t("settings.simple.computer.pair")} subtitle={pairingCodes ? cloudHome ? t("remote.serverPairing.cloudPersonal") : undefined : t("remote.serverPairing.portal")}>
             {pairingCodes ? (
@@ -198,7 +199,7 @@ export function ServerPairingCard({ initialSession = null, initialPairingCodes =
                     <option value="client">{t("remote.serverPairing.scope.client")}</option>
                   </Select>
                 )}
-                <button type="button" data-phone-pairing-action onClick={() => void create()} disabled={busy} className="ui-button">
+                <button type="button" data-phone-pairing-action onClick={() => void create()} disabled={busy || Boolean(remoteAccessBlocked)} className="ui-button">
                   {busy ? t("remote.serverPairing.creating") : t("settings.simple.computer.createCode")}
                 </button>
               </div>
@@ -230,6 +231,7 @@ export function ServerPairingCard({ initialSession = null, initialPairingCodes =
   return (
     <div ref={root} tabIndex={-1} data-phone-pairing="server" className="scroll-mt-4 rounded-xl focus:outline-none">
     <Card title={t("remote.serverPairing.title")} subtitle={t(pairingCodes ? "remote.serverPairing.subtitle" : "remote.serverPairing.portalSubtitle")}>
+      {remoteAccessBlocked ? <p role="status" className="mt-3 text-[13px] leading-relaxed text-ink-secondary">{remoteAccessBlocked}</p> : null}
       {pairingCodes && cloudHome ? <p data-server-pairing-personal className="mt-3 text-[13px] text-ink-secondary">{t("remote.serverPairing.cloudPersonal")}</p> : null}
       {nameRow("mt-3")}
       {pairingCodes ? <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -243,7 +245,7 @@ export function ServerPairingCard({ initialSession = null, initialPairingCodes =
             {t("remote.serverPairing.scope.client")}
           </label>
         </>}
-        <button type="button" data-phone-pairing-action onClick={() => void create()} disabled={busy} className={button}>
+        <button type="button" data-phone-pairing-action onClick={() => void create()} disabled={busy || Boolean(remoteAccessBlocked)} className={button}>
           {busy ? t("remote.serverPairing.creating") : t("remote.serverPairing.create")}
         </button>
       </div> : <p data-server-pairing-portal className="mt-3 text-[13px] text-ink-secondary">{t("remote.serverPairing.portal")}</p>}

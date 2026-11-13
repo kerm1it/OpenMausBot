@@ -805,7 +805,7 @@ const emailSignIn = createEmailSignIn({
 });
 let customDomainRevision = 0;
 function savedCustomDomain(): string | null {
-  if (DESKTOP_MANAGED || !cfg.customDomain) return null;
+  if (!cfg.customDomain) return null;
   try { return normalizeCustomDomain(cfg.customDomain); }
   catch { return null; }
 }
@@ -813,8 +813,8 @@ function publicUrl(): string | null { return savedCustomDomain() ?? FALLBACK_PUB
 function customDomainStatus() {
   return {
     customDomain: savedCustomDomain(), publicUrl: publicUrl(), fallbackUrl: FALLBACK_PUBLIC_URL,
-    supported: !DESKTOP_MANAGED, appPort: PORT, webhookPort: WEBHOOK_PORT,
-    serverIpv4: DESKTOP_MANAGED ? null : customDomainIpv4(),
+    supported: true, appPort: PORT, webhookPort: WEBHOOK_PORT,
+    serverIpv4: customDomainIpv4(),
   };
 }
 const registry = new ProviderRegistry(BUILT_IN_DRIVERS, { statusFile: join(DATA_DIR, "providers", "engine-status.json") });
@@ -12865,7 +12865,6 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       res.setHeader("cache-control", "no-store");
       if (method === "GET") return json(res, 200, customDomainStatus());
       if (method === "POST" || method === "DELETE") {
-        if (DESKTOP_MANAGED) return json(res, 409, { error: "Custom domains are configured on a self-hosted OpenMausBot server, not the desktop companion." });
         if (!/^application\/json\b/i.test(String(req.headers["content-type"] ?? ""))) {
           return json(res, 415, { error: "content-type must be application/json" });
         }
@@ -12883,8 +12882,11 @@ const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
           return json(res, 401, { error: "Your session ended. Sign in again before connecting a domain." });
         }
         if (revision !== customDomainRevision) return json(res, 409, { error: "Domain settings changed during verification. Try again." });
-        saveConfig({ customDomain: verified.origin });
+        const refusal = managedPolicy.remoteAccessRefusal();
+        if (refusal) return json(res, 403, { error: refusal, code: "managed_policy" });
+        saveConfig({ customDomain: verified.origin, ...(DESKTOP_MANAGED ? { customDomainPort: PORT } : {}) });
         cfg.customDomain = verified.origin;
+        if (DESKTOP_MANAGED) cfg.customDomainPort = PORT;
         customDomainRevision++;
         return json(res, 200, customDomainStatus());
       }

@@ -62,8 +62,8 @@ describe("the document", () => {
 
   it("on a Team Cloud, the pairing every member's app uses is never remote access; off a team it still is", () => {
     expect(remoteAccessPaths(true)).not.toContain("/api/auth/pair");
-    expect(remoteAccessPaths(true)).toEqual(expect.arrayContaining(["/api/auth/pairing", "/api/team/phone-pairing"]));
-    expect(remoteAccessPaths(false)).toEqual(expect.arrayContaining(["/api/auth/pair", "/api/pair", "/api/auth/pairing", "/api/auth/email/start", "/api/auth/email/verify"]));
+    expect(remoteAccessPaths(true)).toEqual(expect.arrayContaining(["/api/auth/pairing", "/api/settings/custom-domain", "/api/team/phone-pairing"]));
+    expect(remoteAccessPaths(false)).toEqual(expect.arrayContaining(["/api/auth/pair", "/api/pair", "/api/auth/pairing", "/api/auth/email/start", "/api/auth/email/verify", "/api/settings/custom-domain"]));
   });
 
   it("no backup carries the kept rules", () => {
