@@ -14,6 +14,7 @@ const EXPECTED: Record<string, EngineCapabilities> = {
   claudeAgent: { resume: true, nativeReviewer: true, full: true, edits: true, subagents: false },
   codex: { resume: true, nativeReviewer: true, full: true, edits: false, subagents: false },
   piAgent: bare,
+  ompAgent: bare,
   antigravityAgent: { resume: true, nativeReviewer: false, full: true, edits: true, subagents: false },
   grokAgent: { resume: true, nativeReviewer: true, full: true, edits: true, subagents: false },
   geminiAgent: { resume: true, nativeReviewer: false, full: true, edits: true, subagents: false },
@@ -37,6 +38,7 @@ const EXPECTED: Record<string, EngineCapabilities> = {
   cerebras: chat,
   groq: chat,
   greenference: chat,
+  modelgo: chat,
   meta: chat,
 };
 

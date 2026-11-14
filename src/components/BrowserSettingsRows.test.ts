@@ -39,7 +39,6 @@ afterEach(() => {
   flushSync(() => root.unmount());
   host.remove();
 });
-
 describe("New browser setting", () => {
   it("is off while agent-browser runs the bots' browsers", () => {
     render();
@@ -73,7 +72,6 @@ describe("New browser setting", () => {
     expect(toggle().getAttribute("aria-checked")).toBe("true");
   });
 });
-
 describe("Open sites on this server", () => {
   const sites = () => host.querySelector<HTMLButtonElement>('button[aria-label="Open sites on this server"]');
   const show = () => flushSync(() => root.render(createElement(ServerSitesRow)));

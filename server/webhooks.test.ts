@@ -456,6 +456,31 @@ describe("WebhookManager", () => {
       expect(h.roomPosts).toHaveLength(0);
     });
 
+    it("refuses a retry that waited on an in-flight room post when the secret was rotated meanwhile", async () => {
+      const h = harness();
+      let fail: () => void = () => {};
+      const gate = new Promise<void>((_resolve, reject) => (fail = () => reject(new Error("voice engine down"))));
+      let calls = 0;
+      const manager = new WebhookManager({
+        ...h.options,
+        roomPost: async (trigger) => {
+          if (calls++ === 0) await gate;
+          h.roomPosts.push({ webhookId: trigger.id, payload: null });
+          return { posted: true as const, attachments: 0, threadId: `${trigger.groupId}-thread` };
+        },
+      });
+      const { webhook, secret } = manager.create({ name: "Room brief", prompt: "", botId: "maus-1", delivery: "post", groupId: "room-1" });
+      const event = { payload: { text: "once" }, deliveryId: "room-inflight-rotated" };
+      const first = Promise.resolve(manager.receive(webhook.endpointId, secret, event));
+      const retry = Promise.resolve(manager.receive(webhook.endpointId, secret, event));
+      expect(manager.rotateSecret(webhook.id)).not.toBeNull();
+      fail();
+
+      await expect(first).rejects.toThrow("voice engine down");
+      await expect(retry).rejects.toMatchObject({ status: 401 });
+      expect(h.roomPosts).toHaveLength(0);
+    });
+
     it("runs a retry that waited on an in-flight room post as a task when the webhook was switched to runs meanwhile", async () => {
       const h = harness();
       let fail: () => void = () => {};
@@ -710,5 +735,21 @@ describe("wrong-secret calls, counted", () => {
       [start + 60_000, "Invalid webhook URL or secret"],
       [start + 61 * 60_000, "Invalid webhook URL or secret (2 requests)"],
     ]);
+  });
+});
+
+describe("webhook that keeps one conversation", () => {
+  it("saves the option, hands it to each run, and turns it off again", () => {
+    const h = harness();
+    const { webhook, secret } = h.manager.create({ name: "Leads", prompt: "Handle it", botId: "maus-1", sameConversation: true });
+    expect(webhook.sameConversation).toBe(true);
+    h.manager.receive(webhook.endpointId, secret, { payload: {}, deliveryId: "one" });
+    expect(h.queued.at(-1)).toMatchObject({ webhookId: webhook.id, sameConversation: true });
+    expect(h.manager.update(webhook.id, { name: "Renamed" })?.sameConversation).toBe(true);
+    expect(new WebhookManager(h.options).list().find((candidate) => candidate.id === webhook.id)?.sameConversation).toBe(true);
+
+    expect(h.manager.update(webhook.id, { sameConversation: false })).not.toHaveProperty("sameConversation");
+    h.manager.receive(webhook.endpointId, secret, { payload: {}, deliveryId: "two" });
+    expect(h.queued.at(-1)?.sameConversation).toBeUndefined();
   });
 });

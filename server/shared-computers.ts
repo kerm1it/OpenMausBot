@@ -68,8 +68,10 @@ export type KnownLentComputer = {
   id: string; name: string; platform: "darwin" | "win32" | "linux" | null; online: boolean; busy: boolean; lent: boolean;
   lastSeenAt: number; lastUsedAt: number | null; scopes: { folders: number; terminal: boolean; screen: boolean; internet: boolean; chrome: boolean };
 };
+/** The bot an action is for, so the lent computer's menu can name it with its colour. */
+export type ActingBot = { name: string; color: string };
 type Job = {
-  id: string; operation: Operation; active: () => boolean; sent: boolean; leased: boolean; resolve: (result: unknown) => void; reject: (error: Error) => void;
+  id: string; operation: Operation; by?: ActingBot; active: () => boolean; sent: boolean; leased: boolean; resolve: (result: unknown) => void; reject: (error: Error) => void;
   timer: NodeJS.Timeout; delivery?: NodeJS.Timeout;
 };
 type Computer = { registration: Registration; owner: SharedComputerOwner; secret: string; seen: number; jobs: Map<string, Job>; wake?: () => void; polls: number };
@@ -81,6 +83,9 @@ const DELIVERY_MS = 10_000;
 /** How long a request waits for a computer seen this recently to finish reconnecting. */
 const RECONNECTING_MS = 60_000;
 const RECONNECT_WAIT_MS = 15_000;
+/** Longer than a desktop takes to notice a wake (the Admin's power read, then its own 15 s session read, about 75 s at
+ * worst): while a Cloud sleeps its desktops stop calling, so a computer lent to it is not offline, just not back yet. */
+const WAKE_WAIT_MS = 90_000;
 const OFFLINE = "This shared computer is offline. Keep its desktop app open; do not substitute files on the server.";
 const RESTARTING = "This server is restarting. Lending resumes by itself once it is back.";
 const lentButOffline = (name: string, seen: number, device: "PC" | "Mac" | "computer" = "computer") => `${name} is lent but has been offline for ${Math.max(1, Math.round((Date.now() - seen) / 60_000))} min: OpenMausBot on it is closed, the ${device} is asleep or locked, or its desktop app is signed out of MausBot Cloud. Tell the person in one sentence to open OpenMausBot on that ${device}; do not substitute files on the server.`;
@@ -155,6 +160,8 @@ export class SharedComputers {
   private copies: Pick<LentCopies, "away" | "answer"> | undefined;
   /** A computer connected, changed what it lends, or stopped. */
   changed: () => void = () => {};
+  /** When this server last woke from sleep; null when it never slept (off a Cloud home, or a plain restart). */
+  wokeAt: () => number | null = () => null;
   /** On the person's own Cloud, the bots' tool that asks them to turn on what their computer doesn't give now. */
   askTool: string | null = null;
   constructor(sessionLive: (id: string) => boolean, lent?: LentComputers, links?: Pick<DeviceLinks, "drop">, copies?: Pick<LentCopies, "away" | "answer">) {
@@ -166,7 +173,9 @@ export class SharedComputers {
     if (!/^[a-f0-9]{64}$/.test(secret)) throw failure("Invalid computer credential", 400);
     const key = SharedComputers.key(owner.session, registration.id);
     const old = this.computers.get(key);
-    if (old) {
+    // Same session, same person: refresh it. Its person changed (a server that became, or stopped being, one person's own):
+    // it is replaced below, so it is found under the key its session has now.
+    if (old && old.owner.person === owner.person) {
       this.authorize(registration.id, owner.session, secret);
       // Its link was let in for the internet connection and Chrome as lent then: lent or taken back since, the link starts over.
       if ((old.registration.internet === true) !== (registration.internet === true) || (old.registration.chrome === true) !== (registration.chrome === true)) this.links?.drop(key);
@@ -175,6 +184,8 @@ export class SharedComputers {
       this.changed();
       return;
     }
+    // Its person changed: the former person's record of it is no longer lent, not merely away.
+    if (old) this.lent?.stopped(old.owner.person, registration.id);
     this.reap();
     // A new id from the same session replaces its entry; no other session can reach, replace or squat this key.
     for (const [stale, entry] of this.computers) {
@@ -196,6 +207,14 @@ export class SharedComputers {
     for (const [key, entry] of this.computers) {
       if (entry.jobs.size === 0 && (!this.sessionLive(entry.owner.session) || Date.now() - entry.seen > RETAIN_MS)) { this.computers.delete(key); this.links?.drop(key); }
     }
+  }
+  private wakeLeft() {
+    const at = this.wokeAt();
+    return at === null ? 0 : Math.max(0, at + WAKE_WAIT_MS - Date.now());
+  }
+  /** A computer lent here and not stopped, which a server that just woke should wait for: known even after a boot that lost the live list. */
+  private lentAndExpected(principal: string, id: string) {
+    return this.lent?.list(principal).some(record => record.id === id && record.stoppedAt === null) ?? false;
   }
   private online(entry: Computer) { return this.sessionLive(entry.owner.session) && Date.now() - entry.seen < 40_000; }
   /** The desktop takes a 401 or 403 for a lost sign-in and signs in again, so a stopping server answers 503. */
@@ -298,8 +317,14 @@ export class SharedComputers {
     }));
   }
   /** The newest poll wins: one whose client dropped never takes the next job, and the reconnecting desktop is not refused. */
-  async poll(id: string, session: string, secret: string, gone?: AbortSignal) {
+  /** `person`: who the polling session is now; when it is no longer who registered, the computer is dropped (403) so the
+   * desktop connects again under its current key. */
+  async poll(id: string, session: string, secret: string, gone?: AbortSignal, person?: string) {
     const entry = this.authorize(id, session, secret);
+    if (person !== undefined && person !== entry.owner.person) {
+      this.disconnect(id, session, secret);
+      throw failure("This computer's access changed. Connect it again.", 403);
+    }
     const mine = ++entry.polls;
     entry.wake?.();
     entry.seen = Date.now();
@@ -308,7 +333,7 @@ export class SharedComputers {
       if (entry.polls !== mine || gone?.aborted) return null;
       for (const job of entry.jobs.values()) {
         if (!job.active()) { this.finish(entry, job, failure("The requesting turn ended")); continue; }
-        if (!job.sent) { this.send(entry, job); return { id: job.id, operation: job.operation }; }
+        if (!job.sent) { this.send(entry, job); return { id: job.id, operation: job.operation, ...(job.by ? { by: job.by } : {}) }; }
       }
       return null;
     };
@@ -359,13 +384,15 @@ export class SharedComputers {
     this.changed();
   }
   /** Another person's computer answers exactly like one that does not exist. */
-  async request(operation: Operation, principal: string | null, active: () => boolean): Promise<unknown> {
+  async request(operation: Operation, principal: string | null, active: () => boolean, by?: ActingBot | null): Promise<unknown> {
     if (!principal) throw failure("This conversation cannot use a shared computer: only a conversation started by the person who shared it can.", 403);
     const lent = () => [...this.computers.values()].find(candidate => candidate.registration.id === operation.computer_id && candidate.owner.person === principal);
     for (const deadline = Date.now() + RECONNECT_WAIT_MS; ;) {
       const known = lent();
       if (known && this.online(known)) break;
-      if (!known || Date.now() - known.seen > RECONNECTING_MS || Date.now() >= deadline || !active()) {
+      const reconnecting = known !== undefined && Date.now() - known.seen <= RECONNECTING_MS && Date.now() < deadline;
+      const waking = this.wakeLeft() > 0 && (known ? this.sessionLive(known.owner.session) : this.lentAndExpected(principal, operation.computer_id));
+      if ((!reconnecting && !waking) || !active()) {
         // Away: its lent folders answer from their copy here, a write to one lent with editing waits for it.
         const copy = active() ? this.copies?.answer(operation, principal, this.list(principal)) : null;
         if (copy) return copy;
@@ -396,9 +423,16 @@ export class SharedComputers {
     const forDesktop = entry.registration.fileEdits ? timed : withoutEdits;
     return new Promise((resolve, reject) => {
       const id = randomUUID();
-      const job: Job = { id, operation: forDesktop, active, sent: false, leased: false, resolve, reject, timer: setTimeout(() => this.finish(entry, job, failure("Computer action timed out. Its outcome is unknown; inspect before retrying.")), jobDeadlineMs(entry.registration, operation)) };
+      const job: Job = { id, operation: forDesktop, ...(by ? { by: { name: by.name, color: by.color } } : {}), active, sent: false, leased: false, resolve, reject, timer: setTimeout(() => this.finish(entry, job, failure("Computer action timed out. Its outcome is unknown; inspect before retrying.")), jobDeadlineMs(entry.registration, operation)) };
       entry.jobs.set(id, job); entry.wake?.();
     });
+  }
+  /** A server that just woke holds a bot's look at its computers until one of this person's lent ones is back, or the wait ends. */
+  async settledAfterWake(principal: string | null, active: () => boolean): Promise<void> {
+    if (!principal) return;
+    while (this.wakeLeft() > 0 && active() && this.list(principal).length === 0 && (this.lent?.list(principal) ?? []).some(record => record.stoppedAt === null)) {
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
   }
   /** Names the computer and its kind when it is known, so a bot says "your PC" to a Windows user, never "your Mac". */
   private offline(principal: string, id: string): string {

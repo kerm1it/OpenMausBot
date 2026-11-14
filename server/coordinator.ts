@@ -2,6 +2,7 @@ import { RuntimeCoordinator } from "./runtime-coordinator.ts";
 import type { WorkOrigin } from "./peer-provenance.ts";
 import type { LegacyThreadResolver } from "./runtime/import-legacy.ts";
 import type { Answerer, Assignment, EnvelopeNames, Level, Limits, Mode, Origin, Outcome, Owner, Reply, Requester, StatusView, TurnEvidence } from "./runtime/types.ts";
+import type { ModelSelection } from "../shared/wire.ts";
 
 /** One coordinate_bots call, as the internal route hands it to the server. */
 export type CoordinateBotsCall = {
@@ -21,6 +22,10 @@ export type CoordinateBotsCall = {
   projectId?: string;
   /** The assignment whose question the message answers, instead of new work. */
   answers?: string;
+  /** start_thread's report_back: the one target is the sender's own new thread, run on this model. */
+  ownThread?: { modelSelection?: ModelSelection; approvalMode?: "ask" };
+  /** post_to_thread: one message into this existing thread; wake starts a run there, else it waits for the next one. */
+  post?: { deliveryId: string; wake: boolean };
 };
 
 export type { LegacyThreadResolver };
@@ -38,13 +43,14 @@ export interface HandoffView {
   text: string;
   createdAt: number;
   requestBatchKey?: string;
+  /** Its reply only acknowledged (runtime/status-reply.ts). */
+  statusOnly?: boolean;
   status: HandoffStatus;
   result: string;
   reported: boolean;
   executions: number;
   startedAt?: number;
   lastProgressAt?: number;
-  approvalGranted: boolean;
   kind: "work" | "assignment";
   origin?: WorkOrigin;
   restarts: number;
@@ -87,6 +93,8 @@ export interface HostTurnResult {
   cards?: { question: string; ids: string[] };
   /** The question it ends on stayed in one person's private chat: only that person can answer it. */
   privateQuestion?: boolean;
+  /** An approval this turn asked for went unanswered: handed-off work a person started parks on this question. Never a grant. */
+  approvalAsk?: string;
   /** The host's stall watchdog stopped the turn, including a room turn a stall ended during setup, before it had an
    * outcome: it failed as `stalled`, not as a provider error. */
   stalled?: boolean;
@@ -101,10 +109,13 @@ export interface HandoffOptions {
   mode?: Mode;
   reply?: Reply;
   thread?: "standing" | "new";
-  approvalGranted?: boolean;
   rework?: boolean;
   requestBatchKey?: string;
+  /** One call handing the same work to several teammates: it counts once against the request budget. */
+  fanOut?: string;
   doneWhen?: string;
+  /** The target is a new thread of the requester's own bot (start_thread with report_back). */
+  ownThread?: boolean;
 }
 
 export type RoomAddress = Pick<HandoffView, "groupId" | "threadId" | "botId">;
@@ -139,6 +150,8 @@ export interface CoordinatorHost {
   names(node: HandoffView, parent?: HandoffView): EnvelopeNames;
   /** `restored` shows the question again only if the first showing never happened; a root parked on its own cards shows nothing more. */
   park(node: HandoffView, question: string, restored?: boolean): void;
+  /** Handed-off work has waited a day on the person; it closes at `closesAt` if nobody answers. Called once for each wait. */
+  remind?(node: HandoffView, closesAt: number): void;
   /** The level the target thread will really run with, so the envelope states the truth, and, when that came down a Chief's
    * chain, the Chief conversation's level. A Chief's level flows into a room with the hand-off, never onto the shared thread,
    * so it resolves from `source`, the requester's node, whose parents lead up the chain. */

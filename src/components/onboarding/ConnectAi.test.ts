@@ -8,7 +8,7 @@ import type { InstanceInfo } from "@/state/store";
 
 const f = vi.hoisted(() => ({
   instances: [] as InstanceInfo[], dispatch: vi.fn(), row: null as null | { bridge: unknown; onOpenSettings: () => void },
-  check: (): Promise<object> => Promise.resolve({ ok: true }), checks: [] as string[], fail: false,
+  check: (): Promise<object> => Promise.resolve({ ok: true }), checks: [] as string[], fail: false, config: {} as Record<string, unknown>, brand: "default", opened: [] as string[],
 }));
 vi.mock("@/state/store", () => ({
   api: async (path: string) => {
@@ -17,8 +17,10 @@ vi.mock("@/state/store", () => ({
     f.checks.push(path);
     return f.check();
   },
-  useStore: () => ({ state: { instances: f.instances }, dispatch: f.dispatch }),
+  useStore: () => ({ state: { instances: f.instances, config: f.config }, dispatch: f.dispatch }),
 }));
+vi.mock("@/lib/brand", () => ({ brandStatus: () => ({ source: f.brand }), productName: () => "MausBot" }));
+vi.mock("@/lib/app-links", async (original) => ({ ...await original<typeof import("@/lib/app-links")>(), openExternalLink: async (url: string) => { f.opened.push(url); } }));
 vi.mock("@/components/EngineSetup", async () => {
   const { createElement: h } = await import("react");
   return { EngineSetup: ({ instance, intent, description }: { instance: InstanceInfo; intent: string; description?: string }) =>
@@ -57,7 +59,7 @@ beforeEach(() => {
   f.check = () => Promise.resolve({ ok: true });
   f.checks = [];
   f.instances = [engine("grok", "grokAgent", "Grok", false), engine("claude", "claudeAgent", "Claude", false), engine("codex", "codex", "Codex", false)];
-  f.dispatch.mockReset();
+  f.dispatch.mockReset(); f.config = {}; f.brand = "default"; f.opened = [];
   f.row = null;
   f.fail = false;
   vi.stubGlobal("ogb", undefined);
@@ -239,5 +241,19 @@ describe("connecting an AI on the first screen", () => {
     expect(onClose).toHaveBeenCalledTimes(2);
     await act(async () => { dialog.dispatchEvent(new MouseEvent("mousedown", { bubbles: true })); });
     expect(onClose, "a click inside stays").toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("the ModelGo provider", () => {
+  const provider = (ready = false) => engine("modelgo", "modelgo", "ModelGo (API)", ready);
+
+  it("appears among the ordinary AI providers without a promotional card", async () => {
+    f.instances.push(provider());
+    await show();
+    const button = [...host.querySelectorAll<HTMLButtonElement>("button[aria-expanded]")].find((node) => node.textContent?.includes("ModelGo"))!;
+    expect(button.textContent).not.toContain("Sponsor");
+    expect(host.querySelector("[data-modelgo-option]")).toBeNull();
+    await act(async () => { button.click(); });
+    expect(host.querySelector('[data-engine-setup="modelgo"]')).toBeTruthy();
   });
 });

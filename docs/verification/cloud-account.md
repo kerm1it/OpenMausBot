@@ -63,7 +63,7 @@ Device polling completes browser approval automatically. The existing
 
 ```sh
 node --test electron/cloud-account.node-test.mjs electron/desktop-services.node-test.mjs
-pnpm exec vitest run src/components/CloudAccountSettings.test.ts src/components/SettingsModal.appearance.test.ts src/components/OrganizationSettings.test.ts
+pnpm exec vitest run src/components/CloudAccountSettings.test.ts src/components/settings/SettingsWindow.test.ts src/components/OrganizationSettings.test.ts
 pnpm exec tsc --noEmit
 pnpm check:electron
 pnpm i18n:check

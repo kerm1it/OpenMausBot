@@ -4,10 +4,10 @@ import { codexActionFailure } from "./codex-action-notice.ts";
 import { assertCodexPluginSelection, prepareCodexPlugins } from "./codex-plugins.ts";
 import { codexRuntimeEnvironment, initializeCodexRuntime, linkExternalCodexAuth } from "../codex-runtime.ts";
 import { codexToolSurfaceArgs } from "./codex-tool-surface.ts";
-import { codexShellDisabled, GUEST_CONFINED_CODEX_ARGS } from "./codex-guest.ts";
+import { codexShellDisabled, codexTurnConfigArgs } from "./codex-guest.ts";
 import { TEAM_TOOLS_FAILED, teamToolsFailed } from "./team-tools.ts";
 import { enabledMcpMounts, mcpStartupTracker, supportsMcpStartup } from "./codex-mcp-startup.ts";
-import { boxProxyEnvNames, type McpApprovalMode, mountMcpServer } from "./codex-mcp-mount.ts";
+import { boxAdmittedEnv, boxProxyEnvNames, customServerEnvBox, type McpApprovalMode, mountMcpServer } from "./codex-mcp-mount.ts";
 import { reportUnsupportedCalls, rolloutMark, type RolloutMark } from "./codex-unsupported-calls.ts";
 // The `codex` CLI headless over its app-server JSON-RPC (NDJSON on stdio): completion is
 // `turn/completed`, approvals arrive as server→client requests, resumeCursor is the codex thread id.
@@ -15,7 +15,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { codexConfigMcp, codexConfigRunsServer, mountedMcpServerName } from "./codex-mcp-names.ts";
+import { codexConfigMcp, codexConfigRunsServer, codexMcpDisableArgs, mountedMcpServerName } from "./codex-mcp-names.ts";
 
 import { DATA_DIR, stripWorkspaceCredentialEnv } from "../config.ts";
 import { laterStartup, openStartupModelCatalog, unconfirmedModelCatalog, writeStartupModelCache } from "../startup-model-catalog.ts";
@@ -23,6 +23,8 @@ import { hostedWorkspaceConfigured } from "../enterprise.ts";
 import { cloudHomeConfigured } from "../cloud-home.ts";
 import { serverVersion } from "../environment.ts";
 import { ChatGptPlanAuthController } from "./chatgpt-plan-auth.ts";
+import { chatgptPlanCodexArgs, PLAN_TOKEN_BRIDGE_ENV, planTokenRenewal, startPlanTokenBridge, type PlanTokenBridge } from "./codex-plan-token.ts";
+export { chatgptPlanCodexArgs } from "./codex-plan-token.ts";
 import { captureCliTree, describeSpawnFailure, killCliTree, spawnCli, waitForExit } from "../procs.ts";
 import { cliVersionProbe } from "../cli-version-probe.ts";
 import { codexLaunch, codexLaunchesStarting, codexLaunchSlot, codexRpcTimeoutMs, keepStopping, RELAUNCH_EXIT_WAIT_MS, spawnHoldingSlot, tryCodexLaunchSlot } from "./codex-process.ts";
@@ -52,11 +54,11 @@ import { commandSummary, toolDetailPreview } from "../tool-summary.ts";
 import { codexDeveloperInstructions, syncCodexInstructions } from "./codex-instructions.ts";
 import { volatileContextNote, withContextNote } from "./prompt-split.ts";
 import type { ApprovalMode } from "../../shared/approval-mode.ts";
-import { CodexDeviceAuthController } from "./codex-device-auth.ts";
+import { CodexDeviceAuthController } from "./codex-device-auth.ts"; import { messageItem } from "../harness/text-items.ts";
 import { codexAccountEmail, codexHome } from "./codex-identity.ts";
 import { containsControlCharacter, mcpAppApprovalForm, mcpAppApprovalText, mcpElicitationDeclined, plainRecord } from "./codex-app-approval.ts";
 import { archivedNativeCodexThread, CODEX_MISSING_CREDENTIALS, codexProviderMismatch, CODEX_SIGN_IN_EXPIRED, codexLimitFacts, codexNotSignedIn, CodexRpcError, codexSignInExpired, codexPlanModelRefused, codexSignInRefused, codexUserError, codexUserFailure, missingNativeCodexThread, type CodexRoute } from "./codex-errors.ts";
-import { codexLoginCheck, codexLoginStatus, storedCodexLogin } from "./codex-login.ts";
+import { codexLoginCheck, readCodexLogin, storedCodexLogin } from "./codex-login.ts";
 import { keyRejected, noteKeyAccepted, noteKeyRejected } from "../key-rejections.ts";
 import { classifyResumeFailure, mayReplay, rebuiltSessionNotice, recoveryPromptFor } from "../resume-recovery.ts";
 import { extractMcpImages } from "../mcp-tool-images.ts"; import { codexImageInputs, withoutInlineImages } from "./codex-images.ts";
@@ -96,24 +98,6 @@ function decodeConfig(raw: unknown): CodexConfig {
   };
 }
 
-/** The token-sharing Responses bridge carries no hosted tool_search (Codex 0.159.0 sends none), so
- * a plan turn's MCP tools load up front. */
-export function chatgptPlanCodexArgs(): string[] {
-  return [
-    "-c", 'model_provider="openai_chatgpt_plan"',
-    "-c", 'model_providers.openai_chatgpt_plan.name="ChatGPT plan"',
-    "-c", 'model_providers.openai_chatgpt_plan.base_url="https://api.openai.com/v1"',
-    "-c", 'model_providers.openai_chatgpt_plan.env_key="OPENMAUSBOT_CHATGPT_TOKEN"',
-    "-c", 'model_providers.openai_chatgpt_plan.wire_api="responses"',
-    "-c", "model_providers.openai_chatgpt_plan.requires_openai_auth=false",
-    "-c", "model_providers.openai_chatgpt_plan.supports_websockets=false",
-    "-c", 'cli_auth_credentials_store="ephemeral"',
-    "-c", "features.tool_search=false",
-    "-c", "shell_environment_policy.ignore_default_excludes=false",
-    // OPENMAUSBOT_CHATGPT_TOKEN is excluded via extendShellExclusions: a `-c exclude` here would replace the lower layers' list.
-  ];
-}
-
 const PRIVATE_ENV_FAMILIES = ["OMB_GATE_CONFIG_", "OMB_REMOTE_MCP_CONFIG_"];
 const PROXY_LITERAL_ENV = ["NODE_USE_ENV_PROXY", "NO_PROXY", "no_proxy"];
 const SHELL_ESSENTIALS = new Set(["PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TERM", "LANG", "TZ"]);
@@ -125,7 +109,7 @@ const renamedMcpServers = new Set<string>();
 function noteRenamedMcpServer(name: string, mountName: string): void {
   if (renamedMcpServers.has(name)) return;
   renamedMcpServers.add(name);
-  console.error(`codex: MCP server ${JSON.stringify(name)} is also declared in Codex's own config.toml — mounted as ${JSON.stringify(mountName)} for this bot so the two do not merge`);
+  console.error(`codex: MCP server ${JSON.stringify(name)} is mounted as ${JSON.stringify(mountName)} for this bot to keep its CLI configuration distinct`);
 }
 
 interface CodexApprovalParams {
@@ -367,6 +351,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       stripWorkspaceCredentialEnv(env);
       delete env.OPENMAUSBOT_CHATGPT_TOKEN;
       delete env.OPENMAUSBOT_CODEX_API_KEY;
+      for (const name of PLAN_TOKEN_BRIDGE_ENV) delete env[name];
       if (config.endpoint) env.OPENMAUSBOT_CODEX_API_KEY = input.environment.OPENMAUSBOT_CODEX_API_KEY;
       env.CODEX_HOME = runtimeEnvironment.CODEX_HOME;
       return env;
@@ -375,6 +360,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     initializeCodexRuntime(catalogEnv.CODEX_HOME);
     if (externalAuthHome) linkExternalCodexAuth(catalogEnv.CODEX_HOME!, externalAuthHome);
     const planAuth = plan ? new ChatGptPlanAuthController({ directory: planDirectory }) : null;
+    const planRenewal = planTokenRenewal(() => readCliVersion(catalogEnv));
     let planGeneration = 0;
     let planSigningOut = false;
     let disposed = false;
@@ -514,9 +500,6 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         if (!input.environment.OPENMAUSBOT_COMPANY_API_KEY) {
           throw new Error("Company model access is unavailable: OPENMAUSBOT_COMPANY_API_KEY is missing. Reconnect your organization; personal billing will not be used.");
         }
-        if (!input.environment.CODEX_HOME) {
-          throw new Error("Company model access is unavailable: CODEX_HOME is missing. Reconnect your organization; personal billing will not be used.");
-        }
       }
       // Interrupt state belongs to this turn so activity on other threads cannot cancel or revive its retry.
       let stopRequested = false;
@@ -533,8 +516,8 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       const route: CodexRoute = plan ? "plan" : chatgptTurn ? "own" : "other";
       const hideRefusedModel = (raw: string) => hidePlanRefusedModel(turn.model, raw, route);
       const signedOut = chatgptTurn && await loginCheck.check(childEnv()) === "missing";
-      assertPlanCurrent();
-      if (active.has(threadId)) throw new Error("a turn is already running on this thread");
+      const authBridge = planAuth && await planRenewal.supported() ? await startPlanTokenBridge(() => planAuth.accessToken(), () => { assertPlanCurrent(); if (stopRequested) throw new Error("This task has ended."); }) : null;
+      let turnConfigArgs: string[]; try { assertPlanCurrent(); if (active.has(threadId)) throw new Error("a turn is already running on this thread"); turnConfigArgs = codexTurnConfigArgs(turn, childEnv()); } catch (error) { authBridge?.close(); throw error; }
       const turnId = newId();
       if (signedOut) {
         emit({ ...base(threadId, turnId), type: "turn.started" });
@@ -544,17 +527,15 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       }
       const retryScale = Number(process.env.FAKE_CODEX_RETRY_SCALE ?? "1");
       let announced = false;
-      const waitForLaunchSlot = async () => {
+      const waitForLaunchSlot = async (attempt: number) => {
         const waiting: Turn = { stop: async () => { stopRequested = true; stopSignal.abort(); return true; }, turnId, asks: new Map() };
         active.set(threadId, waiting);
-        if (!announced) {
-          emit({ ...base(threadId, turnId), type: "turn.started" });
-          announced = true;
-        }
+        if (attempt === 0) emit({ ...base(threadId, turnId), type: "turn.started" });
+        announced = true;
         emit({ ...base(threadId, turnId), type: "runtime.notice", message: `Waiting for a free Codex slot: ${codexLaunchesStarting()} Codex runs are starting on this computer. This one starts on its own.` });
         const slot = await codexLaunchSlot(stopSignal.signal);
         if (slot && !stopRequested) return slot;
-        slot?.();
+        slot?.(); authBridge?.close();
         if (active.get(threadId) === waiting) {
           active.delete(threadId);
           emit({ ...base(threadId, turnId), type: "turn.completed", ok: false, stopReason: "interrupted", cost: null });
@@ -562,31 +543,18 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         return null;
       };
       const launchAttempt = async (attempt: number): Promise<void> => {
-        const preparing: Turn = { turnId, asks: new Map(), stop: async () => {
-          stopRequested = true;
-          stopSignal.abort();
-          if (active.get(threadId) === preparing) {
-            active.delete(threadId);
-            emit({ ...base(threadId, turnId), type: "turn.completed", ok: false, stopReason: "interrupted", cost: null });
-          }
-          return true;
-        } };
-        active.set(threadId, preparing);
-        if (!announced) {
-          emit({ ...base(threadId, turnId), type: "turn.started" });
-          announced = true;
-        }
-        try {
         const env = childEnv();
         const launchedLogin = chatgptTurn ? storedCodexLogin(env) : null;
-        if (planToken) env.OPENMAUSBOT_CHATGPT_TOKEN = planToken;
+        if (authBridge) Object.assign(env, authBridge.env); else if (planToken) env.OPENMAUSBOT_CHATGPT_TOKEN = planToken;
         const nativePlugins = await prepareCodexPlugins(config.cli, env, turn.plugins ?? [], turn.pluginLibrary);
-        if (stopRequested || disposed || active.get(threadId) !== preparing) return;
-        const appServerArgs = ["app-server", ...(plan ? chatgptPlanCodexArgs() : config.endpoint ? endpointCodexArgs(config.endpoint) : config.managed ? managedCodexArgs(config.managed) : codexSelectedProviderArgs(env, turn.model)), ...codexToolSurfaceArgs(), ...nativePlugins.args,
+        if (stopRequested || disposed) return;
+        const appServerArgs = ["app-server", ...(plan ? chatgptPlanCodexArgs(!!authBridge) : config.endpoint ? endpointCodexArgs(config.endpoint) : config.managed ? managedCodexArgs(config.managed) : codexSelectedProviderArgs(env, turn.model)), ...codexToolSurfaceArgs(), ...nativePlugins.args,
           // Native shell snapshots can restore variables the shell policy removed.
-          ...(turn.toolScope === undefined ? [] : ["-c", "features.shell_snapshot=false"]),
+          ...(turn.toolScope === undefined && !authBridge ? [] : ["-c", "features.shell_snapshot=false"]),
           // A guest-driven turn: no shell, no file reads (-c wins over config files).
-          ...(turn.guestConfined ? GUEST_CONFINED_CODEX_ARGS : [])];
+          ...turnConfigArgs];
+        const codexConfig = codexConfigMcp(env), declaredInCodexConfig = codexConfig.names;
+        if (turn.toolScope !== undefined) appServerArgs.push(...codexMcpDisableArgs(declaredInCodexConfig));
         const baseEnv = new Map(Object.entries(env).filter(([, value]) => value !== undefined));
         const mountedNames = new Set<string>();
         const selectedMcp = new Map<string, StdioMcpSpec>();
@@ -642,12 +610,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         for (const name of ["data", "email", "device"] as const) if (turn.integrations?.[name]) mountSelected(name, name, turn.integrations[name]);
         // A `-c` override merges with a same-named server in config.toml, and stdio over url is
         // "invalid configuration" that kills the turn, so such a server mounts under its own name.
-        const codexConfig = codexConfigMcp(env), declaredInCodexConfig = codexConfig.names;
-        if (turn.toolScope !== undefined) {
-          for (const name of declaredInCodexConfig) appServerArgs.push("-c", `mcp_servers.${name}.enabled=false`);
-        }
+        const takenMcpNames = new Set([...declaredInCodexConfig, ...selectedMcp.keys(), ...(turn.integrations?.phone ? ["openmausbot_phone"] : [])]);
         for (const [name, server] of Object.entries(turn.integrations?.custom ?? {}).filter(([name, server]) => turn.toolScope !== undefined || !codexConfigRunsServer(codexConfig, name, server))) {
-          const mountName = mountedMcpServerName(name, declaredInCodexConfig);
+          const mountName = mountedMcpServerName(name, takenMcpNames);
+          takenMcpNames.add(mountName);
           if (mountName !== name) noteRenamedMcpServer(name, mountName);
           mountSelected(name, mountName, server, "prompt", turn.toolScope === undefined && !("url" in server) ? boxProxyEnvNames() : []);
         }
@@ -669,10 +635,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           }
         }
 
-        // Codex gives MCP children their variables from the environment it runs shell commands in, so
-        // every variable a mount writes is excluded from that shell (snapshots are off).
+        // Codex hands MCP children its shell environment, so mounted variables (and box-admitted custom env) leave that shell.
+        const customBox = customServerEnvBox(turn.integrations?.custom, selectedMcp), boxAdmitted = boxAdmittedEnv(customBox);
         const mountedEnv = [...mountedNames].filter((name) => env[name] !== undefined && !SHELL_ESSENTIALS.has(name) && !name.startsWith("LC_")
-          && (name === "ELECTRON_RUN_AS_NODE" || baseEnv.get(name) !== env[name]));
+          && (name === "ELECTRON_RUN_AS_NODE" || boxAdmitted.has(name) || baseEnv.get(name) !== env[name]));
         const privateEnv = [...new Set([
           ...(config.endpoint ? ["OPENMAUSBOT_CODEX_API_KEY"] : []),
           ...(turn.toolScope !== undefined ? ["OMB_GATE_CONFIG_*"] : []),
@@ -690,12 +656,12 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         ) } };
 
         const commandCwd = permissionLaunchCwd(turn.cwd ?? homedir());
-        const releaseSlot = tryCodexLaunchSlot() ?? await waitForLaunchSlot();
+        const releaseSlot = tryCodexLaunchSlot() ?? await waitForLaunchSlot(attempt);
         if (!releaseSlot) return;
         const child = spawnHoldingSlot(releaseSlot, () => spawnCli(...codexLaunch(config.cli, appServerArgs), {
           cwd: turn.cwd ?? homedir(),
           env,
-          stdio: ["pipe", "pipe", "pipe"],
+          stdio: ["pipe", "pipe", "pipe"], ...customBox,
         }, "bot"));
 
       let abandoned = false;
@@ -813,7 +779,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
 
       const settle = async (ok: boolean, stopReason: string | null) => {
         if (state.settled) return;
-        state.settled = true;
+        state.settled = true; authBridge?.close();
         for (const finish of Array.from(asks.values())) finish("deny", "OpenMausBot: the turn ended", "system");
         for (const p of rpcPending.values()) p.reject(new Error("turn settled"));
         rpcPending.clear();
@@ -842,7 +808,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           return settle(false, failedStop);
         }
         await interruptibleDelay(Math.max(1, Math.round(delayMs * retryScale)), stopSignal.signal).promise;
-        if (!stopRequested) void launchAttempt(attempt).catch(() => {});
+        if (!stopRequested) { try { turnConfigArgs = codexTurnConfigArgs(turn, childEnv()); } catch (error) { emit({ ...base(threadId, turnId), type: "runtime.error", message: error instanceof Error ? error.message : String(error) }); return settle(false, "rpc_error"); } void launchAttempt(attempt).catch(() => authBridge?.close()); }
         else await settle(false, "interrupted");
       };
 
@@ -1105,7 +1071,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             const delta = typeof p.delta === "string" ? p.delta : "";
             if (delta) {
               state.sawStreamDelta = true;
-              emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta });
+              emit({ ...base(threadId, turnId), ...messageItem({ id: p.itemId }), type: "content.delta", streamKind: "assistant_text", delta });
             }
             break;
           }
@@ -1149,10 +1115,10 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
               if (item.text?.trim()) {
                 state.lastText = item.text;
                 if (!state.sawStreamDelta) {
-                  emit({ ...base(threadId, turnId), type: "content.delta", streamKind: "assistant_text", delta: item.text });
+                  emit({ ...base(threadId, turnId), ...messageItem(item), type: "content.delta", streamKind: "assistant_text", delta: item.text });
                 }
                 state.sawStreamDelta = false;
-                emit({ ...base(threadId, turnId), type: "item.completed", itemType: "assistant_text", text: item.text });
+                emit({ ...base(threadId, turnId), ...messageItem(item), type: "item.completed", itemType: "assistant_text", text: item.text });
               }
               openAsyncQuestion(item, asks, steerActiveTurn, (event) => emit({ ...base(threadId, turnId), ...event }));
             } else if (item.type === "imageGeneration" && item.status !== "failed") {
@@ -1368,13 +1334,13 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           const invalid = error instanceof CodexRpcError && /^invalid configuration\b/i.test(error.message);
           throw new Error(
             invalid
-              ? "Codex rejected its configuration as invalid. Check config.toml in the application CODEX_HOME for a broken entry, then retry."
+              ? "Codex rejected its configuration as invalid. Check ~/.codex/config.toml (or CODEX_HOME) for a broken entry, then retry."
               : "Could not read Codex configuration; cannot safely update bot instructions. Retry after checking Codex.",
           );
         }
-        if (privateEnv.length) {
+        if (privateEnv.length || authBridge) {
           const snapshot = (effectiveConfig as { features?: { shell_snapshot?: unknown } } | null)?.features?.shell_snapshot;
-          if (provenPrivateEnv ? snapshot !== false : snapshot === true) {
+          if (provenPrivateEnv || authBridge ? snapshot !== false : snapshot === true) {
             throw new Error("Codex could not disable inherited shell snapshots. No prompt was sent.");
           }
         }
@@ -1384,7 +1350,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             throw new Error("Codex could not confirm its shell environment policy. No prompt was sent.");
           }
           selectionConfig.config = { ...selectionConfig.config,
-            ...extendShellExclusions((rawPolicy ?? {}) as Record<string, unknown>, [...(plan ? ["OPENMAUSBOT_CHATGPT_TOKEN"] : []), ...privateEnv]) };
+            ...extendShellExclusions((rawPolicy ?? {}) as Record<string, unknown>, [...(plan ? ["OPENMAUSBOT_CHATGPT_TOKEN"] : []), ...(authBridge ? PLAN_TOKEN_BRIDGE_ENV : []), ...privateEnv]) };
         }
         if (turn.toolScope !== undefined) {
           const catalog = (effectiveConfig as { mcp_servers?: unknown } | null)?.mcp_servers;
@@ -1425,7 +1391,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
         // Codex's `never` means "do not ask to escalate", not "grant every requested permission":
         // only Full may synthesize approvals.
         autoAcceptPermissions = approvalMode === "full";
-        const selection = routed
+        const selection: { model?: string | null; modelProvider: string | null; serviceTier?: string } = routed
           ? { model: turn.model, modelProvider: routedProvider }
           : config.authMode === "chatgpt-plan"
             ? { model: turn.model, modelProvider: "openai_chatgpt_plan" }
@@ -1534,7 +1500,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
             ...(turn.guestConfined ? { environments: [] } : {}),
             // Spread, not `effort ?? null`: codex-cli 0.146.0 treats null as absent (the thread keeps
             // its effort), rejects "", and thread/start takes no effort, so a thread keeps its last level.
-            ...(turn.effort ? { effort: turn.effort } : {}),
+            ...(turn.effort ? { effort: turn.effort } : {}), ...(selection.serviceTier ? { serviceTierForTurn: selection.serviceTier } : {}),
           });
         };
         const waitNames = supportsMcpStartup(initialized?.userAgent) ? enabledMcpMounts([...selectedMcp.keys(), ...directMounts], effectiveConfig, turn.toolScope !== undefined) : [];
@@ -1571,15 +1537,9 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           await settle(false, needsAuth ? "auth_required" : verdict.reason === "provider_safety" ? "provider_safety" : "rpc_error");
         }
       }
-        } catch (error) {
-          if (active.get(threadId) !== preparing) return;
-          active.delete(threadId);
-          emit({ ...base(threadId, turnId), type: "runtime.error", message: error instanceof Error ? error.message : String(error) });
-          emit({ ...base(threadId, turnId), type: "turn.completed", ok: false, stopReason: "startup_error", cost: null });
-        }
     };
 
-    void launchAttempt(0);
+    void launchAttempt(0).catch(() => authBridge?.close());
     return { turnId };
   };
 
@@ -1590,24 +1550,25 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     const probe = await readCliVersion(env);
     if (!("version" in probe)) return { state: "unavailable", reason: probe.reason, ...(plan ? { chatgptPlan: true } : {}) };
     const { version } = probe;
+    const warning = planWarning ?? (planAuth && !planRenewal.noteVersion(version) ? "Update Codex to 0.165.0 or newer to renew ChatGPT credentials during a running task." : undefined);
     if (planAuth) return { state: "available", version, chatgptPlan: true, billing: "subscription", ...await planAuth.snapshot(), update: await codexReleaseUpdate(version, config.cli),
-      ...(planWarning ? { warning: { title: "Check ChatGPT connection", message: planWarning } } : {}) };
+      ...(warning ? { warning: { title: "Check ChatGPT connection", message: warning } } : {}) };
     if (config.endpoint) return { state: "available", version, authenticated: Boolean(input.environment.OPENMAUSBOT_CODEX_API_KEY && input.environment.CODEX_HOME), billing: "metered" };
     if (config.managed) return { state: "available", version, authenticated: Boolean(input.environment.OPENMAUSBOT_COMPANY_API_KEY && input.environment.CODEX_HOME), billing: "metered" };
     const previousCliVersion = modelsCliVersion;
     modelsCliVersion = version;
     if (previousCliVersion !== null && previousCliVersion !== version) await refreshModels();
-    const authenticated = await codexLoginStatus(config.cli, env) === "signed-in";
+    const login = await readCodexLogin(config.cli, env), authenticated = login.status === "signed-in";
     if (authenticated && loginRejected()) {
       return { state: "available", version, authenticated: false, reason: CODEX_SIGN_IN_EXPIRED,
         update: await codexReleaseUpdate(version, config.cli), billing: "subscription" };
     }
-    const email = authenticated ? await codexAccountEmail(config.cli, env) : null;
+    const email = authenticated && !login.apiKey ? await codexAccountEmail(config.cli, env) : null;
     return {
       state: "available",
       version,
       authenticated,
-      ...(email ? { account: { email } } : {}),
+      ...(login.apiKey ? { account: { method: "api-key" as const } } : email ? { account: { email } } : {}), // no ChatGPT sign-out
       update: await codexReleaseUpdate(version, config.cli),
       billing: "subscription",
     };
@@ -1622,25 +1583,32 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
     if (planUnavailable) throw new Error(planUnavailable);
     const env = childEnv();
     let providerArgs: string[] = [];
+    let authBridge: PlanTokenBridge | null = null;
     if (planAuth) {
       if (planSigningOut) throw new Error("This ChatGPT account is being disconnected.");
+      const generation = planGeneration;
+      const stillCurrent = () => { if (planSigningOut || disposed || generation !== planGeneration) throw new Error("This ChatGPT account changed."); };
       if (!models.options.length) await refreshModels();
-      env.OPENMAUSBOT_CHATGPT_TOKEN = await planAuth.accessToken();
-      if (planSigningOut || disposed) throw new Error("This ChatGPT account is being disconnected.");
+      const token = await planAuth.accessToken();
+      stillCurrent();
       mkdirSync(codexHome(env)!, { recursive: true, mode: 0o700 });
-      providerArgs = chatgptPlanCodexArgs();
+      const renewing = await planRenewal.supported();
+      stillCurrent();
+      authBridge = renewing ? await startPlanTokenBridge(() => planAuth.accessToken(), stillCurrent) : null;
+      Object.assign(env, authBridge?.env ?? { OPENMAUSBOT_CHATGPT_TOKEN: token });
+      providerArgs = chatgptPlanCodexArgs(!!authBridge);
     } else if (config.endpoint) {
       if (!input.environment.OPENMAUSBOT_CODEX_API_KEY) throw new Error("Direct API key is missing. Edit the endpoint in Settings.");
       providerArgs = endpointCodexArgs(config.endpoint);
     } else if (config.managed) {
-      if (!input.environment.OPENMAUSBOT_COMPANY_API_KEY || !input.environment.CODEX_HOME) {
+      if (!input.environment.OPENMAUSBOT_COMPANY_API_KEY) {
         throw new Error("Company model access is unavailable. Reconnect your organization; personal billing will not be used.");
       }
       providerArgs = managedCodexArgs(config.managed);
     }
     const route = codexBackgroundRoute(models, smallModelsUsable(), options.fallback, openaiUnreachable);
-    if (!route) throw new Error("Codex lists no model for background calls. Refresh models in Settings → Model providers → Codex.");
-    return runCodexBackgroundRoute(route, (id) => {
+    if (!route) { authBridge?.close(); throw new Error("Codex lists no model for background calls. Refresh models in Settings → Model providers → Codex."); }
+    try { return await runCodexBackgroundRoute(route, (id) => {
       const selection = planAuth || routed ? { model: id, modelProvider: null } : decodeCodexSelection(id);
       return runCodexOneShot({
         spawn: spawnCli, kill: killCliTree, cli: config.cli, env, prompt, options,
@@ -1653,7 +1621,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           return codexUserError(message, route);
         },
       });
-    }, options, planAuth || config.managed ? undefined : () => { openaiUnreachable = true; });
+    }, options, planAuth || config.managed ? undefined : () => { openaiUnreachable = true; }); } finally { authBridge?.close(); }
   };
 
   return {
@@ -1673,6 +1641,7 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
       startAuthentication: async () => {
         if (planUnavailable) throw new Error(planUnavailable);
         if (planSigningOut || disposed) throw new Error("This account is being disconnected. Wait before signing in again.");
+        if (planAuth) planGeneration++; // a new login may replace the account before its status is polled
         return (planAuth ?? authentication).start();
       },
       getAuthentication: async (flowId: string) => {

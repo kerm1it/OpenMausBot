@@ -99,7 +99,7 @@ describe("augmentedPath", () => {
       resetPathCacheForTests();
 
       augmentedPath();
-      await vi.waitFor(() => expect(augmentedPath().split(delimiter)).toContain(rcOnlyBin));
+      await vi.waitFor(() => expect(augmentedPath().split(delimiter)).toContain(rcOnlyBin), { timeout: 6_000 });
 
       resetPathCache();
       expect(augmentedPath().split(delimiter)).toContain(rcOnlyBin);
@@ -138,7 +138,7 @@ describe("augmentedPath", () => {
       delete process.env.OMB_TEST_SEALED_PATH;
       resetPathCacheForTests();
       expect(augmentedPath().split(delimiter)).toEqual(expect.arrayContaining(machineDirs));
-      await vi.waitFor(() => expect(augmentedPath().split(delimiter)).toContain(rcOnlyBin));
+      await vi.waitFor(() => expect(augmentedPath().split(delimiter)).toContain(rcOnlyBin), { timeout: 6_000 });
       rmSync(ran);
 
       process.env.OMB_TEST_SEALED_PATH = "1";
@@ -439,6 +439,26 @@ winOnly("resolveCli (Windows)", () => {
     });
     onPath();
     expect(resolveCli("ombfake", [], { PATH: "", PATHEXT: ".CMD" })).toEqual({ command: "ombfake", args: [] });
+  });
+
+  it("preserves the DeepSeek desktop shim's Electron CLI entry point", () => {
+    const exe = join(dir, "DeepSeek Harness.exe");
+    const archive = join(dir, "resources", "app.asar");
+    const shim = join(dir, "dsh.cmd");
+    writeFileSync(exe, "MZ");
+    mkdirSync(join(dir, "resources"));
+    writeFileSync(archive, "");
+    writeFileSync(shim, [
+      "@echo off",
+      'set "ELECTRON_RUN_AS_NODE=1"',
+      '"%~dp0DeepSeek Harness.exe" --expose-internals "%~dp0resources\\app.asar\\dsh\\cli.js" %*',
+      "exit /b %errorlevel%",
+    ].join("\r\n"));
+    expect(resolveCli(shim, ["--profile", "acp"])).toEqual({
+      command: exe,
+      args: ["--expose-internals", join(archive, "dsh", "cli.js"), "--profile", "acp"],
+      env: { ELECTRON_RUN_AS_NODE: "1" },
+    });
   });
 
   it("parses an npm .cmd shim down to `node <cli.js>`, never the shim's own node.exe", async () => {

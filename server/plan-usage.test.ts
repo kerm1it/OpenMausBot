@@ -614,4 +614,41 @@ describe("plan usage fetcher", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(report.providers.map((row) => row.id)).toEqual(["codex"]);
   });
+
+  it("reads every Claude instance's login with no setting, and none whose config sets usageMeter to false", async () => {
+    const accounts = planAccountsFromInstances({
+      claude: { driver: "claudeAgent" },
+      work: { driver: "claudeAgent", displayName: "Work", config: { configDir: "/tmp/claude-work" } },
+      quiet: { driver: "claudeAgent", displayName: "Quiet", config: { usageMeter: false } },
+      codex: { driver: "codex" },
+    });
+    // Still listed, so a refused turn's hold names the account and fails over.
+    expect(accounts).toEqual([
+      { id: "claude", name: "Claude", driver: "claude", environment: {} },
+      { id: "work", name: "Work", driver: "claude", environment: {}, configDir: "/tmp/claude-work" },
+      { id: "quiet", name: "Quiet", driver: "claude", environment: {}, noUsage: true },
+      { id: "codex", name: "Codex", driver: "codex", environment: {} },
+    ]);
+    const read = vi.fn((_account: PlanAccount) => ({ token: SECRET, accountId: null, expired: false }));
+    const fetchImpl = vi.fn<PlanFetch>(async (url) => jsonResponse(url.includes("anthropic")
+      ? { five_hour: { utilization: 38, resets_at: "2026-10-19T15:40:00Z" } }
+      : { rate_limit: { primary_window: { used_percent: 10 } } }));
+    const report = await fetchPlanUsage(accounts, { fetch: fetchImpl, now: () => NOW, credentials: { read } });
+    expect(read.mock.calls.map(([account]) => account.id)).toEqual(["claude", "work", "codex"]);
+    expect(report.providers.map((row) => [row.id, row.ok])).toEqual([["claude", true], ["work", true], ["codex", true]]);
+    expect(report.providers[0]!.fiveHour.usedPercent).toBe(38);
+    expect(JSON.stringify(report)).not.toContain(SECRET);
+  });
+
+  it("never serves a cached report across a usageMeter change", async () => {
+    const read = vi.fn((_account: PlanAccount) => ({ token: SECRET, accountId: null, expired: false }));
+    const fetchImpl = vi.fn<PlanFetch>(async () => jsonResponse({}));
+    const load = (config: Record<string, unknown>) => loadPlanUsage({
+      accounts: planAccountsFromInstances({ claude: { driver: "claudeAgent", config } }),
+      fetch: fetchImpl, now: NOW, credentials: { read },
+    });
+    expect((await load({})).providers.map((row) => row.id)).toEqual(["claude"]);
+    expect((await load({ usageMeter: false })).providers).toEqual([]);
+    expect((await load({})).providers.map((row) => row.id)).toEqual(["claude"]);
+  });
 });

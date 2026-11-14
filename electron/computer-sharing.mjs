@@ -18,6 +18,7 @@ import { createComputerAsks } from "./computer-asks.mjs";
 import { LINK_ASLEEP, linkPath } from "./device-link-protocol.mjs";
 import { shareableDrive } from "./shared-drives.mjs";
 import nativeText from "./native-text.cjs";
+import { actingBot } from "./lending-indicator.mjs";
 
 const uuid = value => typeof value === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value);
 const DATA_VOLUME = "/System/Volumes/Data";
@@ -203,8 +204,13 @@ const LENT_PLATFORMS = new Set(["darwin", "win32", "linux"]);
 const RECONNECT_EVERY_MS = 15 * 60_000;
 /** Waits before the device link is dialled again, longer after each attempt that never opened. */
 const LINK_RETRY_MS = [2_000, 5_000, 15_000, 60_000];
+/** Lending that is failing, as the menu and a notification say it; a sleeping Cloud or a Pause is no failure. */
+const WHY_NOT_LENT = Object.freeze({ "connect-first": "native.lendTray.whySignIn", "machine-changed": "native.lendTray.whyMoved", "account-changed": "native.lendTray.whyAccount", "not-cloud": "native.lendTray.whyMoved", "not-own": "native.lendTray.whyMoved" });
+const whyNotLent = problem => WHY_NOT_LENT[problem] ?? "native.lendTray.whyUnreachable";
 /** The link carried bytes this recently: the tray says the computer is in use. */
 const IN_USE_MS = 5_000;
+/** The menu keeps naming the bot that acted here this long after its last action, so it doesn't flicker between steps. */
+const ACTING_MS = 30_000;
 /** A site opened through this computer goes into its activity once per outcome in this long, so a page's many
  * connections are one line. */
 const BROWSE_NOTE_MS = 10 * 60_000;
@@ -232,6 +238,8 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, lo
   let screenNow = null;
   let records = {};
   let paused = false;
+  /** Set while the pause holds only in memory: its save failed, so a restart would lend again. Pause retries the save. */
+  let pauseError;
   /** The Cloud account that confirmed lending the terminal; another account signed in here gets none until it confirms. */
   let terminalAccount = null;
   try {
@@ -249,6 +257,18 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, lo
   /** The Clouds whose device link is open now. */
   const linked = new Set();
   const inUse = new Map();
+  /** Each bot that acted here lately, by Cloud and bot name, until ACTING_MS after its last action ends (`held` while it runs). */
+  const acting = new Map();
+  const actedFor = (id, by, held = false) => {
+    const key = `${id}\n${by.name}`;
+    clearTimeout(acting.get(key)?.timer);
+    const timer = held ? null : setTimeout(() => { acting.delete(key); changed(); }, ACTING_MS);
+    timer?.unref?.();
+    acting.set(key, { env: id, by, timer });
+  };
+  const forgetHeld = (id, by) => { const key = `${id}\n${by.name}`; if (acting.get(key)?.timer === null) acting.delete(key); };
+  const forgetActing = id => { for (const [key, entry] of acting) if (id === undefined || entry.env === id) { clearTimeout(entry.timer); acting.delete(key); } };
+  const actingOn = env => status.get(env.id)?.connected ? [...acting.values()].filter(entry => entry.env === env.id) : [];
   let closed = false;
   let maintainerOff = false;
   let executing = null;
@@ -256,21 +276,43 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, lo
   const summary = () => {
     const browsing = [...inUse.keys()].find(id => linked.has(id));
     const lent = paused ? [] : environments().filter(env => (records[env.id]?.cloud || records[env.id]?.own) && records[env.id]?.enabled === true);
-    const using = lent.filter(env => executing?.env === env.id || (inUse.has(env.id) && linked.has(env.id)));
+    const using = lent.filter(env => executing?.env === env.id || actingOn(env).length || (inUse.has(env.id) && linked.has(env.id)));
+    const bots = using.flatMap(env => actingOn(env).map(({ by }) => ({ ...by, cloud: env.name })));
+    const problems = lendingProblems(lent);
     return {
       lending: lent.map(env => env.id),
       clouds: (paused ? [...ownClouds(), ...environments().filter(env => records[env.id]?.own && records[env.id].enabled === true)] : lent).map(env => env.name),
       // Lent, but the Cloud hasn't accepted this computer yet (or lost it): the menu must not say it can use it. A
       // sleeping My Cloud still can; it wakes when a bot needs this computer.
       waiting: lent.filter(env => !status.get(env.id)?.connected && status.get(env.id)?.problem !== "asleep").map(env => env.name),
+      ...(problems.length ? { problems } : {}),
       using: using.map(env => env.name),
+      ...(bots.length ? { bots } : {}),
       paused,
+      ...(pauseError ? { pauseError } : {}),
       terminal: terminalAccount !== null && terminalAccount === signedInAccount(),
       // The menu's terminal switch is the Clouds' one; a server of the person's own lends the terminal from Settings.
       terminalSwitch: ownClouds().length > 0,
       busy: executing ?? (browsing ? { env: browsing, action: "internet" } : null),
       screen: screenNow,
     };
+  };
+  /** What is keeping this computer from a Cloud of the person's own, for the menu and one notification: a Cloud it can't
+   * reach or stay signed in to, lending that ended by itself, and a signed-in My Cloud this app has no saved place for. */
+  const lendingProblems = lent => {
+    if (paused) return [];
+    const failing = lent.flatMap(env => {
+      const now = status.get(env.id);
+      return now && !now.connected && now.problem !== "asleep" && now.problem !== "paused" && (now.problem || now.error) ? [{ name: env.name, why: t(whyNotLent(now.problem)) }] : [];
+    });
+    const ended = environments().flatMap(env => {
+      const record = records[env.id], reason = record?.stopped?.reason;
+      return record?.cloud && record.enabled !== true && (reason === "machine-changed" || reason === "account-changed") && !lent.includes(env) ? [{ name: env.name, why: t(whyNotLent(reason)) }] : [];
+    });
+    const signedIn = cloud();
+    const homeless = signedIn?.status === "connected" && signedIn.origin && !environments().some(env => env.origin === signedIn.origin)
+      ? [{ name: t("native.lendTray.myCloud"), why: t("native.lendTray.whyNoServer") }] : [];
+    return [...failing, ...ended, ...homeless];
   };
   /** Whether apps and screen are lent now; the icon's menu follows any change in why not. */
   const readScreen = () => Promise.resolve().then(screen).then(status => status, () => null).then(status => {
@@ -333,6 +375,7 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, lo
     fs.writeFileSync(temporary, JSON.stringify({ version: 1, records: next, automatic: { paused, ...(terminalAccount ? { terminalAccount } : {}) } }), { mode: 0o600 });
     fs.chmodSync(temporary, 0o600);
     fs.renameSync(temporary, file); records = next;
+    if (paused) pauseError = undefined;
   };
   const sleepsHere = env => Boolean(records[env.id]?.cloud) || cloud()?.origin === env.origin;
   /** My Cloud sleeps by the Admin's word and its own, on the gate this app shares with Files (`power`); another Cloud of
@@ -444,7 +487,7 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, lo
   const stop = id => {
     const live = running.get(id);
     if (live) { live.abort.abort(); live.cua?.close(); live.mcp?.close(); running.delete(id); }
-    status.set(id, { connected: false });
+    status.set(id, { connected: false }); forgetActing(id);
   };
   const run = (env, grant) => {
     stop(env.id);
@@ -515,7 +558,9 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, lo
               continue;
             }
             if (executing) { await call("result", { jobId: job.id, result: sharedComputerError(new Error("This computer is busy with another server")) }); continue; }
+            const by = actingBot(job.by);
             executing = { env: env.id, action: job.operation.action };
+            if (by) actedFor(env.id, by, true);
             changed();
             const jobAbort = new AbortController();
             const jobSignal = AbortSignal.any([signal, jobAbort.signal]);
@@ -560,7 +605,8 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, lo
               if (control) presence.acted(job.operation.tool_name, job.operation.arguments);
               await renewal?.catch(() => {});
               await control?.release().catch(() => {});
-              executing = null; changed();
+              // A stopped or replaced run must not name its bot again after stop() cleared it.
+              executing = null; if (by) { if (!closed && !signal.aborted && running.get(env.id) === live) actedFor(env.id, by); else forgetHeld(env.id, by); } changed();
             }
             activity.record({
               env, action: job.operation.action, detail: describeSharedOperation(grant, job.operation), ok: result?.isError !== true,
@@ -705,8 +751,17 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, lo
   /** Every Cloud of the person's own may use this computer again. */
   const resumeLending = () => {
     if (!paused || closed) return;
-    paused = false;
-    try { store(records); } catch {}
+    try {
+      paused = false;
+      store(records);
+      pauseError = undefined;
+    } catch {
+      // Not saved: lending stays paused, here and after a restart.
+      paused = true;
+      pauseError = t("native.lendTray.pauseUnsaved");
+      changed();
+      return;
+    }
     const automatic = lentAutomatically();
     for (const env of environments()) {
       const grant = records[env.id];
@@ -720,6 +775,7 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, lo
   /** Turn on, from this app's prompt or the card: what the ask needs, done here. */
   const turnOn = async (env, ask) => {
     if (paused) await resumeLending();
+    if (paused) return { ok: false, reason: "paused" };
     if (ask.need === "screen") {
       let status = await Promise.resolve().then(screen).catch(() => null);
       if (status && typeof status === "object" && !status.ready) status = await startScreen();
@@ -861,16 +917,17 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, lo
     /** Lending's last requests have been answered or have timed out (10 s at most). Security: a Cloud re-issues its session
      * cookie in the answer to any request that carried one, so that answer must land before the window's session is cleared. */
     goodbyesDone: () => Promise.allSettled([...goodbyes, passing]),
-    /** Every Cloud of the person's own stops using this computer, across restarts too, until resume(). */
+    /** Every Cloud of the person's own stops using this computer, across restarts too, until resume(). Sharing stops
+     * first; a save that fails sets pauseError, and Pause again retries it. */
     pause() {
-      if (paused || closed) return;
+      if (closed || (paused && !pauseError)) return;
       paused = true;
-      try { store(records); } catch {}
       for (const env of environments()) {
         if (!records[env.id]?.cloud && !records[env.id]?.own) continue;
         if (running.has(env.id)) disconnect(env, records[env.id]);
         status.set(env.id, { connected: false, problem: "paused" });
       }
+      try { store(records); } catch { pauseError = t("native.lendTray.pauseUnsaved"); }
       changed();
       wakeAsking();
     },
@@ -938,6 +995,6 @@ export function createComputerSharing({ file, fetch: fetchImpl, environments, lo
       }
       void lendAutomatically();
     },
-    close() { closed = true; for (const id of running.keys()) stop(id); syncAsking(); asks.close(); },
+    close() { closed = true; forgetActing(); for (const id of running.keys()) stop(id); syncAsking(); asks.close(); },
   };
 }

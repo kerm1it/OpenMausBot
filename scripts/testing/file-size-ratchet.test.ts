@@ -27,11 +27,11 @@ const LINES: Record<string, number> = {
   "server/routines.ts": 1567,
   "src/components/ComputerPanel.tsx": 1817,
   "src/components/RoutineCalendarPage.tsx": 1622,
-  "server/config.ts": 1265,
-  "src/components/ChatView.tsx": 1306,
+  "server/config.ts": 1244,
+  "src/components/ChatView.tsx": 1282,
   "server/routine-requests.ts": 1474,
-  "src/components/GroupView.tsx": 1220,
-  "src/components/LocalComputerSection.tsx": 1452,
+  "src/components/GroupView.tsx": 1215,
+  "src/components/LocalComputerSection.tsx": 1437,
   "src/components/CursorAvatar.tsx": 1324,
   "server/skills.ts": 1380,
   "server/composio.ts": 1091,
@@ -40,18 +40,16 @@ const LINES: Record<string, number> = {
   "server/boat.ts": 1258,
   "server/drivers/pi.ts": 1033,
   "server/plan-usage.ts": 1046,
-  "server/container-computer.ts": 1225,
+  "server/container-computer.ts": 1175,
   "src/components/ModelPicker.tsx": 1039,
-  "src/components/PhoneSetupFlow.tsx": 1101,
-  "server/cli.ts": 1062,
-  "src/components/AttachmentPreview.tsx": 1035,
+  "src/components/PhoneSetupFlow.tsx": 1089,
+  "server/cli.ts": 1053,
+  "src/components/AttachmentPreview.tsx": 1034,
   "server/meetings/meetbot.ts": 1047,
-  "server/message-db.ts": 1005,
-  "server/drivers/openai-chat.ts": 1001,
 };
 
 function sourceFiles(): string[] {
-  const out = execFileSync("git", ["ls-files", "server", "shared", "src", "scripts", "evals", "electron", "companion"], { cwd: ROOT, encoding: "utf8" });
+  const out = execFileSync("git", ["ls-files", "server", "shared", "packages", "src", "scripts", "evals", "electron", "companion"], { cwd: ROOT, encoding: "utf8" });
   return out.split("\n").filter((file) => /\.(ts|tsx|mjs|cjs)$/.test(file))
     .filter((file) => !file.includes(".test.") && !file.includes("/testing/") && !file.includes("goldens") && !file.startsWith("electron/vendor/"));
 }
