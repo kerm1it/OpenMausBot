@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import vm from "node:vm";
-import { createDesktopPrefs, DESKTOP_NOTICES, DESKTOP_PORTS, jsonFile, registerDesktopPrefs } from "./desktop-prefs.mjs";
+import { createDesktopPrefs, DESKTOP_NOTICES, DESKTOP_PORTS, desktopServerPorts, jsonFile, registerDesktopPrefs } from "./desktop-prefs.mjs";
 import { ONBOARDING_CLOUD_HINT, onboardingHints, WELCOME_VERSION } from "./onboarding-record.mjs";
 
 const require = createRequire(import.meta.url);
@@ -178,7 +178,7 @@ test("the preload gives every page of the window the app language this computer 
 
 test("production wiring: preferences accept this computer and the active saved server main frame", async () => {
   const main = readFileSync(new URL("./main.mjs", import.meta.url), "utf8").replace(/\r\n/g, "\n");
-  assert.match(main, /for \(const port of DESKTOP_PORTS\)/, "main tries the ports this module names, in order");
+  assert.match(main, /for \(const port of ports\)/, "main tries the selected server ports in order");
   assert.deepEqual([...DESKTOP_PORTS], [8799, 18799, 28799]);
   const start = main.indexOf("  desktopPrefs = nativeText.prefs;"), end = main.indexOf("\n  talk.start", start);
   assert.ok(start >= 0 && end > start, "main.mjs registers the desktop prefs");
@@ -223,6 +223,13 @@ test("production wiring: preferences accept this computer and the active saved s
   const load = vm.runInNewContext(`${navigate}; navigateMainWindow`, { mainWindow: { isDestroyed: () => false, loadURL: async url => { if (url.endsWith("fail")) throw new Error("ERR_CONNECTION_REFUSED"); } } });
   assert.equal(await load(`${LOCAL}/ok`), true); assert.equal(await load(`${LOCAL}/fail`), false, "a failed load answers false, never throws");
   assert.equal(await vm.runInNewContext(`${navigate}; navigateMainWindow`, { mainWindow: null })(`${LOCAL}/`), false, "no window");
+});
+
+test("a custom domain pins the verified server port until the domain is removed", () => {
+  assert.deepEqual(desktopServerPorts({}), DESKTOP_PORTS);
+  assert.deepEqual(desktopServerPorts({ customDomain: "https://bots.example.com", customDomainPort: 18799 }), [18799]);
+  assert.deepEqual(desktopServerPorts({ customDomain: "", customDomainPort: 18799 }), DESKTOP_PORTS);
+  assert.deepEqual(desktopServerPorts({ customDomain: "https://bots.example.com", customDomainPort: 12345 }), DESKTOP_PORTS);
 });
 
 test("the window's rail of places is shown until the person hides it, and the choice survives a restart", () => {

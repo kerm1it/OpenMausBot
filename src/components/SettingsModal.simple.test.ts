@@ -263,7 +263,7 @@ describe("Settings in Simple mode", () => {
     const html = render();
     expect(currentPage(html)).toBe("computer");
     expect(blocks(html)).toEqual(["computer", "companion", "browser", "logins", "elsewhere", "desktopWorkspaces", "remote"]);
-    expect(groupLabels(html)).toEqual(["Your bots’ computers", "Phone &amp; devices", "Built-in browser"].map((label) => label.replace("’", "&#x27;")));
+    expect(groupLabels(html)).toEqual(["Your bots’ computers", "Phone &amp; devices", "This server", "Built-in browser"].map((label) => label.replace("’", "&#x27;")));
     expect(html).toContain('aria-label="Enable the built-in browser"');
   });
 

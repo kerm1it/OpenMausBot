@@ -145,15 +145,19 @@ export function SimpleAiPage({ has, disclose, connections }: { has: Has; disclos
   );
 }
 
-export type RemoteAccessCards = Record<"client" | "domain" | "pairing" | "companion", ReactNode>;
+export type RemoteAccessCards = Record<"client" | "domain" | "pairing" | "companion", ReactNode> & { thisComputer: boolean };
 
 export function SimpleComputerPage({ has, remoteAccess, servers, disclose }: { has: Has; remoteAccess: RemoteAccessCards; servers: ReactNode; disclose: Disclose }) {
   return (
     <>
       {has("computer") && <SettingsGroup label={t("settings.simple.computer.bots")} block="computer"><AdminOnly><LocalComputerSection /></AdminOnly></SettingsGroup>}
-      {has("companion") && (
+      {has("companion") && remoteAccess.thisComputer && (
         <SettingsGroup label={t(pageIsThisComputer() ? "settings.section.phoneDevices" : "settings.section.thisServer")} block="companion">
           {remoteAccess.companion}
+        </SettingsGroup>
+      )}
+      {has("companion") && (
+        <SettingsGroup label={t("settings.section.thisServer")} block={remoteAccess.thisComputer ? undefined : "companion"}>
           {remoteAccess.pairing}
           {remoteAccess.domain}
         </SettingsGroup>

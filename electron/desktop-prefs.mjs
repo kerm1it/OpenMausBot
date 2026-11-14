@@ -10,7 +10,7 @@ import { DEFAULT_TALK_KEY, isTalkKey } from "./talk-keys.mjs";
 import { parseUpdatesConsent } from "./updates-consent.mjs";
 import { accountFullName } from "./system-name.mjs";
 
-export { DESKTOP_PORTS } from "./desktop-ports.mjs";
+export { DESKTOP_PORTS, desktopServerPorts } from "./desktop-ports.mjs";
 /** The only notices a page may record, so no page can write anything else into the file. */
 export const DESKTOP_NOTICES = Object.freeze(["whats-new-2026-11", "boat-credit-2026-11", "grok-move-2026-11"]);
 /** A locale code such as "de" or "pt-br", or "" for following the system. */

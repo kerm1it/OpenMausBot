@@ -93,7 +93,7 @@ export function CustomDomainGuide({ status }: { status: CustomDomainStatus }) {
   );
 }
 
-export function CustomDomainSettings() {
+export function CustomDomainSettings({ blocked = null }: { blocked?: string | null }) {
   const [status, setStatus] = useState<CustomDomainStatus | null>(null);
   const [domain, setDomain] = useState("");
   const [busy, setBusy] = useState<"loading" | "saving" | "removing" | null>("loading");
@@ -136,16 +136,17 @@ export function CustomDomainSettings() {
     <Card title={t("settings.domain.title")} subtitle={t("settings.domain.subtitle")}>
       <div className="space-y-3" data-custom-domain-settings>
         {busy === "loading" && <p role="status" className="flex items-center gap-2 text-[13px] text-ink-secondary"><Loader2 size={14} className="animate-spin" />{t("settings.domain.loading")}</p>}
+        {blocked && <p role="status" className="text-[13px] leading-relaxed text-ink-secondary">{blocked}</p>}
         {status && !status.supported && <p className="text-[13px] leading-relaxed text-ink-secondary">{t("settings.domain.serverOnly")}</p>}
         {status?.supported && (
           <>
             <form onSubmit={(event) => { event.preventDefault(); if (domain.trim() && !busy) void save(false); }} className="space-y-2">
               <label htmlFor="custom-domain" className="block text-[13px] font-medium text-ink">{t("settings.domain.label")}</label>
-              <input id="custom-domain" type="text" value={domain} disabled={busy !== null} onChange={(event) => { setDomain(event.target.value); setNotice(null); setError(null); }} placeholder="bots.yourcompany.com" autoCapitalize="none" autoCorrect="off" spellCheck={false} className="w-full rounded-lg border border-hairline/50 bg-inset px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary focus:border-accent focus:outline-none disabled:opacity-50" />
+              <input id="custom-domain" type="text" value={domain} disabled={busy !== null || Boolean(blocked)} onChange={(event) => { setDomain(event.target.value); setNotice(null); setError(null); }} placeholder="bots.yourcompany.com" autoCapitalize="none" autoCorrect="off" spellCheck={false} className="w-full rounded-lg border border-hairline/50 bg-inset px-3 py-2 text-[13px] text-ink placeholder:text-ink-secondary focus:border-accent focus:outline-none disabled:opacity-50" />
               <CustomDomainDnsRecord domain={domain} serverIpv4={status.serverIpv4} />
               <p className="text-[12px] leading-relaxed text-ink-secondary">{t("settings.domain.httpsNeeded")}</p>
               <div className="flex flex-wrap gap-2 pt-1">
-                <button type="submit" disabled={!domain.trim() || busy !== null} className="ui-button ui-button-primary">
+                <button type="submit" disabled={!domain.trim() || busy !== null || Boolean(blocked)} className="ui-button ui-button-primary">
                   {busy === "saving" ? <Loader2 size={14} className="animate-spin" /> : <Globe size={14} />}
                   {busy === "saving" ? t("settings.domain.verifying") : t("settings.domain.verify")}
                 </button>

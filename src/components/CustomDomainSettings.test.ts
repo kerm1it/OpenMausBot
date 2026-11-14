@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { CustomDomainDnsRecord, customDomainDnsName, CustomDomainGuide, customDomainProxyExample, type CustomDomainStatus } from "./CustomDomainSettings";
+import { CustomDomainDnsRecord, customDomainDnsName, CustomDomainGuide, CustomDomainSettings, customDomainProxyExample, type CustomDomainStatus } from "./CustomDomainSettings";
 
 const status: CustomDomainStatus = {
   publicUrl: "https://old.example.com",
@@ -14,6 +14,11 @@ const status: CustomDomainStatus = {
 };
 
 describe("custom domain setup guidance", () => {
+  it("shows a managed remote-access refusal before loading server state", () => {
+    const html = renderToStaticMarkup(createElement(CustomDomainSettings, { blocked: "Managed by Fixture Agency: remote access is off." }));
+    expect(html).toContain("Managed by Fixture Agency: remote access is off.");
+  });
+
   it("uses this server's ports and leaves both app and hooks on loopback", () => {
     const config = customDomainProxyExample(status);
     expect(config).toContain("reverse_proxy 127.0.0.1:23456");

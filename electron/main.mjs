@@ -63,7 +63,7 @@ import { acquireDataDirLease } from "./data-dir-lease.mjs";
 import { reviveAfterFailedSwitch, switchLocalEnvironment } from "./environment-switch.mjs";
 
 
-import { createDesktopText, DESKTOP_PORTS, registerDesktopPrefs, relabelDesktop } from "./desktop-prefs.mjs";
+import { createDesktopText, desktopServerPorts, registerDesktopPrefs, relabelDesktop } from "./desktop-prefs.mjs";
 
 
 
@@ -220,6 +220,7 @@ let desktopDataDirLease = null;
 // The folder this process leases; environmentsState.activeId can name a remote server instead.
 let runningDataDir = null;
 let localSwitchInFlight = false;
+let replacingMainWindow = false;
 
 let desktopPrefs = null, windowFrameMade = null;
 
@@ -850,12 +851,20 @@ async function startServerOn(port, dataDir = runningDataDir ?? startupEnvironmen
   return { proc: null, reason: stopped ? identity.outcome : "stuck-child", abort: !stopped };
 }
 
+function serverPortsForDataDir(dataDir) {
+  let config = null;
+  try { config = JSON.parse(fs.readFileSync(path.join(dataDir, "config.json"), "utf8")); } catch {}
+  return desktopServerPorts(config);
+}
+
 async function startServerPackaged() {
+  const dataDir = runningDataDir ?? startupEnvironmentDir(environmentsState, desktopDataDir());
+  const ports = serverPortsForDataDir(dataDir);
   let everyPortForeignOwned = true;
   for (let attempt = 0; attempt < 2; attempt++) {
-    for (const port of DESKTOP_PORTS) {
+    for (const port of ports) {
       if (desktopShutdownStarted) return false;
-      const started = await startServerOn(port);
+      const started = await startServerOn(port, dataDir);
       if (started.proc) {
         SERVER_PORT = port;
         if (serverSupervisor.ready(started.proc)) return true;
@@ -1168,6 +1177,26 @@ function navigateMainWindow(url) {
   return mainWindow.loadURL(url).then(() => true, () => false);
 }
 
+function useServerPort(port) {
+  SERVER_PORT = port;
+  setLocalOrigin(rendererOrigin());
+}
+
+function showLocalServer(previousPort) {
+  if (previousPort === SERVER_PORT) return navigateMainWindow(rendererOrigin());
+  replacingMainWindow = true;
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
+    createWindow();
+  } catch (error) {
+    app.quit();
+    throw error;
+  } finally {
+    replacingMainWindow = false;
+  }
+  return Promise.resolve(true);
+}
+
 
 function acquireDataDirLeaseFor(dir) {
   return dir === desktopDataDir()
@@ -1181,6 +1210,9 @@ async function switchLocalEnvironmentTo(targetDir, targetId, quiet = false) {
   // A second switch would be un-paused by the first's finally mid-handoff.
   if (localSwitchInFlight) return { ok: false, error: "busy" };
   const previousDir = runningDataDir ?? startupEnvironmentDir(environmentsState, desktopDataDir());
+  const previousPort = SERVER_PORT;
+  const targetPorts = serverPortsForDataDir(targetDir);
+  const targetPort = targetPorts.includes(previousPort) ? previousPort : targetPorts[0];
   let startedProc = null;
   let switchSucceeded = false;
   const failedSwitch = () => {
@@ -1193,7 +1225,7 @@ async function switchLocalEnvironmentTo(targetDir, targetId, quiet = false) {
     const result = await switchLocalEnvironment({
       targetDir,
       targetId,
-      port: SERVER_PORT,
+      port: targetPort,
       deps: {
         stopChild: async () => {
           // A child that will not die still writes to its folder: abort with the lease still held.
@@ -1215,6 +1247,7 @@ async function switchLocalEnvironmentTo(targetDir, targetId, quiet = false) {
           const started = await startServerOn(port, targetDir);
           if (!started.proc) return null;
           startedProc = started.proc;
+          useServerPort(port);
           serverSupervisor.ready(started.proc);
           return started.proc;
         },
@@ -1229,7 +1262,8 @@ async function switchLocalEnvironmentTo(targetDir, targetId, quiet = false) {
           desktopDataDirLease = null;
           desktopDataDirLease = acquireDataDirLeaseFor(previousDir);
           runningDataDir = previousDir;
-          const restored = await startServerOn(SERVER_PORT, previousDir);
+          useServerPort(previousPort);
+          const restored = await startServerOn(previousPort, previousDir);
           // startServerOn only watches; without ready() the rolled-back child has no owner.
           if (restored.proc) serverSupervisor.ready(restored.proc);
           else {
@@ -1247,7 +1281,7 @@ async function switchLocalEnvironmentTo(targetDir, targetId, quiet = false) {
       return failedSwitch();
     }
     switchSucceeded = true;
-    navigateMainWindow(rendererOrigin());
+    showLocalServer(previousPort);
     return { ok: true };
   } catch (error) {
     slog(`environment switch to ${targetDir} failed (${error?.message ?? error})`);
@@ -1256,10 +1290,11 @@ async function switchLocalEnvironmentTo(targetDir, targetId, quiet = false) {
     serverSupervisor.resume();
     if (!switchSucceeded && (!serverProc || !serverSupervisor.isCurrent(serverProc))) {
       slog(`environment switch to ${targetDir} left no server child; restarting the active environment`);
+      useServerPort(previousPort);
       await reviveAfterFailedSwitch({
         previousDir, hasLease: () => Boolean(desktopDataDirLease), log: slog,
         acquireLease: async (dir) => { desktopDataDirLease = acquireDataDirLeaseFor(dir); runningDataDir = dir; },
-        startChild: async (dir) => { const revived = await startServerOn(SERVER_PORT, dir); if (revived.proc) serverSupervisor.ready(revived.proc); return revived.proc; },
+        startChild: async (dir) => { const revived = await startServerOn(previousPort, dir); if (revived.proc) serverSupervisor.ready(revived.proc); return revived.proc; },
       });
     }
     // Held through the revive, so a second switch cannot start while the previous folder is being taken back.
@@ -2441,7 +2476,7 @@ app.whenReady().then(async () => {
 
 const allWindowsClosedQuit = createAllWindowsClosedQuit({
   app,
-  allWindows: () => appWindows(), stayOpen: () => hiddenStart,
+  allWindows: () => appWindows(), stayOpen: () => hiddenStart || replacingMainWindow,
 });
 
 // The embedded CUA daemon's async cleanup cannot run after the host exits, so the first quit waits for it (capped).

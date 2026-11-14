@@ -208,8 +208,8 @@ describe("configuration boundaries", () => {
     expect(childEnv).not.toHaveProperty("OMB_CUSTOM_IMAGE_KEY");
   });
   it("persists a custom domain but excludes it from generic config patches", () => {
-    expect(parseStoredConfig({ customDomain: "https://bots.example.com" })).toEqual({ customDomain: "https://bots.example.com" });
-    expect(parseConfigPatch({ customDomain: "https://unverified.example.com", language: "en" })).toEqual({ language: "en" });
+    expect(parseStoredConfig({ customDomain: "https://bots.example.com", customDomainPort: 18799 })).toEqual({ customDomain: "https://bots.example.com", customDomainPort: 18799 });
+    expect(parseConfigPatch({ customDomain: "https://unverified.example.com", customDomainPort: 28799, language: "en" })).toEqual({ language: "en" });
     expect(parseStoredConfig({ customDomain: "" })).toEqual({ customDomain: "" });
   });
   it("keeps supported stored settings and drops unrelated top-level data", () => {

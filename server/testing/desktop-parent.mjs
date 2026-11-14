@@ -8,9 +8,11 @@ import { readFileSync, unwatchFile, watchFile } from "node:fs";
 
 const token = process.env.OMB_TEST_DESKTOP_OWNER_TOKEN;
 const pages = process.env.OMB_TEST_DESKTOP_PAGES_ACCESS;
+const policy = process.env.OMB_TEST_DESKTOP_POLICY;
 const cuaFile = process.env.OMB_TEST_DESKTOP_CUA_CONNECTION;
 delete process.env.OMB_TEST_DESKTOP_OWNER_TOKEN;
 delete process.env.OMB_TEST_DESKTOP_PAGES_ACCESS;
+delete process.env.OMB_TEST_DESKTOP_POLICY;
 delete process.env.OMB_TEST_DESKTOP_CUA_CONNECTION;
 
 const cuaGrant = () => {
@@ -21,7 +23,7 @@ const cuaGrant = () => {
   return { type: "openmausbot:local-computer", connection };
 };
 
-if (token || cuaFile) {
+if (token || policy || cuaFile) {
   const listeners = [];
   if (cuaFile) {
     watchFile(cuaFile, { interval: 25, persistent: false }, () => {
@@ -37,6 +39,7 @@ if (token || cuaFile) {
         listeners.push(listener);
         if (token) queueMicrotask(() => listener({ data: { type: "openmausbot:desktop-mutation-token", token } }));
         if (pages) queueMicrotask(() => listener({ data: { type: "openmausbot:included-pages", access: JSON.parse(pages) } }));
+        if (policy) queueMicrotask(() => listener({ data: { type: "openmausbot:managed-desktop-policy", policy: JSON.parse(policy) } }));
         if (cuaFile) queueMicrotask(() => listener({ data: cuaGrant() }));
       },
       postMessage() {},
