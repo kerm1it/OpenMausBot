@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const fixture = vi.hoisted(() => ({ autoUpdater: null, handlers: new Map() }));
+const fixture = vi.hoisted(() => ({ autoUpdater: null, handlers: new Map(), home: "" }));
 
 vi.mock("electron", () => ({
-  app: { isPackaged: true, getPath: () => "/unused-updater-test-log", getVersion: () => "1.0.0", hide: vi.fn() },
+  app: { isPackaged: true, getPath: () => fixture.home, getVersion: () => "1.0.0", hide: vi.fn() },
   clipboard: { writeText: vi.fn() },
   ipcMain: { handle: (name, handler) => fixture.handlers.set(name, handler) },
 }));
@@ -41,11 +41,13 @@ const settle = async () => {
 };
 
 beforeEach(() => {
+  fixture.home = mkdtempSync(join(tmpdir(), "omb-updater-home-"));
   vi.useFakeTimers();
 });
 afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
+  rmSync(fixture.home, { recursive: true, force: true });
 });
 it("a downloaded update installs when the app quits, except a system package, which is the person's to install", async () => {
   const platform = Object.getOwnPropertyDescriptor(process, "platform");

@@ -1,20 +1,9 @@
+import { SKIN_IDS } from "../../shared/app-settings";
 import { paintAuroraField } from "./aurora-field";
 import { hasPriorRun } from "./prior-run";
+import { windowPrefChanged } from "./window-pref-changes";
 
-export const SKIN_IDS = [
-  "midnight",
-  "atelier",
-  "foundry",
-  "lagoon",
-  "graphite",
-  "linen",
-  "dusk",
-  "daylight",
-  "meadow",
-  "pop",
-  "halloween",
-  "aurora",
-] as const;
+export { SKIN_IDS };
 export type SkinId = (typeof SKIN_IDS)[number];
 
 export type Skin = {
@@ -35,6 +24,7 @@ export const SKINS: readonly Skin[] = [
   { id: "meadow", name: "Meadow", tagline: "Fresh white with a calm green. The MausBot look." },
   { id: "pop", name: "Pop", tagline: "Cream paper, thick ink outlines, hard shadows. Chunky and cheerful." },
   { id: "halloween", name: "Halloween", tagline: "Plum after dark, lit in pumpkin orange. Bats optional." },
+  { id: "diwali", name: "Diwali", tagline: "Indigo night, lit in marigold and diya gold. Fireworks optional." },
   { id: "aurora", name: "Aurora", tagline: "Near-black, crossed by a band of green light. Glass on top." },
 ];
 
@@ -144,6 +134,7 @@ export function applySkinChoice(choice: SkinChoice): void {
   }
   followSystem(choice === "system");
   paintSkin(resolveSkin(choice));
+  windowPrefChanged();
 }
 
 export function applySkin(id: SkinId): void {

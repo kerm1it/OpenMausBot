@@ -74,10 +74,7 @@ function railKeepsItsSize() {
 if (typeof window !== "undefined") {
   for (const type of ["resize", "DOMContentLoaded"]) window.addEventListener(type, () => { leaveRailRoom(); railKeepsItsSize(); });
 }
-const REMOTE_SAFE = new Set(["platform", "app", "getCapabilities", "onCapabilitiesChanged", "applySkin", "setUnreadCount", "permStatus", "workspaces", "rail", "desktopNotifications", "desktopLanguage", "windowControls", "onOpenAppSettings", "windowFrame"]);
-/** My Cloud's own page once it is the person's home (main checks the sender again): it is this app's page then. */
-
-
+const REMOTE_SAFE = new Set(["platform", "app", "getCapabilities", "onCapabilitiesChanged", "applySkin", "setUnreadCount", "permStatus", "workspaces", "rail", "desktopNotifications", "desktopLanguage", "windowControls", "onOpenAppSettings", "windowFrame", "softwareRendering"]);
 function savedLanguageChoice() {
   try { const saved = ipcRenderer.sendSync("desktop-language:read"); return typeof saved === "string" ? saved : null; } catch { return null; }
 }
@@ -103,6 +100,8 @@ function invokeWithPlainError(channel, ...args) {
 
 const bridge = {
   platform: process.platform,
+  /** Linux without a GPU (electron/linux-gpu.mjs): the page drops its backdrop blurs. */
+  softwareRendering: process.argv.includes("--omb-software-rendering=1"),
   /** This app's version, and whether this page is this app's own (served by this computer, not a server from the Server menu). */
   app: { version: appVersion, ownPage: isLocalPage },
   // Safe on a cloud page: the person chooses in a native menu, or a circle of the rail main listed (only for this app's
@@ -163,6 +162,10 @@ const bridge = {
       ipcRenderer.on("rail:state", handler);
       return () => ipcRenderer.removeListener("rail:state", handler);
     },
+    // "Switch to This computer" on a Cloud's settings: only from the person's click, and only a settings page's name.
+    openComputer: (page) => navigator.userActivation?.isActive === true
+      ? ipcRenderer.invoke("rail:open-computer", typeof page === "string" && /^[a-z-]{1,32}$/.test(page) ? page : "")
+      : Promise.reject(new Error("Choose Switch to This computer.")),
     ...(isLocalPage ? {
       expand: (on) => ipcRenderer.invoke("rail:expand", on === true),
       onSkin: (cb) => {
@@ -204,6 +207,7 @@ const bridge = {
     keepAwake: (enabled) => ipcRenderer.invoke("companion:keep-awake", enabled),
     refreshTailscale: () => ipcRenderer.invoke("companion:refresh-tailscale"),
     setTailscale: (on) => ipcRenderer.invoke("companion:tailscale", on === true),
+    setTailscaleComputers: (on) => ipcRenderer.invoke("companion:tailscale-computers", on === true),
     setRoute: (route, on) => ipcRenderer.invoke("companion:route", String(route), on === true),
     dismissNotice: (route) => ipcRenderer.invoke("companion:notice-dismiss", String(route)),
     pairing: (open, expectedToken) => ipcRenderer.invoke("companion:pairing", open, expectedToken),
@@ -352,6 +356,7 @@ const bridge = {
   exportDiagnostics: () => ipcRenderer.invoke("desktop:export-diagnostics"),
   saveFile: (filePath) => invokeWithPlainError("desktop:save-file", filePath),
   revealInFolder: (filePath) => ipcRenderer.invoke("desktop:reveal-file", filePath),
+  openFolder: (folderPath) => ipcRenderer.invoke("desktop:open-folder", folderPath),
   openHtmlInBrowser: (source, name) => invokeWithPlainError("desktop:open-html", source, name),
   // This app's own logs folder (server.log, desktop-crashes.log, updater.log); the page names no path.
   openLogsFolder: () => ipcRenderer.invoke("desktop:open-logs"),
@@ -360,7 +365,19 @@ const bridge = {
     set: on => on !== true || isLocalPage || navigator.userActivation?.isActive === true
       ? ipcRenderer.invoke("open-at-login:set", on === true) : Promise.reject(new Error("Turn on the switch to open OpenMausBot at login.")),
   },
-  setCredential: (name, value) => ipcRenderer.invoke("credential:set", name, value),
+  setCredential: (name, value, options) => ipcRenderer.invoke("credential:set", name, value, options),
+  // Saved keys this launch could not read, and "Reset saved keys" (main asks the person first, then restarts).
+  credentialStore: {
+    unreadable: () => ipcRenderer.invoke("credential-store:unreadable"),
+    reset: () => ipcRenderer.invoke("credential-store:reset"),
+  },
+
+  // A server's page from the Server menu, once that server is newer than this app, asks for this app's own update from
+  // the person's click. It learns only what was done; main asks in a dialog of its own before anything restarts.
+  appUpdate: {
+    request: () => navigator.userActivation?.isActive === true
+      ? ipcRenderer.invoke("update:for-server-page") : Promise.reject(new Error("Choose Update app.")),
+  },
 
   /** A remote page may read the list but never change where this window goes. */
   environments: {

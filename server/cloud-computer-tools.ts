@@ -10,6 +10,7 @@ import type { AppConfig } from "./config.ts";
 import { controlRefusal, type ControlState } from "./control-client.ts";
 import { COMPUTER_COPY_BUDGET_MS, HARNESS_CALL_BUDGET_MS } from "./harness-budget.ts";
 import { compileToolSchema } from "./mcp-schema-validator.ts";
+import { CLOUD_COMPUTER_NO_ANSWER } from "../shared/cloud-computer-recovery.ts";
 
 const coordinate = { type: "integer", minimum: 0, maximum: 32767 };
 const tool = (name: string, description: string, properties: Record<string, unknown> = {}, required: string[] = []) =>
@@ -24,13 +25,13 @@ export const CLOUD_COMPUTER_TOOLS = [
   tool("key_press", "Press an X11 key or shortcut.", { key: { type: "string", pattern: "^[A-Za-z0-9_+]+$", minLength: 1, maxLength: 100 } }, ["key"]),
   tool("scroll", "Scroll at a point on the cloud desktop.", { x: coordinate, y: coordinate, direction: { type: "string", enum: ["up", "down", "left", "right"] }, amount: { type: "integer", minimum: 1, maximum: 30 } }, ["x", "y", "direction"]),
   tool("open_url", "Request opening an HTTP or HTTPS URL in the cloud desktop browser; inspect the screen to confirm it loaded.", { url: { type: "string", pattern: "^https?://", maxLength: 2000 } }, ["url"]),
-  tool("exec", "Run a shell command on the assigned cloud computer and wait for its result. For a command that may run long (downloads, installs, builds, data jobs), set background: true: it starts the command and answers at once with a process_id to follow with exec_status, and the computer stays on for it for up to two hours.", {
+  tool("exec", "Run a shell command on the assigned cloud computer and wait for its result. For a command that may run long (downloads, installs, builds, data jobs), set background: true: it starts the command and answers at once with a process_id to follow with exec_status, and the computer stays on for it for up to two hours. Completion does not automatically resume this turn or notify a delegator. If the result is needed for this task, use exec_status with wait_seconds in this turn until it finishes, then check its exit code and output. If you cannot finish checking in this turn, report the work as unfinished with the process_id; do not claim completion or start another copy blindly.", {
     command: { type: "string", minLength: 1, maxLength: 4000 },
     background: { type: "boolean", description: "Start the command and answer at once with a process_id, instead of waiting for it to finish." },
   }, ["command"]),
   tool("exec_status", `Check a command started with exec and background: true: running or finished, its exit code, and the end of its stdout and stderr (the last ${STDOUT_TAIL_CHARS.toLocaleString("en-US")} and ${STDERR_TAIL_CHARS.toLocaleString("en-US")} characters).`, {
     process_id: { type: "string", pattern: PROCESS_ID_PATTERN },
-    wait_seconds: { type: "integer", minimum: 0, maximum: STATUS_WAIT_MAX_SECONDS, description: "Wait up to this many seconds for the command to finish before answering." },
+    wait_seconds: { type: "integer", minimum: 0, maximum: STATUS_WAIT_MAX_SECONDS, description: "Wait up to this many seconds for the command to finish before answering. A running result can arrive before the full interval because the last status read needs time to respond." },
   }, ["process_id"]),
   tool("copy_from_computer", "Copy one file of up to 2 GiB from the cloud computer into your working folder, for example to load it with data_load or use it in a page. A file already there is replaced.", {
     path: { type: "string", minLength: 1, maxLength: 4096, description: "The file on the cloud computer, under /home/user or /tmp." },
@@ -116,6 +117,7 @@ export async function runCloudComputerTool(
   signal.throwIfAborted();
   if (name === "open_url" && result.ok) return { content: [{ type: "text", text: "Browser launch requested. Page loading is not confirmed; inspect the screen before continuing." }] };
   if (name === "exec" && result.timedOut) return { isError: true, content: [{ type: "text", text: EXEC_LATE }] };
+  if (result.unanswered) return { isError: true, content: [{ type: "text", text: CLOUD_COMPUTER_NO_ANSWER }] };
   return { isError: !result.ok, content: [{ type: "text", text: JSON.stringify(result) }] };
 }
 
@@ -134,6 +136,8 @@ export async function cloudComputerRpc(
     signal: AbortSignal;
     /** The whole call, the gate's wait included, answers within this. */
     budgetMs?: number;
+    /** A computer that stopped answering (server/boat-recovery.ts): what the bot is told instead, and once after it was replaced. */
+    recovery?: { refusal(boxId: string, phase: "before" | "after"): string | null; notice(boxId: string): string | null };
   },
 ): Promise<{ tools: typeof CLOUD_COMPUTER_TOOLS } | CloudComputerResult> {
   const started = Date.now();
@@ -154,14 +158,26 @@ export async function cloudComputerRpc(
   deps.assertActive();
   const boxId = deps.boxId();
   if (!boxId) return { isError: true, content: [{ type: "text", text: CLOUD_COMPUTER_NOT_READY }] };
+  const refused = (phase: "before" | "after"): CloudComputerResult | null => {
+    const text = deps.recovery?.refusal(boxId, phase);
+    return text ? { isError: true, content: [{ type: "text", text }] } : null;
+  };
+  const before = refused("before");
+  if (before) return before;
   const late = AbortSignal.timeout(Math.max(1, deadline - Date.now()));
   let result: CloudComputerResult;
   try {
     result = await runCloudComputerTool(deps.cfg, boxId, params.name as string, args as Record<string, unknown>, AbortSignal.any([deps.signal, late]), deps.folder?.());
   } catch (error) {
-    if (!late.aborted || deps.signal.aborted) throw error;
+    if (deps.signal.aborted) throw error;
+    const after = refused("after");
+    if (after) return after;
+    if (!late.aborted) throw error;
     return { isError: true, content: [{ type: "text", text: commandLateText(params.name, args) ?? (copy ? CLOUD_COMPUTER_COPY_LATE : CLOUD_COMPUTER_LATE) }] };
   }
   deps.assertActive();
-  return result;
+  const unanswered = result.isError && result.content.some((part) => part.type === "text" && part.text === CLOUD_COMPUTER_NO_ANSWER);
+  if (unanswered) result = refused("after") ?? result;
+  const notice = deps.recovery?.notice(boxId);
+  return notice ? { ...result, content: [{ type: "text", text: notice }, ...result.content] } : result;
 }

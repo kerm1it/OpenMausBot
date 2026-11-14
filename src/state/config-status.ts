@@ -20,6 +20,7 @@ export interface ConfigStatus {
   cerebras?: SavedKey;
   groq?: SavedKey;
   greenference?: SavedKey;
+  modelgo?: SavedKey;
   deepseek?: SavedKey;
   meta?: SavedKey;
   /** X research comes with MausBot Cloud plans: `included` while this server holds the plan's relay credential;
@@ -58,7 +59,7 @@ export interface ConfigStatus {
   newBots?: { effort?: EffortLevel };
   /** This Cloud is on the Starter plan, as the Admin last said; absent or false otherwise. */
   cloudStarter?: boolean;
-  /** The most bots this Cloud's plan makes, its MausBot aside; absent when its plan has no such limit. */
+  /** The most bots this Cloud's plan makes, its MausBot aside. Sent only by servers that capped Starter's bots; absent otherwise. */
   botLimit?: number;
   /** A task on this Cloud is waiting for memory right now. */
   waitingForRoom?: boolean;
@@ -139,12 +140,14 @@ export interface ConfigStatus {
   };
   /** who's using the app — collected in onboarding, shown in the sidebar */
   profile?: { name: string; email: string; aboutMe?: string; avatarUrl?: string };
+  /** Rules every bot follows, ahead of its department's context and its own instructions; sent to admins only. */
+  everyBotRules?: string;
   /** UI language override; "" (or absent) follows the system language. */
   language?: string;
   /** What a paired phone calls this computer; "" uses the default. */
   computerName?: string;
   /** Opt-in flags. Absent means off. */
-  features?: { skillAuthoring: boolean; skillReview?: boolean; skillReviewSteps?: number; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean; llmThreadTitles?: boolean; skillsLibrary?: boolean; shareLearnedSkills?: "off" | "ask" | "auto"; roomMemoryCapture?: boolean; savedSteps?: boolean; savedStepsHere?: boolean };
+  features?: { skillAuthoring: boolean; skillReview?: boolean; skillReviewSteps?: number; showToolCalls?: boolean; browser?: boolean; sharedComputers?: boolean; claudeUserMcp?: boolean; llmThreadTitles?: boolean; skillsLibrary?: boolean; shareLearnedSkills?: "off" | "ask" | "auto"; roomMemoryCapture?: boolean; savedSteps?: boolean; savedStepsHere?: boolean; usbPhoneTakeover?: boolean };
   /** First-run progress: whether the welcome tour was finished and which
    * one-time hints were dismissed. Server-owned so it follows the workspace. */
   onboarding?: OnboardingStatus;

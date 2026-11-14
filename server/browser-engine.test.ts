@@ -720,10 +720,13 @@ describe("finding the browser engine", () => {
 
     files.add(pathBinary);
     expect(resolveAgentBrowserBinary({ dataDir, env, exists })).toBe(pathBinary);
+    expect(resolveAgentBrowserBinary({ dataDir, env, exists, managedOnly: true })).toBeNull();
     files.add(pinned);
     expect(resolveAgentBrowserBinary({ dataDir, env, exists })).toBe(pinned);
+    expect(resolveAgentBrowserBinary({ dataDir, env, exists, managedOnly: true })).toBe(pinned);
     files.add(override);
     expect(resolveAgentBrowserBinary({ dataDir, env: { ...env, OMB_AGENT_BROWSER_PATH: override }, exists })).toBe(override);
+    expect(resolveAgentBrowserBinary({ dataDir, env: { ...env, OMB_AGENT_BROWSER_PATH: override }, exists, managedOnly: true })).toBe(override);
     expect(resolveAgentBrowserBinary({ dataDir, env: { ...env, OMB_AGENT_BROWSER_PATH: join(dataDir, "missing", name) }, exists })).toBeNull();
     expect(browserEngineStatus({ dataDir, env, exists })).toMatchObject({ kind: "ready", binaryPath: pinned, version: agentBrowserReleaseVersion(resolveAgentBrowserReleaseAsset()), managed: true });
     expect(browserEngineStatus({ dataDir, env: { ...env, OMB_AGENT_BROWSER_PATH: override }, exists, versionOf: () => AGENT_BROWSER_VERSION })).toMatchObject({ kind: "ready", binaryPath: override, managed: false });

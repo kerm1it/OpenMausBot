@@ -43,6 +43,7 @@ const DONE_ASSIGNMENT = {
   children: [], inbox: [],
 };
 let lastAssignmentStatusUrl: string | null = null;
+let lastModelsUrl: string | undefined;
 let assignmentStatusResponse: unknown = DONE_ASSIGNMENT;
 let assignmentStatusCode = 200;
 let lastThreadBody: any = null;
@@ -53,6 +54,7 @@ let computerRequests: { method: string; url: string; body: unknown }[] = [];
 let computerResponse: unknown = { current: "local", available: ["local", "vm"] };
 let computerStatus = 200;
 let lastCreateBody: any = null;
+let createBotExtra: Record<string, unknown> = {};
 let lastCreateRoomBody: unknown = null;
 let lastManageRoomBody: unknown = null;
 let lastCredentialBody: any = null;
@@ -260,6 +262,12 @@ beforeAll(async () => {
       res.end(JSON.stringify(assignmentStatusResponse));
       return;
     }
+    if (req.method === "GET" && req.url?.startsWith("/api/internal/models")) {
+      lastModelsUrl = req.url;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ current: { instanceId: "claude", model: "claude-sonnet-5" }, engines: [{ instanceId: "codex", name: "Codex", models: ["gpt-5.5"] }] }));
+      return;
+    }
     if (req.method === "GET" && req.url?.startsWith("/api/internal/threads?")) {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(threadsList));
@@ -292,7 +300,7 @@ beforeAll(async () => {
       req.on("end", () => {
         lastCreateBody = JSON.parse(data);
         res.writeHead(201, { "content-type": "application/json" });
-        res.end(JSON.stringify({ id: "bot-designer", name: "Pixel", section: "Work", modelSelection: lastCreateBody.modelSelection }));
+        res.end(JSON.stringify({ id: "bot-designer", name: "Pixel", section: "Work", modelSelection: lastCreateBody.modelSelection, ...createBotExtra }));
       });
       return;
     }
@@ -640,6 +648,8 @@ describe("agents-proxy MCP surface", () => {
       "list_threads",
       "close_thread",
       "start_thread",
+      "burst",
+      "list_models",
       "vm_exec",
       "attach_file",
       "show_widget",
@@ -647,6 +657,7 @@ describe("agents-proxy MCP surface", () => {
       "publish_page",
       "unpublish_page",
       "post_to_room",
+      "post_to_thread",
       "install_plugin",
       "uninstall_plugin",
       "list_plugins",
@@ -679,6 +690,7 @@ describe("agents-proxy MCP surface", () => {
       "skills_list",
       "skill_manage",
       "mcp_server",
+      "app_settings",
     ]);
     const tool = (name: string) => list.result.tools.find((entry: { name: string }) => entry.name === name);
     const coordinate = tool("coordinate_bots");
@@ -705,7 +717,7 @@ describe("agents-proxy MCP surface", () => {
     expect(credential.description).toContain("on a secure card in the app or a QR-paired phone, never in chat");
     expect(credential.description).toContain("onePasswordToken: a 1Password service account token");
     expect(credential.description).toContain("You never see the value");
-    expect(Object.keys(credential.inputSchema.properties)).toEqual(["credential_id", "address", "label", "reason", "placeholder", "delivery"]);
+    expect(Object.keys(credential.inputSchema.properties)).toEqual(["credential_id", "address", "label", "reason", "placeholder", "delivery", "replace"]);
     expect(credential.inputSchema.properties.address.description).toMatch(/^credential_id email only/);
     expect(credential.inputSchema.required).toBeUndefined();
   });
@@ -761,7 +773,7 @@ describe("agents-proxy MCP surface", () => {
       "tool_result_read",
       "list_shared_computers",
       "assignment_status", "list_bots", "usage_limits", "list_rooms", "list_threads",
-      "list_team_setup",
+      "list_models", "list_team_setup",
       "session_search", "trigger_info", "list_waits", "skills_list",
     ];
     expect(list.result.tools.filter((tool: any) => tool.annotations?.readOnlyHint)
@@ -972,7 +984,7 @@ describe("agents-proxy MCP surface", () => {
     const list = await rpc("tools/list");
     const start = list.result.tools.find((tool: { name: string }) => tool.name === "start_thread");
     expect(start.inputSchema.required).toEqual(["title", "message"]);
-    expect(Object.keys(start.inputSchema.properties)).toEqual(["title", "message", "folder", "model_selection"]);
+    expect(Object.keys(start.inputSchema.properties)).toEqual(["title", "message", "folder", "model_selection", "report_back"]);
     expect(start.description).toContain("Open a separate job on yourself");
     expect(start.description).toContain('use coordinate_bots for teammates (thread "new" opens a fresh thread on them)');
     expect(start.description).toContain("do not retry it");
@@ -994,6 +1006,34 @@ describe("agents-proxy MCP surface", () => {
       expect(lastThreadBody).toEqual({
         fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", title: "QA: PR #9", message: "Review the login fix.", depth: 0, toBotId: "bot-helper",
       });
+    } finally {
+      threadResponse = previous;
+    }
+  });
+
+  it("list_models forwards search and hands back the server's menu as is", async () => {
+    const res = await callTool("list_models", { search: " gpt 5.5 " });
+    expect(res.result.isError).toBeFalsy();
+    expect(lastModelsUrl).toBe("/api/internal/models?search=gpt%205.5");
+    expect(JSON.parse(res.result.content[0].text)).toMatchObject({ engines: [{ instanceId: "codex", models: ["gpt-5.5"] }] });
+    await callTool("list_models", {});
+    expect(lastModelsUrl).toBe("/api/internal/models");
+  });
+
+  it("start_thread on another model forwards the model and report_back, and says the result resumes the opener", async () => {
+    const previous = threadResponse;
+    threadResponse = { receipts: [{ botId: "bot-asker", outcome: "queued", detail: "handed to the coordinator", requestId: "asg-own-1", threadId: "thread-own" }],
+      self: true, reportBack: true, title: "Review: GPT", botId: "bot-asker", threadId: "thread-own", requestId: "asg-own-1" };
+    try {
+      const modelSelection = { instanceId: "codex", model: "gpt-5.5", effort: "high" };
+      const res = await callTool("start_thread", { title: "Review: GPT", message: "Review the diff.", model_selection: modelSelection, report_back: true });
+      const text = res.result.content[0].text;
+      expect(res.result.isError).toBeFalsy();
+      expect(text).toContain("Opened thread #Review: GPT on yourself [thread id: thread-own].");
+      expect(text).toContain("its result comes back to this conversation and resumes you automatically (assignment id: asg-own-1)");
+      expect(text).toContain("finish your turn");
+      expect(lastThreadBody).toEqual({ fromBotId: "bot-asker", fromThreadId: "thread-asker-routine", title: "Review: GPT", message: "Review the diff.",
+        depth: 0, modelSelection, reportBack: true });
     } finally {
       threadResponse = previous;
     }
@@ -1060,6 +1100,21 @@ describe("agents-proxy MCP surface", () => {
       role: "Product designer",
       instructions: "Design and review the user experience.",
     });
+  });
+
+  it("tells the Chief when the new bot has no cloud computer yet, so handed work runs without one", async () => {
+    const plain = await callTool("create_bot", { name: "Pixel", role: "Product designer", instructions: "Design." });
+    expect(plain.result.content[0].text).not.toContain("cloud computer");
+    createBotExtra = { noCloudComputerYet: true };
+    try {
+      const res = await callTool("create_bot", { name: "Pixel", role: "Product designer", instructions: "Design." });
+      const text = res.result.content[0].text;
+      expect(text).toContain("Created @Pixel in Work");
+      expect(text).toContain("@Pixel has no cloud computer yet");
+      expect(text).toContain("tell the person");
+    } finally {
+      createBotExtra = {};
+    }
   });
 
   it("passes an explicit specialist model selection intact and reports the applied model", async () => {
@@ -1177,7 +1232,10 @@ describe("agents-proxy MCP surface", () => {
       reason: "To create test charges.",
       placeholder: "sk_test_…",
       delivery: "file",
+      replace: false,
     });
+    await callTool("request_credential", { label: "Stripe secret key", reason: "The saved key was refused.", delivery: "ref", replace: true });
+    expect(lastCredentialBody).toMatchObject({ label: "Stripe secret key", delivery: "ref", replace: true });
   });
 
   it("rejects credential ids outside the fixed allowlist locally", async () => {
@@ -1700,6 +1758,24 @@ describe("agents-proxy MCP surface", () => {
       type: "once",
       at: "2026-09-01T09:00:00+05:30",
     });
+  });
+
+  it("tells a one-time routine given a timeZone that its zone is the offset in at", async () => {
+    lastRoutineRequestBody = null;
+    const res = await callTool("create_trigger", { when: "schedule",
+      name: "One check",
+      instructions: "Check the release page.",
+      schedule: { type: "once", at: "2026-09-01T09:00:00+08:00", timeZone: "Asia/Shanghai" },
+    });
+    expect(res.result.isError).toBe(true);
+    expect(lastRoutineRequestBody).toBeNull();
+    const text = res.result.content[0].text;
+    expect(text).toContain('A once schedule takes no "timeZone"');
+    expect(text).toContain('offset inside "at"');
+    expect(text).not.toContain("Weekly and daily times");
+    const list = await rpc("tools/list");
+    const routine = list.result.tools.find((entry: { name: string }) => entry.name === "trigger");
+    expect(routine.inputSchema.properties.schedule.properties.timeZone.description).toMatch(/^Only for cron/);
   });
 
   it("proposes an interval routine with an optional start anchor", async () => {
@@ -2425,7 +2501,7 @@ describe("tool bridge", () => {
   /** The main child's switches: a Chief with skills and shared computers. */
   const CHIEF = { OMB_SKILL_AUTHORING_ENABLED: "1", OMB_SHARED_COMPUTERS_ENABLED: "1", OMB_CHIEF_OF_STAFF: "1", OMB_COMPUTER_SELECTION: "1" };
   const CHIEF_ONLY = ["create_bot", "list_team_setup", "propose_team_setup", "propose_bot_deletion", "manage_room", "retry_thread"];
-  const HOT = ["tool_result_read", "list_room_targets", "coordinate_bots", "list_bots", "list_rooms", "select_computer", "attach_file", "publish_page", "post_to_room", "request_credential", "request_sign_in", "fill_login", "message_person", "memory_update"];
+  const HOT = ["tool_result_read", "list_room_targets", "coordinate_bots", "list_bots", "list_rooms", "select_computer", "attach_file", "publish_page", "post_to_room", "post_to_thread", "request_credential", "request_sign_in", "fill_login", "message_person", "memory_update"];
   let chief: Rpc;
   let plain: Rpc;
   let off: Rpc;

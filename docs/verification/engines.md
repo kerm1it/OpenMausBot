@@ -49,6 +49,18 @@ prove real OAuth login or native Windows execution.
   provider.
 - Model-picker rendering is Electron UI and remains outside this first map.
 
+## OMP (Oh My Pi)
+
+Install with `npm install -g @oh-my-pi/pi-coding-agent`, then run `omp login` or configure a provider in `~/.omp/agent/models.yml`. OpenMausBot launches `omp acp`, discovers its advertised models and per-model thinking choices, and resumes each thread's native OMP session. OMP remains responsible for its own provider credentials and approvals; OpenMausBot answers ACP permission requests through the normal approval cards.
+
+```sh
+pnpm exec vitest run server/drivers/acp/omp.test.ts server/drivers/acp/custom-model-catalog.test.ts server/runtime/capabilities.test.ts server/drivers/tool-scope-coverage.test.ts server/agents-bridge-switch.test.ts server/engine-updates.test.ts server/built-in-instances.test.ts src/lib/analytics-allowlist.test.ts server/engine-memory.test.ts
+```
+
+The contract tests use the repository's fake ACP CLI and disposable folders. They cover fresh and existing fleets, catalogs larger than 128 models without per-model discovery prompts, temporary discovery-session cleanup, model selection, local credential forwarding and denied permissions. Model discovery uses `PI_CODING_AGENT_SESSION_DIR` in a temporary directory so refreshes do not add empty sessions to the person's OMP history.
+
+The following is a one-time author qualification against OMP 18.13.1, not a checked-in repeatable native fixture: with isolated homes and keyless synthetic providers, ACP initialization and authentication, model and thinking selection, a 2,000-model catalog, discovery-session isolation, a streamed turn through the production driver, and a second turn after recreating that driver with the same native session. The loopback provider received both turns and the resumed request contained the first turn's history. These checks do not prove a real provider account, a paid turn, native Windows behavior or packaged desktop integration.
+
 ## Slow or empty CLI version responses
 
 ```sh
@@ -86,6 +98,21 @@ the row reports catalog reachability without claiming chat authentication. Selec
 Groq model in the bot's picker, send a fixture turn, then clear the key and
 confirm the engine is unavailable. Never use the live app or a real key for
 this recipe.
+
+## ModelGo API setup
+
+```sh
+pnpm exec vitest run server/drivers/modelgo.test.ts server/provider-key-check.test.ts server/credential-request.test.ts src/components/keys/key-catalog.test.ts
+```
+
+These use a local stand-in for `https://api.modelgo.ai/v1`. They check the
+preset endpoint, that the server's key never goes to another host, the live
+model list, streaming and tool calls over chat completions, the plain sentences
+for HTTP 402 `billing_insufficient` and 403 `first_recharge_required`, and that
+a refused key never shows in events. They never call ModelGo. A chat and a tool
+call through this driver against the real API have not been run; use a real key
+before relying on them. `/models` has no field for tool support, so the picker
+keeps every model whose `output_modalities` includes text.
 
 ## Greenference API setup
 

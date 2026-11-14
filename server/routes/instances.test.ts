@@ -8,6 +8,7 @@ import type { ProviderAuthenticationStart, ProviderAuthenticationStatus } from "
 import { ENGINE_LIST_REUSE_MS, ProviderRegistry } from "../harness/registry.ts";
 import { json, readBody } from "../harness/http.ts";
 import { ProviderAuthSessions } from "../provider-auth-sessions.ts";
+import type { RequestAuth } from "../request-auth.ts";
 import { makeFakeDriver } from "../testing/fake-driver.ts";
 import { createInstanceRoutes, type InstanceRouteDeps } from "./instances.ts";
 import { dispatchRoutes } from "./table.ts";
@@ -17,7 +18,7 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise((done) => server.close(done))));
 });
 
-async function serve(extra: Partial<InstanceRouteDeps> = {}) {
+async function serve(extra: Partial<InstanceRouteDeps> = {}, auth: RequestAuth = { kind: "loopback", scopes: ["admin"] }) {
   const fake = makeFakeDriver();
   const registry = new ProviderRegistry([fake.driver]);
   await registry.load({ a: { driver: "fake" } });
@@ -52,7 +53,7 @@ async function serve(extra: Partial<InstanceRouteDeps> = {}) {
     const url = new URL(req.url ?? "/", "http://localhost");
     const handled = await dispatchRoutes(routes, {
       req, res, url, path: url.pathname, method: req.method ?? "GET",
-      auth: { kind: "loopback", scopes: ["admin"] }, json, readBody,
+      auth, json, readBody,
     });
     if (!handled) json(res, 404, { from: "inline routes" });
   });
@@ -111,6 +112,22 @@ describe("the engine list", () => {
     await call("GET", "/api/instances?fresh=1");
     expect(fake.probes).toHaveLength(2);
     expect(await probesAfterList()).toBe(2);
+  });
+});
+
+describe("whether the server can start a bot", () => {
+  it("counts the engines that are available and names none of them", async () => {
+    const { call } = await serve({
+      describeInstances: async () => [
+        { instanceId: "claude", snapshot: { state: "available" } },
+        { instanceId: "codex", snapshot: { state: "needs-login" } },
+        { instanceId: "custom-1", snapshot: { state: "available" } },
+        { instanceId: "broken" },
+      ],
+    });
+    expect(await call("GET", "/api/health/engines")).toEqual({ app: "openmausbot", engines: 2 });
+    const none = await serve({ describeInstances: async () => [{ instanceId: "codex", snapshot: { state: "unavailable" } }] });
+    expect(await none.call("GET", "/api/health/engines")).toEqual({ app: "openmausbot", engines: 0 });
   });
 });
 

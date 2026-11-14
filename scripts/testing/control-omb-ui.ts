@@ -29,6 +29,11 @@ const ROOT = fileURLToPath(new URL("../..", import.meta.url));
 export const UI_TOOLS_DIR = join(ROOT, ".omb-scratch", "verify-tools");
 /** Verbs that change the fixture or the page; they take the explicit handle, never discovery. */
 export const UI_MUTATING = new Set(["click", "type", "press", "flag", "eval"]);
+export const ENABLE_ADVANCED_UI = `(() => {
+  localStorage.setItem("omb-advanced-mode", "1");
+  window.dispatchEvent(new StorageEvent("storage", { key: "omb-advanced-mode", storageArea: localStorage }));
+  return true;
+})()`;
 /** The sidebar's Tools section starts open, and a click on its header closes it. */
 export const OPEN_SIDEBAR_TOOLS = "(() => { document.querySelector('[data-tour=tools] button[aria-expanded=false]')?.click(); return true; })()";
 
@@ -138,8 +143,6 @@ export function agentBrowser(
   });
 }
 
-/** Chrome for Testing that `agent-browser install` unpacked under the tools
- * directory, newest version first; null when it found a system browser instead. */
 export function installedChrome(toolsDir = UI_TOOLS_DIR, platform: NodeJS.Platform = process.platform): string | null {
   const browsers = join(toolsDir, ".agent-browser", "browsers");
   let versions: string[];
@@ -159,16 +162,13 @@ export function installedChrome(toolsDir = UI_TOOLS_DIR, platform: NodeJS.Platfo
   return null;
 }
 
-/** OMB_AGENT_BROWSER_PATH, then the tools directory, then PATH; otherwise the
- * pinned download, verified by size and SHA-256. Chrome follows the same rule
- * with AGENT_BROWSER_EXECUTABLE_PATH. Both land once under UI_TOOLS_DIR. */
 export async function ensureUiBrowser(
   parentEnv: NodeJS.ProcessEnv = process.env,
   log: (line: string) => void = () => {},
   toolsDir = UI_TOOLS_DIR,
 ): Promise<{ binary: string; chrome: string | null }> {
   mkdirSync(toolsDir, { recursive: true, mode: 0o700 });
-  let binary = resolveAgentBrowserBinary({ dataDir: toolsDir, env: parentEnv });
+  let binary = resolveUiBrowserBinary(parentEnv, toolsDir);
   if (!binary) {
     const started = Date.now();
     binary = await installAgentBrowserBinary({ dataDir: toolsDir, log });
@@ -188,6 +188,10 @@ export async function ensureUiBrowser(
     if (!chrome) log("no Chrome for Testing under the tools directory; the session will use the browser agent-browser finds itself");
   }
   return { binary, chrome };
+}
+
+export function resolveUiBrowserBinary(parentEnv: NodeJS.ProcessEnv, toolsDir = UI_TOOLS_DIR): string | null {
+  return resolveAgentBrowserBinary({ dataDir: toolsDir, env: parentEnv, managedOnly: parentEnv.OMB_UI_E2E === "1" });
 }
 
 function loadHandle(raw: unknown, verb: string): UiHandle {
@@ -425,8 +429,9 @@ export async function launchUi(
   fixtureOptions: { boatFixtureApi?: string } = {},
 ): Promise<void> {
   const values = parse("ui launch", args, { entry: { type: "string" }, "tool-calls": { type: "string" }, mode: { type: "string" }, engine: { type: "string" } });
-  if (values.engine !== undefined && values.engine !== "codex") {
-    throw new ControlOmbError(`unknown --engine ${JSON.stringify(values.engine)}`, "the fake Claude CLI always runs; --engine codex adds the fake Codex app-server beside it");
+  const extraEngines: Record<string, "codex" | "customAcp" | "cline" | "copilot" | "opencode"> = { codex: "codex", acp: "customAcp", cline: "cline", copilot: "copilot", opencode: "opencode" };
+  if (values.engine !== undefined && !Object.hasOwn(extraEngines, String(values.engine))) {
+    throw new ControlOmbError(`unknown --engine ${JSON.stringify(values.engine)}`, "the fake Claude CLI always runs; --engine codex adds the fake Codex app-server beside it, --engine acp, cline or copilot a fake ACP agent, --engine opencode the OpenCode at OMB_VERIFY_OPENCODE_CLI");
   }
   const entryName = typeof values.entry === "string" ? values.entry : "threads";
   if (!Object.hasOwn(ENTRIES, entryName)) {
@@ -464,7 +469,7 @@ export async function launchUi(
     const { binary, chrome } = await ensureUiBrowser(parentEnv, note);
     checkpoint();
     fixture = await launchVerificationServer({ ...parentEnv, ...fakeEnv }, startup.signal, undefined,
-      { binaryPath: binary, executablePath: chrome ?? "" }, undefined, undefined, values.engine === "codex" ? ["codex"] : [], fixtureOptions.boatFixtureApi);
+      { binaryPath: binary, executablePath: chrome ?? "" }, undefined, undefined, values.engine === undefined ? [] : [extraEngines[String(values.engine)]!], fixtureOptions.boatFixtureApi);
     checkpoint();
     const api = fixtureApi(fixture.info.url);
     await api("PATCH", "/api/config", { language: "en" });

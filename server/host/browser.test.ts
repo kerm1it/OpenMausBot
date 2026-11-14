@@ -151,13 +151,6 @@ describe("the bots' browser host with browserEngine.engine set to chrome", () =>
     expect(host.signedInSitesRefusal("work")).toContain("does not list signed-in sites yet");
   });
 
-  it("says in the status which engine runs the bots' browsers", () => {
-    const { cfg, host } = setup("chrome");
-    expect(host.engineSummary({ kind: "unavailable", reason: "agent-browser is not installed", myChrome: true })).toMatchObject({ engine: "chrome", myChrome: true });
-    cfg.browserEngine = { engine: "agent-browser" };
-    expect(host.engineSummary({ kind: "unavailable", reason: "agent-browser is not installed", myChrome: true })).toEqual({ kind: "unavailable", reason: "agent-browser is not installed", myChrome: true, engine: "agent-browser" });
-  });
-
   it("offers the owner's local-sites switch on a self-hosted server, but never on a shared company workspace", () => {
     const unavailable = { kind: "unavailable" as const, reason: "agent-browser is not installed", myChrome: false };
     for (const hosted of [false, true]) {

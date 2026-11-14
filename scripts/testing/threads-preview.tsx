@@ -1,24 +1,19 @@
 import { createRoot } from "react-dom/client";
 import App from "../../src/App";
-import { setAdvancedMode } from "../../src/lib/interface-mode";
+import { ADVANCED_MODE_KEY, setAdvancedMode } from "../../src/lib/interface-mode";
 import { GROK_MOVE_NOTICE } from "../../src/lib/notices";
 import { setEmailGateDone } from "../../src/lib/onboarding-storage";
 import { markSimpleModePromptSeen } from "../../src/lib/simple-mode-prompt";
 import { applySkinChoice, readSkinChoice } from "../../src/lib/skins";
 import "../../src/styles.css";
 
-// This entry point is served only by the disposable verification launcher.
-// The voice-latency harness opts in with ?ombVoiceProbe=1; the recorder in
-// src/lib/voice-latency-probe stays inert without this sink.
-if (new URLSearchParams(location.search).has("ombVoiceProbe")) {
+const previewFlags = new URLSearchParams(location.search);
+if (previewFlags.has("ombVoiceProbe")) {
   (window as typeof window & { __ombVoiceProbe?: unknown[] }).__ombVoiceProbe = [];
 }
-// ?onboarding=1 plays a brand-new install, and a new install opens in Simple mode.
-if (new URLSearchParams(location.search).has("onboarding")) setAdvancedMode(false);
-else setEmailGateDone("skipped");
-// Every launch is a new browser, so the once-per-browser Simple mode popup shows only with ?simpleModePrompt=1.
-if (!new URLSearchParams(location.search).has("simpleModePrompt")) markSimpleModePromptSeen();
-// The same for the once-per-person Move from Grok Bot popup, with ?grokMovePopup=1.
-if (!new URLSearchParams(location.search).has("grokMovePopup")) localStorage.setItem(GROK_MOVE_NOTICE, "1");
+if (localStorage.getItem(ADVANCED_MODE_KEY) === null) setAdvancedMode(false);
+if (!previewFlags.has("onboarding")) setEmailGateDone("skipped");
+if (!previewFlags.has("simpleModePrompt")) markSimpleModePromptSeen();
+if (!previewFlags.has("grokMovePopup")) localStorage.setItem(GROK_MOVE_NOTICE, "1");
 applySkinChoice(readSkinChoice());
 createRoot(document.getElementById("root")!).render(<App />);

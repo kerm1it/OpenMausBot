@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { once } from "node:events";
 import { spawn } from "node:child_process";
+import { createConnection } from "node:net";
 import { createInterface } from "node:readline";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -13,6 +14,8 @@ import { DATA_DIR, NATIVE_DIR } from "../config.ts";
 import { flushNativeLog } from "./native.ts";
 import { ChatGptPlanAuthController } from "./chatgpt-plan-auth.ts";
 import { recordEvents, type EventRecorder } from "../testing/events.ts";
+import { publishedMessages, replyProblems } from "../harness/text-items.testkit.ts";
+import { caseTokens, LIVE_REPLY_CASES, liveReplyScripts } from "../testing/live-reply-cases.ts";
 import { CodexDriver, codexNativeIncomingLogMessage, codexUpdateCommand } from "./codex.ts";
 import { codexCliOverrides } from "./codex-process.ts";
 import * as codexProcess from "./codex-process.ts";
@@ -25,6 +28,7 @@ import { rebuiltSessionNotice } from "../resume-recovery.ts";
 import { startFakeHttpMcp, type FakeHttpMcp } from "../testing/fake-http-mcp-server.ts";
 import * as procs from "../procs.ts";
 import { botBox } from "../bot-box/box.ts";
+import { boxEnvironment } from "../bot-box/env.ts";
 import { autoVerdict } from "../auto-approve.ts";
 import { formatQuestionAnswers } from "../../shared/ask-question.ts";
 
@@ -1131,6 +1135,9 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
 
   it("uses the shared application CODEX_HOME for the Codex process", async () => {
     const codexHome = join(scratch, "custom-codex-home");
+    // Signed in with a login file: MausBot keeps the person's home when it has none (the login may be in the keyring).
+    mkdirSync(codexHome, { recursive: true });
+    writeFileSync(join(codexHome, "auth.json"), "{}");
     await create({ environment: { CODEX_HOME: codexHome } });
     const dump = join(scratch, "environment.json");
     process.env.FAKE_CODEX_DUMP = dump;
@@ -1266,6 +1273,49 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     vi.spyOn(botBox, "enabled").mockReturnValue(true);
     expect(await envVars("t-boxed-proxy")).toEqual(["LIST", "HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy"]);
   }, 20_000);
+
+  it("lets a person's own stdio server's env through the bot box to Codex, which hands it on by name", async () => {
+    await create();
+    const realSpawnCli = procs.spawnCli;
+    const spawns: Parameters<typeof procs.spawnCli>[] = [];
+    const spawnSpy = vi.spyOn(procs, "spawnCli").mockImplementation((...args: Parameters<typeof procs.spawnCli>) => {
+      spawns.push(args);
+      return realSpawnCli(...args);
+    });
+    const appServer = () => spawns.find(([, args]) => args.some((arg) => arg.startsWith("mcp_servers.")))?.[2];
+    try {
+      const woo = { command: "python3", args: ["woo.py"], env: { WOO_KEY: "ck_fixture", TRC_ONLY: "1" } };
+      await instance.adapter.sendTurn({ threadId: "t-box-env", text: "go", integrations: { custom: { woo } } });
+      await recorder.until((event) => event.type === "turn.completed" && event.threadId === "t-box-env");
+      const options = appServer()!;
+      const allow = new Set(typeof options.box === "object" ? options.box.allowEnv : []);
+      expect([...allow].sort()).toEqual(["TRC_ONLY", "WOO_KEY"]);
+      // The box keeps only its allow-list: without these names the server would start with neither.
+      expect(boxEnvironment(options.env!, new Set(), new Set())).not.toHaveProperty("WOO_KEY");
+      expect(boxEnvironment(options.env!, new Set(), allow)).toMatchObject({ WOO_KEY: "ck_fixture", TRC_ONLY: "1" });
+
+      spawns.length = 0;
+      const plain = { command: "python3", args: ["todo.py"], env: {} };
+      await instance.adapter.sendTurn({ threadId: "t-box-no-env", text: "go", integrations: { custom: { plain } } });
+      await recorder.until((event) => event.type === "turn.completed" && event.threadId === "t-box-no-env");
+      expect(appServer()).not.toHaveProperty("box");
+    } finally {
+      spawnSpy.mockRestore();
+    }
+  }, 20_000);
+
+  it("with the box on, keeps a box-admitted custom env name out of Codex's shell even when the inherited value is the same", async () => {
+    const dump = join(scratch, "box-env-shell.json"); process.env.FAKE_CODEX_DUMP = dump;
+    vi.spyOn(botBox, "enabled").mockReturnValue(true);
+    await create({ mode: "resume", environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex"), FAKE_CODEX_MCP_OVERRIDES: "1", MY_MCP_AUTH: "same-fixture" } });
+    const woo = { command: "python3", args: ["woo.py"], env: { MY_MCP_AUTH: "same-fixture" } };
+    const { turnId } = await instance.adapter.sendTurn({ threadId: "t-box-env-shell", text: "go", integrations: { custom: { woo } } });
+    await recorder.until((event) => event.type === "turn.completed" && event.turnId === turnId);
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    expect(seen.argv).toContain("features.shell_snapshot=false");
+    const thread = seen.calls.find((call: { method: string }) => call.method === "thread/start");
+    expect(thread.params.config["shell_environment_policy.exclude"]).toContain("MY_MCP_AUTH");
+  });
 
   it("reaches a url server through OpenMausBot's connector on Codex's own login, header values off argv", async () => {
     await create();
@@ -1458,6 +1508,47 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
       vi.spyOn(ChatGptPlanAuthController.prototype, "accessToken").mockResolvedValue("synthetic-plan-token");
       vi.spyOn(ChatGptPlanAuthController.prototype, "models").mockResolvedValue({ default: "gpt-6.1-sol", options: [{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol" }] });
     };
+
+    it("uses a task-scoped command for a supported Codex and excludes its capability from tools", async () => {
+      process.env.FAKE_CODEX_VERSION = "codex-cli 0.165.0";
+      plan();
+      await create({ authMode: "chatgpt-plan" });
+      const dump = join(scratch, "plan-command.json");
+      process.env.FAKE_CODEX_DUMP = dump;
+      await instance.adapter.sendTurn({ threadId: "plan-command", text: "go", model: "gpt-6.1-sol" });
+      expect(await recorder.until((event) => event.type === "turn.completed")).toMatchObject({ ok: true });
+      const seen = JSON.parse(readFileSync(dump, "utf8"));
+      expect(seen.argv.join(" ")).toContain("model_providers.openai_chatgpt_plan.auth.command=");
+      expect(seen.argv.join(" ")).not.toContain("model_providers.openai_chatgpt_plan.env_key=");
+      expect(seen.env.OPENMAUSBOT_CHATGPT_TOKEN).toBeUndefined();
+      const thread = seen.calls.find((call: { method: string }) => call.method === "thread/start");
+      expect(thread.params.config["shell_environment_policy.exclude"]).toEqual(expect.arrayContaining(["OMB_CODEX_AUTH_SECRET", "OMB_CODEX_AUTH_SOCKET"]));
+    });
+
+    it.each(["new login", "sign out"])("revokes a running task's token capability on %s", async (action) => {
+      process.env.FAKE_CODEX_VERSION = "codex-cli 0.165.0";
+      plan();
+      vi.spyOn(ChatGptPlanAuthController.prototype, "start").mockRejectedValue(new Error("synthetic login"));
+      vi.spyOn(ChatGptPlanAuthController.prototype, "signOut").mockResolvedValue();
+      const dump = join(scratch, "plan-revocation.json");
+      process.env.FAKE_CODEX_DUMP = dump;
+      await create({ authMode: "chatgpt-plan", mode: "approval" });
+      await instance.adapter.sendTurn({ threadId: "plan-revocation", text: "go", model: "gpt-6.1-sol" });
+      await recorder.until(event => event.type === "request.opened");
+      const seen = JSON.parse(readFileSync(dump, "utf8"));
+      const getToken = () => new Promise<string>((resolve) => {
+        const socket = createConnection(seen.env.OMB_CODEX_AUTH_SOCKET);
+        let data = "";
+        socket.on("connect", () => socket.write(`${seen.env.OMB_CODEX_AUTH_SECRET}\n`));
+        socket.on("data", chunk => { data += chunk.toString(); });
+        socket.on("error", () => resolve(""));
+        socket.on("close", () => resolve(data));
+      });
+      expect(await getToken()).toBe("synthetic-plan-token");
+      if (action === "new login") await expect(instance.startAuthentication!()).rejects.toThrow("synthetic login");
+      else await instance.signOut!();
+      expect(await getToken()).toBe("");
+    });
 
     it("searches each URL server through the remote proxy, its settings kept from the shell", async () => {
       plan();
@@ -1820,6 +1911,7 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     expect(seen.argv).toContain("features.browser_use=false");
     expect(seen.argv).toContain("features.browser_use_external=false");
     expect(seen.argv).toContain("features.computer_use=false");
+    expect(seen.argv).toContain("features.plugins=false");
     expect(seen.argv.some((arg: string) => arg.startsWith("web_search="))).toBe(false);
     expect(seen.argv).toContain('plugins={ "browser@openai-bundled" = { enabled = false }, "computer-use@openai-bundled" = { enabled = false }, "unified-computer-use@openai-bundled" = { enabled = false } }');
     expect(seen.argv).toContain('mcp_servers.browser.default_tools_approval_mode="auto"');
@@ -1901,6 +1993,53 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     expect(settled).toHaveLength(1);
     expect((settled[0] as any).text).toBe("done from fake codex");
   });
+
+  it("keeps each streamed message under Codex's own item id, scoped to its turn", async () => {
+    const scripts = join(scratch, "scripts.json");
+    writeFileSync(scripts, JSON.stringify({ "#ids": [{ say: "First message." }, { tool: "ls" }, { say: "Second, after the command." }, { say: "Third." }] }));
+    process.env.FAKE_STREAM_SCRIPT = scripts;
+    process.env.FAKE_STREAM_CADENCE = "4:0";
+    try {
+      await create();
+      await instance.adapter.sendTurn({ threadId: "t-items", text: "hi #ids" });
+      await recorder.until((e) => e.type === "turn.completed");
+    } finally {
+      delete process.env.FAKE_STREAM_SCRIPT;
+      delete process.env.FAKE_STREAM_CADENCE;
+    }
+    const deltas = recorder.events.filter((e: any) => e.type === "content.delta" && e.streamKind === "assistant_text");
+    expect(new Set(deltas.map((e) => e.itemId))).toEqual(new Set(["m1", "m3", "m4"]));
+    const messages = publishedMessages(recorder.events);
+    expect(messages.map(({ streamed, completed }) => ({ streamed, completed }))).toEqual([
+      { streamed: "First message.", completed: "First message." },
+      { streamed: "Second, after the command.", completed: "Second, after the command." },
+      { streamed: "Third.", completed: "Third." },
+    ]);
+    const turnId = recorder.events.find((e) => e.type === "turn.started")?.turnId;
+    expect(messages.map((message) => message.itemId)).toEqual([`${turnId}:m1`, `${turnId}:m3`, `${turnId}:m4`]);
+  });
+
+  it.each(LIVE_REPLY_CASES.filter((entry) => entry.action === undefined || entry.action === "stop").map((entry) => ({ entry, name: entry.name })))(
+    "streams the $name reply with one id per message and nothing doubled, lost or glued", async ({ entry }) => {
+      const scripts = join(scratch, "scripts.json");
+      writeFileSync(scripts, JSON.stringify(liveReplyScripts()));
+      process.env.FAKE_STREAM_SCRIPT = scripts;
+      process.env.FAKE_STREAM_CADENCE = entry.action === "stop" ? "6:5" : "7:0";
+      try {
+        await create();
+        const { turnId } = await instance.adapter.sendTurn({ threadId: `t-${entry.name}`, text: `Please answer ${entry.marker}` });
+        if (entry.action === "stop") {
+          await recorder.until((e) => e.type === "content.delta" && e.turnId === turnId);
+          await instance.adapter.interruptTurn(`t-${entry.name}`);
+        }
+        await recorder.until((e) => e.type === "turn.completed" && e.turnId === turnId, 30_000);
+        const events = recorder.events.filter((e) => e.turnId === turnId);
+        expect(replyProblems(events, caseTokens(entry), { stopped: entry.action === "stop" })).toEqual([]);
+      } finally {
+        delete process.env.FAKE_STREAM_SCRIPT;
+        delete process.env.FAKE_STREAM_CADENCE;
+      }
+    }, 60_000);
 
   it("reports an apply_patch as it streams, for the chat's status line", async () => {
     process.env.FAKE_CODEX_PATCH_BYTES = "6144";
@@ -2002,6 +2141,10 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     });
     vi.stubEnv("OPENMAUSBOT_CHATGPT_TOKEN", "inherited-token-must-not-leak");
     vi.stubEnv("OPENAI_API_KEY", "inherited-api-key-must-not-leak");
+    if (!Object.keys(opts).length) {
+      mkdirSync(join(scratch, ".codex"), { recursive: true });
+      writeFileSync(join(scratch, ".codex", "auth.json"), "{}");
+    }
     await create({ ...opts, mode: "resume", environment: { HOME: scratch, USERPROFILE: scratch, CODEX_HOME: join(scratch, ".codex") } });
     const dump = join(scratch, "model-provider-resume.json");
     process.env.FAKE_CODEX_DUMP = dump;
@@ -2099,6 +2242,26 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     expect(instance.models).toEqual({ default: "", options: [] });
     expect(spawn).not.toHaveBeenCalled();
     expect(recorder.events).toEqual([]);
+  });
+
+  it.each(["0.164.0", "0.166.0"])("rejects stale background generation after a pending %s version probe", async (version) => {
+    const catalog = { default: "gpt-6.1-sol", options: [{ id: "gpt-6.1-sol", label: "GPT-6.1 Sol" }] };
+    vi.spyOn(ChatGptPlanAuthController.prototype, "models").mockResolvedValue(catalog);
+    vi.spyOn(ChatGptPlanAuthController.prototype, "accessToken").mockResolvedValue("old-synthetic-token");
+    vi.spyOn(ChatGptPlanAuthController.prototype, "signOut").mockResolvedValue();
+    vi.spyOn(ChatGptPlanAuthController.prototype, "start").mockRejectedValue(new Error("synthetic login"));
+    let release!: (err: Error | null, stdout: string) => void;
+    const probe = vi.spyOn(procs, "execCli").mockImplementation((_cli, _args, _opts, cb) => { release = cb; });
+    const spawn = vi.spyOn(procs, "spawnCli");
+    await create({ authMode: "chatgpt-plan" });
+    const result = instance.generateMemoryText!("synthetic background prompt");
+    const rejected = expect(result).rejects.toThrow("ChatGPT account changed");
+    await vi.waitFor(() => expect(probe).toHaveBeenCalled());
+    await instance.signOut!();
+    await expect(instance.startAuthentication!()).rejects.toThrow("synthetic login");
+    release(null, `codex-cli ${version}`);
+    await rejected;
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("blocks new ChatGPT turns and sign-in while active tasks stop and credentials revoke", async () => {
@@ -2360,13 +2523,10 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
       .rejects.toThrow("personal-model is not approved for your organization");
   });
 
-  it("names a missing Company API key or CODEX_HOME instead of one blanket refusal", async () => {
+  it("names a missing Company API key instead of one blanket refusal", async () => {
     await create({ managed: true, environment: { OPENMAUSBOT_COMPANY_API_KEY: "" } });
     await expect(instance.adapter.sendTurn({ threadId: "company-no-key", text: "hi", model: "company-codex-model" }))
       .rejects.toThrow("OPENMAUSBOT_COMPANY_API_KEY is missing");
-    await create({ managed: true, environment: { CODEX_HOME: "" } });
-    await expect(instance.adapter.sendTurn({ threadId: "company-no-home", text: "hi", model: "company-codex-model" }))
-      .rejects.toThrow("CODEX_HOME is missing");
   });
 
   it("rebuilds a missing Company native thread once with its approved model and canonical history", async () => {
@@ -3258,12 +3418,18 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     });
   });
 
-  it("counts an API-key login as signed in", async () => {
+  it("counts an API-key login as signed in, marked as an API key so Settings offers no ChatGPT sign-out", async () => {
     await create({ mode: "api-key-configured" });
     await expect(instance.snapshot()).resolves.toMatchObject({
       state: "available",
       authenticated: true,
+      account: { method: "api-key" },
     });
+  });
+
+  it("does not mark a ChatGPT login as an API key", async () => {
+    await create({ mode: "logged-in-stdout" });
+    expect((await instance.snapshot()).account?.method).toBeUndefined();
   });
 
   it("also accepts login status from older Codex versions that used stdout", async () => {
@@ -3925,5 +4091,37 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     const seen = JSON.parse(readFileSync(dump, "utf8"));
     const turnStart = seen.calls.find((c: any) => c.method === "turn/start");
     expect(turnStart.params).not.toHaveProperty("effort");
+  });
+
+  it("runs a Fast row on its base model with the Fast tier for that turn only", async () => {
+    await create();
+    const dump = join(scratch, "fast.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+
+    await instance.adapter.sendTurn({ threadId: "t-fast", text: "hi", model: "gpt-5.5+priority", effort: "high" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    const threadStart = seen.calls.find((c: any) => c.method === "thread/start");
+    const turnStart = seen.calls.find((c: any) => c.method === "turn/start");
+    expect(threadStart.params).toMatchObject({ model: "gpt-5.5", modelProvider: "openai" });
+    expect(threadStart.params).not.toHaveProperty("serviceTier");
+    expect(turnStart.params).toMatchObject({ serviceTierForTurn: "priority", effort: "high" });
+    expect(turnStart.params).not.toHaveProperty("serviceTier");
+  });
+
+  it("sends no service tier for a plain row", async () => {
+    await create();
+    const dump = join(scratch, "plain.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+
+    await instance.adapter.sendTurn({ threadId: "t-plain", text: "hi", model: "gpt-5.5" });
+    await recorder.until((e) => e.type === "turn.completed");
+
+    const seen = JSON.parse(readFileSync(dump, "utf8"));
+    const turnStart = seen.calls.find((c: any) => c.method === "turn/start");
+    expect(seen.calls.find((c: any) => c.method === "thread/start").params.model).toBe("gpt-5.5");
+    expect(turnStart.params).not.toHaveProperty("serviceTierForTurn");
+    expect(turnStart.params).not.toHaveProperty("serviceTier");
   });
 });

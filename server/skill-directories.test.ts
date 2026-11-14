@@ -126,7 +126,7 @@ describe("complete Skill directories", () => {
     const name = "pin-shared";
     installLibrarySkill({ name, instructions: md(name), files: files(name), source: learnSource("fixture"), reviewState: "approved" });
     const record = { ...bot, section: "Team" };
-    const store = { bot: () => record, bots: [record], messagesFor: () => [], groupByThread: () => undefined, patchBot: () => {} } as unknown as Store;
+    const store = { bot: () => record, bots: [record], messagesFor: () => [], groupByThread: () => undefined, taskByThread: () => undefined, patchBot: () => {} } as unknown as Store;
     const host = createSkillsLibraryHost({ store, cfg: { features: { skillsLibrary: true, shareLearnedSkills: "ask" } } as unknown as AppConfig, appendSkillRequestCard: () => ({ requestId: "", summary: "" }) });
     const thread = randomUUID();
     host.beginTurnSkills(record, thread);
@@ -157,7 +157,7 @@ describe("complete Skill directories", () => {
     const patchAssigned = (id: string, names: string[]) => { bots.find(bot => bot.id === id)!.assignedSkills = names; };
     const shared = shareLearnedSkill({ author, bots, name, patchAssigned });
     if ("error" in shared) throw new Error(shared.error);
-    const store = { bot: () => mate, bots, messagesFor: () => [{ at: 1 }], groupByThread: () => undefined } as unknown as Store;
+    const store = { bot: () => mate, bots, messagesFor: () => [{ at: 1 }], groupByThread: () => undefined, taskByThread: () => undefined } as unknown as Store;
     const host = createSkillsLibraryHost({ store, cfg: { features: { skillsLibrary: true, shareLearnedSkills: "ask" } } as AppConfig, appendSkillRequestCard: () => ({ requestId: "", summary: "" }) });
     const bot = mate as BotRecord, thread = randomUUID(); host.beginTurnSkills(bot, thread);
     const note = host.shareNote(bot, thread, true), listed = host.harnessListing(bot.id, [], thread)[0];
@@ -205,7 +205,7 @@ describe("complete Skill directories", () => {
   it("rejects a private write derived from a turn pinned before another task updated it", () => {
     const bot = { id: randomUUID(), name: "Concurrent" } as BotRecord, name = "private-concurrent";
     apply(bot.id, stage(bot.id, { action: "create", files: files(name), source: learnSource("fixture") }));
-    const store = { bot: () => bot, messagesFor: () => [], groupByThread: () => undefined } as unknown as Store;
+    const store = { bot: () => bot, messagesFor: () => [], groupByThread: () => undefined, taskByThread: () => undefined } as unknown as Store;
     const host = createSkillsLibraryHost({ store, cfg: {} as AppConfig, appendSkillRequestCard: () => ({ requestId: "", summary: "" }) });
     const thread = randomUUID(); host.beginTurnSkills(bot, thread);
     expect(host.privateUpdateRefusal(bot.id, thread, name)).toBeNull();
@@ -230,7 +230,7 @@ describe("complete Skill directories", () => {
     const bot = { id: randomUUID(), name: "Private" } as BotRecord;
     installSkillDirectory(bot.id, "template:fixture", directory(files("live-private")));
     setSkillEnabled(bot.id, "live-private", true);
-    const store = { bot: () => bot, messagesFor: () => [], groupByThread: () => undefined } as unknown as Store;
+    const store = { bot: () => bot, messagesFor: () => [], groupByThread: () => undefined, taskByThread: () => undefined } as unknown as Store;
     const host = createSkillsLibraryHost({ store, cfg: {} as AppConfig, appendSkillRequestCard: () => ({ requestId: "", summary: "" }) });
     const thread = randomUUID();
     host.beginTurnSkills(bot, thread);

@@ -19,7 +19,7 @@ export type PageId =
   | "overview" | "prompt" | "history";
 
 /** The pages Simple mode draws; a link to any other page lands where its section does. */
-export const SIMPLE_PAGES = ["settings", "apps", "routines", "memory", "skills", "plugins", "folder", "browser", "where"] as const satisfies readonly PageId[];
+export const SIMPLE_PAGES = ["settings", "apps", "routines", "visibility", "memory", "skills", "plugins", "folder", "browser", "where"] as const satisfies readonly PageId[];
 export type SimplePageId = (typeof SIMPLE_PAGES)[number];
 
 export function isSimplePage(page: PageId): page is SimplePageId {
@@ -78,10 +78,10 @@ const SECTION_TARGET: Record<BotSettingsSection, PanelTarget> = {
   slack: { tab: "details" },
   soul: { tab: "details", page: "settings", anchor: "instructions", editInstructions: true },
   skills: { tab: "library", page: "skills" },
+  plugins: { tab: "library", page: "plugins" },
   memory: { tab: "library", page: "memory" },
   library: { tab: "library" },
   routines: { tab: "details", page: "routines" },
-  plugins: { tab: "library", page: "plugins" },
   access: { tab: "computer" },
   model: { tab: "details", anchor: "model" },
   permissions: { tab: "details", page: "settings", anchor: "approval" },
