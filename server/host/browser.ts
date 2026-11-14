@@ -311,10 +311,11 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     return Boolean(profileId) && (myChromeAvailable() || lentChrome !== undefined)
       && cfg.browserProfiles?.some((profile) => profile.id === profileId && profile.browser === "chrome") === true;
   }
-  function browserSessionSpec(binaryPath: string, session: string, profile: string | undefined, egressPort?: number, cdpUrl?: string) {
+  function browserSessionSpec(binaryPath: string, session: string, profile: string | undefined, egressPort?: number | null, cdpUrl?: string) {
     const attachCdpUrl = cdpUrl ?? browserEngineAttachCdpUrl(cfg);
     return agentBrowserIntegration({
-      binaryPath, session, encryptionKey: browserEngineEncryptionKey(), persistent: profile !== "guest", egressPort,
+      binaryPath, session, encryptionKey: browserEngineEncryptionKey(), persistent: profile !== "guest",
+      ...(egressPort === null ? { systemNetwork: true as const } : { egressPort }),
       env: { ...process.env, PATH: augmentedPath() },
       launcher: chromeLauncher.env(),
       ...(usesMyChrome(profile) ? { attach: attachCdpUrl ? { cdpUrl: attachCdpUrl } : {} } : {}),
@@ -363,7 +364,7 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     }
     const session = currentBrowserSession(botId, profile, audience);
     const cdpUrl = lentChromeSession(browserProfileId) ? await lentChromeDoor(session) : undefined;
-    const spec = browserSessionSpec(status.binaryPath, session, browserProfileId, usesMyChrome(browserProfileId) ? undefined : await egressPort(session) ?? undefined, cdpUrl);
+    const spec = browserSessionSpec(status.binaryPath, session, browserProfileId, usesMyChrome(browserProfileId) ? undefined : await egressPort(session), cdpUrl);
     usedBrowserSessions.set(session, spec);
     await prepareBrowserSessionState(status.binaryPath, session, { env: spec.env, persistent: profile !== "guest" && !attachesToChrome(spec.env), isCurrent: () => {
       const current = store.bot(botId);
@@ -384,7 +385,7 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     if (used) return { session, spec: used };
     const profileId = browserProfileIdOf(profile);
     const cdpUrl = lentChromeSession(profileId) ? await lentChromeDoor(session) : undefined;
-    return { session, spec: browserSessionSpec(engine.binaryPath, session, profileId, usesMyChrome(profileId) ? undefined : await egressPort(session) ?? undefined, cdpUrl) };
+    return { session, spec: browserSessionSpec(engine.binaryPath, session, profileId, usesMyChrome(profileId) ? undefined : await egressPort(session), cdpUrl) };
   }
   /** fill_login's reads and typing, on whichever engine runs the session. */
   function loginInput(session: string, spec: Spec, env: NodeJS.ProcessEnv): Pick<FillLoginDeps, "engine" | "insertText" | "press" | "click"> {
@@ -538,7 +539,7 @@ export function createBrowserHost(deps: BrowserHostDeps) {
     }
     const refusal = signedInSitesRefusal(profile);
     if (refusal) return { status: 409, error: refusal };
-    return { binaryPath: engine.binaryPath, session, env: browserSessionSpec(engine.binaryPath, session, profile, await egressPort(session) ?? undefined).env, encryptionKey: browserEngineEncryptionKey() };
+    return { binaryPath: engine.binaryPath, session, env: browserSessionSpec(engine.binaryPath, session, profile, await egressPort(session)).env, encryptionKey: browserEngineEncryptionKey() };
   }
   /** What Settings shows of the engine that runs bots' browsers here; My Chrome stays on agent-browser. */
   function engineSummary<T extends { myChrome: boolean }>(agentBrowser: T): (T | (ReturnType<ChromeEngine["summary"]> & { myChrome: boolean })) & { engine: BrowserEngineKind; serverSites?: boolean } {

@@ -915,15 +915,17 @@ describe("what a bot gets", () => {
     expect(agentBrowserDevToolsPorts(temp, profiles).sort()).toEqual([41001, 41002]);
   });
 
-  it("uses a supplied egress gate, otherwise the operating system route, and never changes the person's own Chrome", () => {
+  it("uses a supplied egress gate or an explicit system route, otherwise fails closed, and never changes the person's own Chrome", () => {
     const gated = agentBrowserIntegration({ binaryPath: "/x/agent-browser", session: "bot-1", encryptionKey: "k", env: { PATH: "/usr/bin" }, egressPort: 45123, platform: "darwin" });
     expect(gated.env).toMatchObject({ AGENT_BROWSER_PROXY: "socks5://127.0.0.1:45123", AGENT_BROWSER_PROXY_BYPASS: "<-loopback>" });
     expect(gated.env.AGENT_BROWSER_ARGS!.split("\n")).toEqual([cacheArg, "--webrtc-ip-handling-policy=disable_non_proxied_udp", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp", "--use-mock-keychain"]);
     expect(agentBrowserIntegration({ binaryPath: "/x", session: "bot-1", encryptionKey: "k", env: {}, egressPort: 45123, platform: "linux" }).env.AGENT_BROWSER_ARGS).toContain("--password-store=basic");
-    const direct = agentBrowserIntegration({ binaryPath: "/x", session: "bot-1", encryptionKey: "k", env: {}, platform: "darwin" });
+    const direct = agentBrowserIntegration({ binaryPath: "/x", session: "bot-1", encryptionKey: "k", env: {}, systemNetwork: true, platform: "darwin" });
     expect(direct.env).not.toHaveProperty("AGENT_BROWSER_PROXY");
     expect(direct.env).not.toHaveProperty("AGENT_BROWSER_PROXY_BYPASS");
     expect(direct.env.AGENT_BROWSER_ARGS!.split("\n")).toEqual([cacheArg, "--use-mock-keychain"]);
+    const closed = agentBrowserIntegration({ binaryPath: "/x", session: "bot-1", encryptionKey: "k", env: {}, platform: "darwin" });
+    expect(closed.env).toMatchObject({ AGENT_BROWSER_PROXY: "socks5://127.0.0.1:0", AGENT_BROWSER_PROXY_BYPASS: "<-loopback>" });
     const mine = agentBrowserIntegration({ binaryPath: "/x", session: "work", encryptionKey: "k", env: {}, attach: {}, egressPort: 45123 });
     for (const key of ["AGENT_BROWSER_PROXY", "AGENT_BROWSER_PROXY_BYPASS", "AGENT_BROWSER_ARGS"]) expect(mine.env).not.toHaveProperty(key);
   });
@@ -945,6 +947,7 @@ describe("what a bot gets", () => {
     vi.stubEnv("AGENT_BROWSER_EXECUTABLE_PATH", "/process/chrome");
     const spec = agentBrowserIntegration({
       binaryPath: "/x/agent-browser", session: "bot-1", encryptionKey: "session-key",
+      systemNetwork: true,
       env: {
         PATH: "/usr/bin", AGENT_BROWSER_EXECUTABLE_PATH: "/opt/trusted chrome/chrome",
         PRIVATE_WORKSPACE_SECRET: "synthetic-secret",
@@ -966,7 +969,7 @@ describe("what a bot gets", () => {
     vi.stubEnv("PATH", "/usr/bin");
     vi.stubEnv("AGENT_BROWSER_EXECUTABLE_PATH", "/opt/process-chrome/chrome");
     vi.stubEnv("PRIVATE_WORKSPACE_SECRET", "synthetic-process-secret");
-    const spec = agentBrowserIntegration({ binaryPath: "/x/agent-browser", session: "bot-1", encryptionKey: "session-key" });
+    const spec = agentBrowserIntegration({ binaryPath: "/x/agent-browser", session: "bot-1", encryptionKey: "session-key", systemNetwork: true });
     expect(spec.env).toEqual({
       AGENT_BROWSER_SESSION: "bot-1", AGENT_BROWSER_NO_WEBMCP: "1", AGENT_BROWSER_RESTORE: browserRestoreKey("bot-1"),
       AGENT_BROWSER_RESTORE_SAVE: "auto", AGENT_BROWSER_ENCRYPTION_KEY: "session-key",

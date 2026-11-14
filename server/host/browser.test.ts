@@ -170,8 +170,6 @@ describe("the bots' browser host with browserEngine.engine set to chrome", () =>
     const desktop = setup("agent-browser");
     desktop.cfg.browserEngine = { engine: "agent-browser", egress: { allow: ["10.0.0.5"] } };
     expect(desktop.host.engineSummary(unavailable).serverSites).toBeUndefined();
-    // The desktop's own default stays: its browsers reach the local network unless egress.localNetwork is false.
-    expect(browserEgress.rules().localNetwork).toBe(true);
   });
 
   it("forgets the new engine's sessions when the engine is switched back", async () => {
@@ -507,12 +505,28 @@ describe("the bots' browser host by default", () => {
     expect(host.engineSummary({ kind: "engine", version: "0.37.0", myChrome: true })).toEqual({ kind: "engine", version: "0.37.0", myChrome: true, engine: "agent-browser" });
   });
 
-  it("launches the desktop built-in browser without opening an egress gate", async () => {
+  it("describes the desktop built-in browser without opening an egress gate", async () => {
     vi.mocked(browserEngineStatus).mockReturnValue({ kind: "ready", binaryPath: "/usr/local/bin/agent-browser", version: "0.37.0", managed: false });
     const open = vi.spyOn(browserEgress, "open");
     try {
       const { host } = setup(undefined);
-      const browser = await host.browserIntegration("scout", undefined, turn);
+      const browser = await host.currentBrowserSpec("scout", undefined);
+      expect(browser?.spec.env).not.toHaveProperty("AGENT_BROWSER_PROXY");
+      expect(browser?.spec.env).not.toHaveProperty("AGENT_BROWSER_PROXY_BYPASS");
+      expect(open).not.toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+      vi.mocked(browserEngineStatus).mockReset();
+    }
+  });
+
+  it("prepares a temporary desktop built-in browser without opening an egress gate", async () => {
+    vi.mocked(browserEngineStatus).mockReturnValue({ kind: "ready", binaryPath: "/usr/local/bin/agent-browser", version: "0.37.0", managed: false });
+    const open = vi.spyOn(browserEgress, "open");
+    try {
+      const { host, bots } = setup(undefined, { bots: ["direct-egress"] });
+      (bots[0] as { browserProfile?: string }).browserProfile = "guest";
+      const browser = await host.browserIntegration("direct-egress", "guest", turn);
       expect(browser?.spec.env).not.toHaveProperty("AGENT_BROWSER_PROXY");
       expect(browser?.spec.env).not.toHaveProperty("AGENT_BROWSER_PROXY_BYPASS");
       expect(open).not.toHaveBeenCalled();

@@ -562,6 +562,18 @@ function agentBrowserEgressEnv(env: Record<string, string>, port: number, platfo
   };
 }
 
+type AgentBrowserNetwork =
+  | {
+    /** The egress gate port a launched Chrome connects through; without one Chrome stays fail-closed. */
+    egressPort?: number;
+    systemNetwork?: never;
+  }
+  | {
+    egressPort?: never;
+    /** Desktop only: explicitly use the operating system's network route instead of an egress gate. */
+    systemNetwork: true;
+  };
+
 /** One isolated, auto-restored session per profile (or bot), page-provided WebMCP tools off, core tools only. */
 export function agentBrowserIntegration(input: {
   binaryPath: string;
@@ -570,8 +582,6 @@ export function agentBrowserIntegration(input: {
   /** Guest sessions must never save cookies or localStorage to disk. */
   persistent?: boolean;
   headless?: boolean;
-  /** The egress gate port a launched Chrome connects through; without one Chrome uses the operating system's route. */
-  egressPort?: number;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   arch?: string;
@@ -581,7 +591,7 @@ export function agentBrowserIntegration(input: {
   /** The Chrome OMB prepared for the engine to start (server/browser/chrome/launcher.ts); unused when attaching. */
   launcher?: Record<string, string>;
   dataDir?: string;
-}): { command: string; args: string[]; env: Record<string, string> } {
+} & AgentBrowserNetwork): { command: string; args: string[]; env: Record<string, string> } {
   const sourceEnv = input.env ?? process.env;
   const env: Record<string, string> = {
     AGENT_BROWSER_SESSION: input.session,
@@ -625,13 +635,13 @@ export function agentBrowserIntegration(input: {
     // A kept profile's disk cache would otherwise grow to Chrome's default of several hundred megabytes per profile.
     if (env.AGENT_BROWSER_PROFILE) launch.AGENT_BROWSER_ARGS = [launch.AGENT_BROWSER_ARGS, PROFILE_CACHE_ARG].filter(Boolean).join("\n");
     Object.assign(env, input.launcher);
-    if (input.egressPort === undefined) {
+    if (input.systemNetwork) {
       delete env.AGENT_BROWSER_PROXY;
       delete env.AGENT_BROWSER_PROXY_BYPASS;
       const directArgs = (launch.AGENT_BROWSER_ARGS ?? "").split("\n").filter((arg) => arg && !/^--proxy-(?:server|bypass-list)=/.test(arg));
       env.AGENT_BROWSER_ARGS = [...directArgs, ...credentialStoreFlags(input.platform ?? process.platform)].join("\n");
     } else {
-      Object.assign(env, agentBrowserEgressEnv(launch, input.egressPort, input.platform ?? process.platform));
+      Object.assign(env, agentBrowserEgressEnv(launch, input.egressPort ?? 0, input.platform ?? process.platform));
     }
   }
   return { command: input.binaryPath, args: ["mcp", "--tools", "core", "--no-webmcp"], env };
