@@ -249,7 +249,7 @@ suite("the v2 stream on real Chrome", () => {
     expect(answered.status).toBe(204);
     await until(() => real.peek<string[]>(target, "[...document.getElementById('f').files].map((file) => file.name)"), same(["notes.txt"]));
     await client.next("fileChooserClosed");
-    const again = await fetch(`http://${origin}/api/bots/pepper/browser/upload?chooser=${chooser.id}`, { method: "POST", body });
+    const again = await fetch(`http://${origin}/api/bots/pepper/browser/upload?chooser=${chooser.id}`, { method: "POST" });
     expect(again.status).toBe(409);
     await client.close();
   }, hostTimeout(90_000));
