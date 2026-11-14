@@ -348,10 +348,9 @@ describe("the page's file picker and downloads", () => {
     };
     expect((await upload("chooser-1")).status).toBe(204);
     expect(fixture.answers).toEqual([{ owner: "local-owner", chooser: "chooser-1", files: [{ name: "notes.txt", text: "hello" }] }]);
-    const stale = await upload("stale");
+    const stale = await fetch(`http://${fixture.origin}/api/bots/pepper/browser/upload?chooser=stale`, { method: "POST" });
     expect(stale.status).toBe(409);
     expect(await stale.json()).toEqual({ error: "The page's file picker is no longer open." });
-    // The answered upload's file stays for the page to read; the refused one's is gone.
     expect(readdirSync(join(fixture.dataDir, "browser-uploads"))).toHaveLength(1);
     expect((await fetch(`http://${fixture.origin}/api/bots/pepper/browser/upload?chooser=chooser-1`, { method: "POST", body: "plain" })).status).toBe(415);
     expect((await fetch(`http://${fixture.origin}/api/bots/nobody/browser/upload?chooser=chooser-1`, { method: "POST" })).status).toBe(404);

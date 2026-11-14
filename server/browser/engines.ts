@@ -45,7 +45,7 @@ export interface ChromeEngineOptions {
   host: HostKind;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
-  egressPort(key: string): Promise<number>;
+  egressPort(key: string): Promise<number | null>;
   idleMs(): number;
   held?(session: string): boolean;
   egressNotice(key: string): string | null;

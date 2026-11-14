@@ -46,9 +46,8 @@ export const browserEgressConfigSchema = z.object({
   allow: z.array(z.string().trim().max(64).refine((entry) => parseAllowEntry(entry) !== null, {
     message: "must be an IP address or CIDR range, with an optional :port",
   })).max(64).optional(),
-  /** Desktop: false keeps bots' browsers off the local network (the default lets them reach it). Self-hosted
-   * servers: true lets them open this server's own sites and its local network (off by default); OpenMausBot's
-   * own ports, cloud metadata and link-local addresses stay closed. MausBot Cloud ignores it. */
+  /** Self-hosted servers: true lets bots open this server's own sites and its local network (off by default);
+   * OpenMausBot's own ports, cloud metadata and link-local addresses stay closed. Desktop and MausBot Cloud ignore it. */
   localNetwork: z.boolean().optional(),
 });
 export type BrowserEgressConfig = z.output<typeof browserEgressConfigSchema>;
