@@ -30,6 +30,7 @@ import { liveConfigSchema, liveConfigWithEnv, liveSettingEnv, type LiveConfig } 
 import { browserEngineConfigSchema, isValidCdpTarget, type BrowserEngineConfig } from "./browser/config.ts";
 import { roomContextSettings } from "./room-context-settings.ts";
 import { MAX_LOCAL_VM_IDLE_TIMEOUT_MINUTES, MAX_LOCAL_VM_MAX_INSTANCES, MIN_LOCAL_VM_IDLE_TIMEOUT_MINUTES, MIN_LOCAL_VM_MAX_INSTANCES } from "./local-vm-settings.ts";
+import { applyCustomDomainConfig, customDomainConfigShape, type CustomDomainConfig } from "./custom-domain-config.ts";
 export * from "./local-vm-settings.ts";
 
 const optionalText = z.string().optional();
@@ -321,10 +322,7 @@ const threadsPatchSchema = threadsConfigSchema.extend({
   eventLogRetentionDays: threadsConfigSchema.shape.eventLogRetentionDays.nullable(),
 });
 const appConfigSchema = z.object({
-  /** Set only by the verified domain endpoint, never by a config patch. */
-  customDomain: z.string().optional(),
-  /** Desktop server port verified with customDomain; Electron pins it while that domain remains configured. */
-  customDomainPort: z.number().int().min(1_024).max(65_534).optional(),
+  ...customDomainConfigShape,
   /** Who may sign in with an emailed code: addresses or `@domain` entries; admins get every scope, members chat only. */
   signIn: z.object({ admins: z.array(z.string().max(320)).max(500).optional(), members: z.array(z.string().max(320)).max(5000).optional() }).optional(),
   defaultModelSelection: defaultModelSelectionSchema.optional(),
@@ -449,9 +447,7 @@ const appConfigPatchSchema = appConfigSchema.omit({ instances: true, mcpServers:
   .extend({ threads: threadsPatchSchema.optional(), newBots: newBotsPatchSchema.optional(), imageGen: imageGenPatchSchema.optional() });
 const jsonObjectSchema = z.record(z.string(), z.json());
 
-export interface AppConfig extends HelperConfig {
-  customDomain?: string;
-  customDomainPort?: number;
+export interface AppConfig extends HelperConfig, CustomDomainConfig {
   signIn?: { admins?: string[]; members?: string[] };
   /** Preferred selection for newly created bots; existing bots keep theirs. */
   defaultModelSelection?: ModelSelection;
@@ -948,8 +944,7 @@ export function saveConfig(
   keepImageModels();
   if (checkedPatch.vps !== undefined) disk.vps = normalizeVpsConfig(checkedPatch.vps);
   for (const key of ["language", "computerName"] as const) if (checkedPatch[key] !== undefined) disk[key] = checkedPatch[key];
-  if (checkedPatch.customDomain !== undefined) disk.customDomain = checkedPatch.customDomain;
-  if (checkedPatch.customDomainPort !== undefined) disk.customDomainPort = checkedPatch.customDomainPort;
+  applyCustomDomainConfig(disk, checkedPatch);
   if (checkedPatch.signIn !== undefined) disk.signIn = checkedPatch.signIn;
   // Replace the section so clearing a backup cannot revive the old selection.
   if (checkedPatch.automaticRecovery !== undefined) disk.automaticRecovery = checkedPatch.automaticRecovery;
