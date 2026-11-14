@@ -209,6 +209,18 @@ test("local switching in main rejects dev mode and overlaps, and adopts the roll
   assert.match(source, /function createLocalEnvironment\(name, dataDir\) \{\s*if \(!app\.isPackaged\) return \{ ok: false, error: "dev", state: environmentsState \};/);
 });
 
+test("a port-changing switch keeps non-macOS alive while replacing its preload-bound window", () => {
+  const start = MAIN_SOURCE.indexOf("function showLocalServer(");
+  const body = MAIN_SOURCE.slice(start, MAIN_SOURCE.indexOf("\n\nfunction acquireDataDirLeaseFor", start));
+  assert.ok(start > 0 && body.length > 0);
+  const hold = body.indexOf("replacingMainWindow = true;");
+  const destroy = body.indexOf("mainWindow.destroy();");
+  const create = body.indexOf("createWindow();");
+  const release = body.indexOf("replacingMainWindow = false;");
+  assert.ok(hold < destroy && destroy < create && create < release);
+  assert.match(MAIN_SOURCE, /stayOpen: \(\) => hiddenStart \|\| replacingMainWindow/);
+});
+
 test("repeated quit requests join the exact same child cleanup", async (t) => {
   let finishStop;
   let stops = 0;

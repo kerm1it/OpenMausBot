@@ -5,7 +5,7 @@ import type { AppSettingsSection } from "@/state/store";
 import { SettingsModal } from "./SettingsModal";
 
 // These pin the card as always offered; the server decides who may act.
-const fixture = vi.hoisted(() => ({ section: "companion" as AppSettingsSection, config: undefined as { cloudHome?: boolean; managedPolicy?: { remoteAccess: boolean; organizationName: string } } | undefined, phonePairing: 0 }));
+const fixture = vi.hoisted(() => ({ section: "companion" as AppSettingsSection, config: undefined as { cloudHome?: boolean; team?: { name: string }; managedPolicy?: { remoteAccess: boolean; organizationName: string } } | undefined, phonePairing: 0 }));
 // Pinned to Advanced: these cover the Advanced rail; Simple has its own suite.
 vi.mock("@/lib/interface-mode", () => ({ useAdvancedMode: () => true, setAdvancedMode: () => {} }));
 vi.mock("./DesktopCapabilities", () => ({ useDesktopCapabilities: () => ({ capabilities: {} }) }));
@@ -59,6 +59,13 @@ describe("Settings → Remote access: server pairing card visibility", () => {
     const html = render();
     expect(html).toContain("SERVER_PAIRING_CARD_MARKER focus=0 blocked=Managed by Fixture Agency");
     expect(html).toContain("CUSTOM_DOMAIN_MARKER blocked=Managed by Fixture Agency");
+  });
+
+  it("uses the Cloud-specific managed refusal for a Team phone", () => {
+    fixture.config = { team: { name: "Acme" }, managedPolicy: { remoteAccess: false, organizationName: "Fixture Agency" } };
+    vi.stubGlobal("window", {});
+    const html = render();
+    expect(html).toContain("SERVER_PAIRING_CARD_MARKER focus=0 blocked=Managed by Fixture Agency: opening this Cloud on a phone is turned off");
   });
 
   it("is offered when this desktop is a remote client of a hosted workspace, whose phones pair only here", () => {

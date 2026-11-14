@@ -220,6 +220,7 @@ let desktopDataDirLease = null;
 // The folder this process leases; environmentsState.activeId can name a remote server instead.
 let runningDataDir = null;
 let localSwitchInFlight = false;
+let replacingMainWindow = false;
 
 let desktopPrefs = null, windowFrameMade = null;
 
@@ -1183,8 +1184,16 @@ function useServerPort(port) {
 
 function showLocalServer(previousPort) {
   if (previousPort === SERVER_PORT) return navigateMainWindow(rendererOrigin());
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
-  createWindow();
+  replacingMainWindow = true;
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.destroy();
+    createWindow();
+  } catch (error) {
+    app.quit();
+    throw error;
+  } finally {
+    replacingMainWindow = false;
+  }
   return Promise.resolve(true);
 }
 
@@ -2467,7 +2476,7 @@ app.whenReady().then(async () => {
 
 const allWindowsClosedQuit = createAllWindowsClosedQuit({
   app,
-  allWindows: () => appWindows(), stayOpen: () => hiddenStart,
+  allWindows: () => appWindows(), stayOpen: () => hiddenStart || replacingMainWindow,
 });
 
 // The embedded CUA daemon's async cleanup cannot run after the host exits, so the first quit waits for it (capped).

@@ -319,12 +319,15 @@ export function SettingsModal() {
   const remoteAccessBlocked = state.config?.managedPolicy?.remoteAccess === false
     ? t("policy.remoteBlocked", { organization: state.config.managedPolicy.organizationName })
     : null;
+  const pairingBlocked = state.config?.managedPolicy?.remoteAccess === false && state.config?.team?.name
+    ? t("policy.teamRemoteBlocked", { organization: state.config.managedPolicy.organizationName })
+    : remoteAccessBlocked;
   const remoteAccess = {
     thisComputer,
     client: <RemoteComputerSection hideWhenUnavailable legacyOnly />,
     domain: remoteActive ? null : <CustomDomainSettings blocked={remoteAccessBlocked} />,
     // Security: the server decides who may pair (an owner or admin session), not this gate.
-    pairing: <ServerPairingCard cloudHome={state.config?.cloudHome === true} focusRequest={computerPairs ? 0 : phoneFocus} team={state.config?.team?.name} remoteAccessBlocked={remoteAccessBlocked} simple={!advanced} />,
+    pairing: <ServerPairingCard cloudHome={state.config?.cloudHome === true} focusRequest={computerPairs ? 0 : phoneFocus} team={state.config?.team?.name} remoteAccessBlocked={pairingBlocked} simple={!advanced} />,
     companion: thisComputer ? <PhoneDevicesSection profileEmail={state.config?.profile?.email} focusRequest={phoneFocus} simple={!advanced} /> : null,
   };
 
