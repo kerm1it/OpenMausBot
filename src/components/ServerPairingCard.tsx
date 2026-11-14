@@ -19,6 +19,7 @@ export interface PairingOffer {
   code: string;
   expiresAt: number;
   url: string | null;
+  inviteUrl: string | null;
   hint: string | null;
 }
 
@@ -156,9 +157,9 @@ export function ServerPairingCard({ initialSession = null, initialPairingCodes =
             <p className="text-[13px] text-ink-secondary">{t("remote.serverPairing.expired")}</p>
           ) : (
             <div className="flex flex-wrap items-start gap-5">
-              {offer.url ? (
+              {offer.inviteUrl ? (
                 <div className="rounded-md bg-white p-2">
-                  <QRCodeSVG value={offer.url} size={160} level="M" bgColor="#ffffff" fgColor="#111111" />
+                  <QRCodeSVG value={offer.inviteUrl} size={160} level="M" bgColor="#ffffff" fgColor="#111111" />
                 </div>
               ) : null}
               <div className="min-w-[200px] flex-1">

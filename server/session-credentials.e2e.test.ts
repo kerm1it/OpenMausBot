@@ -141,6 +141,7 @@ it("offers self-hosted domain settings from the desktop-owned server", () => fix
   const invite = new URL(pairing.body.inviteUrl);
   expect(invite.protocol).toBe("openmausbot:");
   expect(invite.searchParams.get("address")).toBe("https://desktop.example.com");
+  expect(invite.searchParams.get("token")).toMatch(/^omb_pair_[A-Za-z0-9_-]{43}$/);
   expect(await f.unowned("POST", "/api/settings/custom-domain", { domain: "other.example.com" })).toMatchObject({
     status: 403,
     body: { error: expect.stringContaining("desktop app or a paired device") },
