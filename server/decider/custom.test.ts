@@ -18,7 +18,6 @@ const STATE = "My order arrived crushed. I want a refund, please handle it quick
 
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 
-/** The issue's sample `/decisions` response. */
 const DECISIONS_ANSWERS = [
   { type: "predicate", name: "wants_refund", probability: 0.98 },
   {

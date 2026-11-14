@@ -42,7 +42,6 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const WIRE_TYPE = { choice: "choice", score: "score", yesno: "predicate" } as const;
 
-/** One `/decisions` answer in Jev's answer shape, for `parseJevResponse` to check; null when it cannot be one. */
 function asJevAnswer(raw: unknown, question: DeciderQuestion): Record<string, unknown> | null {
   if (!isRecord(raw) || raw.type !== WIRE_TYPE[question.type]) return null;
   if (question.type === "yesno") return { noul: raw.probability };

@@ -66,7 +66,6 @@ export interface AppSettingsDeps {
   requestCredential(bot: BotRecord, threadId: string, body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }>;
   connectorThread(botId: string, threadId: string): { group?: GroupRecord } | null;
   language(threadId: string): string | undefined;
-  /** For a setting that takes a picture file: stores the file the bot names, or says why not. */
   pictures?: { take(turn: Turn, path: string): Promise<TakenPicture>; discard(avatarUrl: string): void };
 }
 
@@ -140,7 +139,6 @@ export function createAppSettings(deps: AppSettingsDeps) {
     return applied;
   }
 
-  /** A value naming a picture file by `path` goes on as the stored picture's `avatarUrl`; an empty path stays, to remove it. */
   async function takePicture(turn: Turn, value: unknown): Promise<{ value: unknown; stored?: string } | { refusal: string }> {
     const { path, ...rest } = value as { path?: unknown };
     if (typeof path !== "string" || !path) return { value };

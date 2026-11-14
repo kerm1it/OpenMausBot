@@ -1,5 +1,3 @@
-// A bot's picture and the person's own, from a picture file the bot names; each applies with Undo through the same
-// routes Settings uses, so their checks still run.
 import { basename } from "node:path";
 
 import { z } from "zod";
@@ -12,7 +10,6 @@ import { withoutKeys, type RegistryDeps, type SettingEntry, type WritableSpec } 
 const path = z.string().trim().max(4096);
 const SOURCE = `${PICTURE_FILE_KINDS} of up to ${PICTURE_FILE_MAX_BYTES / 1024 / 1024} MB in your workspace, your working folder or this conversation's files`;
 
-/** From the bot: `path`, empty to take the picture off. From the host: the stored `avatarUrl`. From Undo: the look before. */
 type BotPicture = { botId: string; path?: string; avatarUrl?: string; avatarCrop?: BotAvatarCrop; avatarZoom?: number; avatarFocusX?: number; avatarFocusY?: number };
 type OwnPicture = { path?: string; avatarUrl?: string };
 

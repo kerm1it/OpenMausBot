@@ -480,7 +480,6 @@ describe("message-linked files", () => {
       ["build.tar.gz", "application/gzip"], ["BUILD.ZIP", "application/zip"], ["Site.Tar.Gz", "application/gzip"],
       ["a.cab", "application/octet-stream"], ["a.tar.zst", "application/octet-stream"], ["zip", "application/octet-stream"],
     ] as const) expect(mimeFor(name), name).toBe(mime);
-    // Content never decides the type: zip bytes under a .txt name stay text, text under a .zip name stays an archive.
     writeFileSync(join(workspace, "really-zip.txt"), "PK\x03\x04");
     writeFileSync(join(workspace, "really-text.zip"), "hello");
     for (const [name, mime] of [["really-zip.txt", "text/plain; charset=utf-8"], ["really-text.zip", "application/zip"]] as const) {

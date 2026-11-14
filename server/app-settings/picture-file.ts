@@ -1,5 +1,3 @@
-// A picture a bot names by path, for a bot's picture or the person's own: copied into the attachment store, so it is
-// served and kept like a picture the person picks in Settings.
 import { realpath } from "node:fs/promises";
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 
@@ -13,11 +11,8 @@ export const PICTURE_FILE_KINDS = "a PNG, JPEG, GIF or WebP picture";
 
 export interface PictureFileDeps {
   attachmentsDir: string;
-  /** The bot's own folders this turn: its working folder and workspace. */
   ownFolders(turn: Turn): readonly string[];
-  /** Whether this turn's conversation carries the stored attachment of this name. */
   inConversation(turn: Turn, name: string): boolean;
-  /** Stores the bytes as an attachment and returns its path. */
   save(bytes: Buffer, mime: string): string;
   remove(path: string): void;
 }
@@ -65,7 +60,6 @@ export function createPictureFiles(deps: PictureFileDeps) {
         await opened.handle.close().catch(() => undefined);
       }
     },
-    /** Takes back a picture `take` stored for a change that did not happen. */
     discard(avatarUrl: string) {
       deps.remove(join(deps.attachmentsDir, basename(avatarUrl)));
     },

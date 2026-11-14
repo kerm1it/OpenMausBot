@@ -40,8 +40,6 @@ interface Writable {
   tier: "safe";
   value: z.ZodType;
   allowed: string;
-  /** The value's `path` names a picture file: `describe` sees the path, then the host stores the file and `current` and
-   * `write` get the stored picture's `avatarUrl` in its place. An empty path stays, for taking the picture off. */
   fromFile?: true;
   current(value: unknown): unknown;
   write(value: unknown): Promise<string | null>;

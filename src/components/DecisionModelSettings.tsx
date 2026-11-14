@@ -121,7 +121,6 @@ export function deciderFailureText(result: { reason: string; status?: number }, 
 
 const asProvider = (value: string | undefined): Provider => (value === "openrouter" || value === "custom" ? value : "jev");
 
-/** A text setting saved when it loses focus or on Enter, and only when it changed. */
 function SavedText({ saved, onSave, disabled, label, placeholder, testId }: {
   saved: string; onSave: (value: string) => void; disabled: boolean; label: string; placeholder: string; testId: string;
 }) {

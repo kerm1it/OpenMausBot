@@ -128,7 +128,6 @@ describe("saveBotAttachment", () => {
 });
 
 describe("saveBotAttachment for an archive", () => {
-  // Typed by the name's last extension, like a person's upload: build.tar.gz is a .gz.
   const archives: Array<[string, string, string]> = [
     ["project.zip", "application/zip", ".zip"],
     ["photos.rar", "application/vnd.rar", ".rar"],
