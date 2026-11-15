@@ -256,6 +256,28 @@ describe("CodexDriver turns (fake app-server)", () => {
     expect(existsSync(dump)).toBe(false);
   });
 
+  it.each([
+    ["an enabled account plugin", { FAKE_CODEX_EXTRA_ENABLED_PLUGIN: "1" }, "notion@openai-curated-remote", undefined],
+    ["an incomplete plugin inventory", { FAKE_CODEX_PLUGIN_MARKETPLACE_LOAD_ERROR: "1" }, "could not load every native plugin marketplace", undefined],
+    ["a temporary plugin inventory failure", { FAKE_CODEX_PLUGIN_INSTALLED_ERROR: "1" }, "Retry after checking the Codex plugin configuration", "Update Codex"],
+    ["a Codex version without plugin inventory", { FAKE_CODEX_PLUGIN_INSTALLED_UNSUPPORTED: "1" }, "Update Codex to 0.163.0 or newer", undefined],
+  ])("refuses %s before sending the prompt", async (_case, environment, errorText, excludedText) => {
+    const dump = join(scratch, "plugin-gate.json");
+    process.env.FAKE_CODEX_DUMP = dump;
+    await create({ environment: { HOME: scratch, CODEX_HOME: join(scratch, ".codex"), ...environment } });
+    await instance.adapter.sendTurn({
+      threadId: "plugin-gate",
+      text: "Must not run",
+      pluginLibrary: { root: join(scratch, "plugins"), installed: [] },
+    });
+    await expect(recorder.until(event => event.type === "turn.completed")).resolves.toMatchObject({ ok: false });
+    expect(recorder.events.some(event => event.type === "runtime.error" && event.message.includes(errorText))).toBe(true);
+    if (excludedText) expect(recorder.events.some(event => event.type === "runtime.error" && event.message.includes(excludedText))).toBe(false);
+    const calls = JSON.parse(readFileSync(dump, "utf8")).calls;
+    expect(calls.some((call: { method: string }) => call.method === "plugin/installed")).toBe(true);
+    expect(calls.some((call: { method: string }) => call.method === "thread/start" || call.method === "turn/start")).toBe(false);
+  });
+
   it("gates raw custom identities without loading MCP servers from the external credential home", async () => {
     const dump = join(scratch, "scope-mcp.json"); process.env.FAKE_CODEX_DUMP = dump;
     mkdirSync(join(scratch, ".codex")); writeFileSync(join(scratch, ".codex/config.toml"), '[mcp_servers.notes]\nurl="https://example.test/ambient"\n');
@@ -1911,9 +1933,11 @@ process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');});`)
     expect(seen.argv).toContain("features.browser_use=false");
     expect(seen.argv).toContain("features.browser_use_external=false");
     expect(seen.argv).toContain("features.computer_use=false");
-    expect(seen.argv).toContain("features.plugins=false");
+    expect(seen.argv).toContain("features.plugins=true");
+    expect(seen.argv).toContain("features.tool_suggest=false");
+    expect(seen.argv).toContain("features.recommended_plugins=false");
     expect(seen.argv.some((arg: string) => arg.startsWith("web_search="))).toBe(false);
-    expect(seen.argv).toContain('plugins={ "browser@openai-bundled" = { enabled = false }, "computer-use@openai-bundled" = { enabled = false }, "unified-computer-use@openai-bundled" = { enabled = false } }');
+    expect(seen.argv).toContain('plugins={ _default = { enabled = false }, "browser@openai-bundled" = { enabled = false }, "computer-use@openai-bundled" = { enabled = false }, "unified-computer-use@openai-bundled" = { enabled = false } }');
     expect(seen.argv).toContain('mcp_servers.browser.default_tools_approval_mode="auto"');
     expect(seen.argv).not.toContain('mcp_servers.browser.default_tools_approval_mode="approve"');
     expect(seen.argv.join(" ")).toContain("/tmp/harness-mcp-proxy.js");

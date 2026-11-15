@@ -530,12 +530,24 @@ process.stdin.on("data", (chunk) => {
     switch (msg.method) {
       case "plugin/installed": {
         dump();
+        if (process.env.FAKE_CODEX_PLUGIN_INSTALLED_UNSUPPORTED === "1") {
+          out({ jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "method not found" } });
+          break;
+        }
+        if (process.env.FAKE_CODEX_PLUGIN_INSTALLED_ERROR === "1") {
+          out({ jsonrpc: "2.0", id: msg.id, error: { code: -32000, message: "temporary inventory failure" } });
+          break;
+        }
         const plugins = process.argv.flatMap((arg, index) => {
           const match = process.argv[index - 1] === "-c" ? /^plugins\.([a-z0-9-]+@openmausbot)\.enabled=(true|false)$/.exec(arg) : null;
           return match ? [{ id: match[1], installed: true, enabled: process.env.FAKE_CODEX_IGNORE_PLUGIN_OVERRIDES === "1" || match[2] === "true" }] : [];
         });
-        if (process.env.FAKE_CODEX_EXTRA_ENABLED_PLUGIN === "1") plugins.push({ id: "extra@openmausbot", installed: true, enabled: true });
-        out({ jsonrpc: "2.0", id: msg.id, result: { marketplaces: [{ name: "openmausbot", plugins }] } });
+        const marketplaces: { name: string; plugins: { id: string; installed: boolean; enabled: boolean }[] }[] = [{ name: "openmausbot", plugins }];
+        if (process.env.FAKE_CODEX_EXTRA_ENABLED_PLUGIN === "1") {
+          marketplaces.push({ name: "openai-curated-remote", plugins: [{ id: "notion@openai-curated-remote", installed: true, enabled: true }] });
+        }
+        const marketplaceLoadErrors = process.env.FAKE_CODEX_PLUGIN_MARKETPLACE_LOAD_ERROR === "1" ? ["remote marketplace failed"] : [];
+        out({ jsonrpc: "2.0", id: msg.id, result: { marketplaces, marketplaceLoadErrors } });
         break;
       }
       case "initialize": {
