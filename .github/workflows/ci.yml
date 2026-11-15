@@ -67,8 +67,6 @@ jobs:
       # ci-scope reads whether the commit before a push got its own green run,
       # and whether the pushed commit already passed the merge queue
       actions: read
-      # and a pull request's labels as they are when the run starts
-      pull-requests: read
     outputs:
       jobs: ${{ steps.scope.outputs.jobs }}
       vitest_os: ${{ steps.scope.outputs.vitest_os }}
@@ -182,14 +180,12 @@ jobs:
     # A failing preflight still fails the required gates; nothing is waived.
     needs: static
     if: contains(needs.static.outputs.jobs, '"vitest"')
-    # scripts/ci-scope.mjs picks the platforms and their shards: PRs run Linux,
-    # and Windows only when their change can break Windows or they carry the
-    # windows label (the account runs only five macOS jobs at a time), main
-    # pushes and merge groups Linux and Windows, and the full lane (nightly,
-    # manual runs, the release lane) all three. A pull request that
-    # cannot affect a platform's results leaves it out, and one that changes
-    # only translations runs the locale tests alone. On a Boat VM the static
-    # job runs the Linux entries itself. Linux runs every file;
+    # scripts/ci-scope.mjs picks the platforms and their shards: PRs selected
+    # for host tests, main pushes and merge groups run Linux and Windows; the
+    # full lane (nightly, manual runs, the release lane) adds macOS. Other PRs
+    # run Linux, and one that changes only translations runs the locale tests
+    # alone. On a Boat VM the static job runs the Linux entries itself. Linux
+    # runs every file;
     # Windows and macOS run every file but the e2e files that test only OMB's
     # own logic (OMB_VITEST_E2E=host, scripts/testing/host-e2e.ts). The split
     # is deterministic, so a failure names the same shard on every run, and

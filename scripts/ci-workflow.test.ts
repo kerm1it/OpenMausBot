@@ -215,11 +215,10 @@ describe("CI concurrency", () => {
     expect(check.jobs.check["runs-on"]).toBe(release.jobs.windows["runs-on"]);
   });
 
-  it("lets the scope read the previous commit's CI and a pull request's labels, and nothing more", () => {
+  it("lets the scope read the previous commit's CI, and nothing more", () => {
     // ci-scope.mjs runs a push's docs- or version-only diff without the runtime
-    // jobs only when the commit before it has its own green run, and a PR's
-    // Windows jobs when it carries the windows label.
-    expect(workflow.jobs.static.permissions).toEqual({ contents: "read", actions: "read", "pull-requests": "read" });
+    // jobs only when the commit before it has its own green run.
+    expect(workflow.jobs.static.permissions).toEqual({ contents: "read", actions: "read" });
     const scope = workflow.jobs.static.steps.find((step: { id?: string }) => step.id === "scope");
     expect(scope.env).toEqual({ GH_TOKEN: "${{ github.token }}", OMB_CI_LINUX_IN_STATIC: "${{ runner.environment == 'self-hosted' }}" });
     for (const [name, job] of Object.entries(workflow.jobs) as [string, { permissions?: unknown }][]) {
