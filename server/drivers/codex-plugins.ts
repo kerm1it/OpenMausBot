@@ -66,20 +66,30 @@ async function synchronizeCodexPlugins(cli: string, env: NodeJS.ProcessEnv, sele
   return { args: Object.entries(expected).flatMap(([id, enabled]) => ["-c", `plugins.${id}.enabled=${enabled}`]), expected };
 }
 
-/** Check native plugin discovery, not config/read: older Codex ignores overrides here. */
+/** Codex CLI 0.146.1 reports overrides in config/read without applying them to native discovery. */
 export function assertCodexPluginSelection(result: unknown, expected: Record<string, boolean>): void {
-  const marketplaces = (result as { marketplaces?: { name?: string; plugins?: { id?: string; installed?: boolean; enabled?: boolean }[] }[] } | null)?.marketplaces;
-  const actual = new Map(Array.isArray(marketplaces) ? marketplaces.flatMap(market =>
-    market.name === "openmausbot" && Array.isArray(market.plugins) ? market.plugins.map(plugin => [plugin.id, plugin] as const) : []) : []);
-  for (const [id, plugin] of actual) {
-    if (plugin.installed === true && plugin.enabled === true && (typeof id !== "string" || expected[id] !== true)) {
-      throw new Error("Codex discovered an extra enabled OpenMausBot plugin in the shared CODEX_HOME. No prompt was sent; retry after plugin installation finishes.");
-    }
+  const inventory = result as { marketplaces?: { name?: string; plugins?: { id?: string; installed?: boolean; enabled?: boolean }[] }[]; marketplaceLoadErrors?: unknown } | null;
+  const marketplaces = inventory?.marketplaces;
+  if (!Array.isArray(marketplaces) || marketplaces.some(market =>
+    !market || typeof market !== "object" || !Array.isArray(market.plugins) || market.plugins.some(plugin => !plugin || typeof plugin !== "object")) ||
+    (inventory?.marketplaceLoadErrors !== undefined && !Array.isArray(inventory.marketplaceLoadErrors))) {
+    throw new Error("Codex returned an invalid native plugin inventory. No prompt was sent. Update Codex to 0.163.0 or newer and retry.");
   }
+  if (inventory?.marketplaceLoadErrors?.length) {
+    throw new Error("Codex could not load every native plugin marketplace. No prompt was sent. Retry after fixing the Codex plugin configuration.");
+  }
+  const enabled = marketplaces.flatMap(market => market.plugins!.filter(plugin => plugin.enabled === true));
+  const unexpected = enabled.filter(plugin => typeof plugin.id !== "string" || expected[plugin.id] !== true)
+    .map(plugin => typeof plugin.id === "string" ? plugin.id : "an unidentified plugin");
+  if (unexpected.length) {
+    throw new Error(`Codex enabled plugins this bot did not select: ${unexpected.join(", ")}. No prompt was sent. Update Codex to 0.163.0 or newer and retry.`);
+  }
+  const actual = new Map(marketplaces.flatMap(market =>
+    market.name === "openmausbot" ? market.plugins!.map(plugin => [plugin.id, plugin] as const) : []));
   for (const [id, enabled] of Object.entries(expected)) {
     const plugin = actual.get(id);
     if (plugin?.installed !== true || plugin.enabled !== enabled) {
-      throw new Error("Codex could not apply this bot's native plugin selection with the shared CODEX_HOME. No prompt was sent. Use a Codex CLI that supports plugin configuration overrides (verified with 0.162.0-alpha.17.2; 0.146.1 ignores them).");
+      throw new Error("Codex could not apply this bot's native plugin selection in the application CODEX_HOME. No prompt was sent. Update Codex to 0.163.0 or newer and retry.");
     }
   }
 }

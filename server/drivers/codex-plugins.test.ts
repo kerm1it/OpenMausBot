@@ -149,11 +149,36 @@ describe("Codex native plugins in a shared home", () => {
     expect(() => assertCodexPluginSelection(result, expected)).not.toThrow();
     const extra = structuredClone(result);
     extra.marketplaces[0]!.plugins.push({ id: "extra@openmausbot", installed: true, enabled: true });
-    expect(() => assertCodexPluginSelection(extra, expected)).toThrow("extra enabled");
+    expect(() => assertCodexPluginSelection(extra, expected)).toThrow("extra@openmausbot");
+    const remote = structuredClone(result);
+    remote.marketplaces.push({ name: "openai-curated-remote", plugins: [
+      { id: "notion@openai-curated-remote", installed: true, enabled: true },
+    ] });
+    expect(() => assertCodexPluginSelection(remote, expected)).toThrow("notion@openai-curated-remote");
+    const pendingRemote = structuredClone(result);
+    pendingRemote.marketplaces.push({ name: "openai-curated-remote", plugins: [
+      { id: "notion@openai-curated-remote", installed: false, enabled: true },
+    ] });
+    expect(() => assertCodexPluginSelection(pendingRemote, expected)).toThrow("notion@openai-curated-remote");
+    const unidentified = { marketplaces: [
+      ...structuredClone(result).marketplaces,
+      { name: "remote", plugins: [{ installed: true, enabled: true }] },
+    ] };
+    expect(() => assertCodexPluginSelection(unidentified, expected)).toThrow("unidentified plugin");
     result.marketplaces[0]!.plugins[0]!.enabled = true;
     expect(() => assertCodexPluginSelection(result, expected)).toThrow("No prompt was sent");
-    for (const malformed of [null, {}, { marketplaces: [] }, { marketplaces: {} }]) {
-      expect(() => assertCodexPluginSelection(malformed, expected)).toThrow("shared CODEX_HOME");
+    for (const malformed of [
+      null,
+      {},
+      { marketplaces: {} },
+      { marketplaces: [null] },
+      { marketplaces: [{ name: "remote" }] },
+      { marketplaces: [{ name: "remote", plugins: [null] }] },
+      { marketplaces: [], marketplaceLoadErrors: {} },
+    ]) {
+      expect(() => assertCodexPluginSelection(malformed, expected)).toThrow("invalid native plugin inventory");
     }
+    expect(() => assertCodexPluginSelection({ marketplaces: [], marketplaceLoadErrors: ["remote failed"] }, expected)).toThrow("could not load every native plugin marketplace");
+    expect(() => assertCodexPluginSelection({ marketplaces: [] }, expected)).toThrow("application CODEX_HOME");
   });
 });

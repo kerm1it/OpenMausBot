@@ -1315,11 +1315,12 @@ export const CodexDriver: ProviderDriver<CodexConfig> = {
           try {
             discovered = await request("plugin/installed", { cwds: [turn.cwd ?? homedir()] });
           } catch (error) {
-            if (!(error instanceof CodexRpcError && error.code === -32601 && !Object.keys(nativePlugins.expected).length)) {
-              throw new Error("Codex could not verify native plugin selection. No prompt was sent. Check that the configured CLI supports plugin/installed and plugin configuration overrides.");
+            if (error instanceof CodexRpcError && error.code === -32601) {
+              throw new Error("Codex could not verify native plugin selection. No prompt was sent. Update Codex to 0.163.0 or newer and retry.");
             }
+            throw new Error("Codex could not verify the native plugin inventory. No prompt was sent. Retry after checking the Codex plugin configuration.");
           }
-          if (discovered !== undefined) assertCodexPluginSelection(discovered, nativePlugins.expected);
+          assertCodexPluginSelection(discovered, nativePlugins.expected);
         }
         // developerInstructions replaces, rather than appends to, native config.
         let effectiveConfig: unknown;
