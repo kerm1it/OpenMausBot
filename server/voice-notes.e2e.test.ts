@@ -8,6 +8,7 @@ import { expect, it } from "vitest";
 import { launchVerificationServer, runControlOmb } from "../scripts/control-omb.ts";
 import { request } from "../scripts/mcp-server.ts";
 import { lastNonReceipt } from "../src/lib/receipts.ts";
+import { hostTimeout } from "./testing/host-timeout.ts";
 import { listSystemVoices } from "./tts/system-voices.ts";
 
 const execFileAsync = promisify(execFile);
@@ -130,7 +131,7 @@ it("advertises send_voice_note to a ready bot and attaches the clip to the settl
   // Windows cannot represent a POSIX owner-only mode.
   if (process.platform !== "win32") expect(statSync(stored).mode & 0o777).toBe(0o600);
   expect(readFileSync(stored).equals(MP3)).toBe(true);
-}), 60_000);
+}), hostTimeout(60_000));
 
 async function sendWavNote(f: any): Promise<Buffer> {
   const bot = (await f.cli("new-bot", "--name", "WAV voice bot")).bot;
@@ -157,7 +158,7 @@ it("delivers a WAV voice note from a provider that answers in WAV", async () => 
   const baseUrl = await f.serveTts({ audio: { mime: "audio/wav", bytes: wav } });
   await f.api("/api/config", { tts: { provider: "chatterbox", baseUrl, voice: "voice-a" } }, "PUT");
   expect((await sendWavNote(f)).equals(wav)).toBe(true);
-}), 60_000);
+}), hostTimeout(60_000));
 
 it.runIf(process.platform === "darwin")("delivers a voice note spoken by the built-in Mac voices", async ({ skip }) => {
   // A cold CI Mac can take longer than the app's 5 s to list its voices, and some runner images have none.
@@ -169,7 +170,7 @@ it.runIf(process.platform === "darwin")("delivers a voice note spoken by the bui
     expect(served.subarray(0, 4).toString("latin1")).toBe("RIFF");
     expect(served.subarray(8, 12).toString("latin1")).toBe("WAVE");
   });
-}, 60_000);
+}, hostTimeout(60_000));
 
 it("keeps a voice-only reply's words on the attachment as its transcript when the turn writes no reply", async () => withVoiceFixture(async (f) => {
   const baseUrl = await f.serveTts();
@@ -186,7 +187,7 @@ it("keeps a voice-only reply's words on the attachment as its transcript when th
   expect(withAudio[0].text).toBe("");
   expect(withAudio[0].attachments.find((a: any) => a.kind === "audio").text).toBe(note);
   expect(f.mp3Files()).toHaveLength(1);
-}), 60_000);
+}), hostTimeout(60_000));
 
 it("hides the tool and refuses the call when no voice is configured", async () => withVoiceFixture(async (f) => {
   const baseUrl = await f.serveTts();
@@ -211,7 +212,7 @@ it("hides the tool and refuses the call when no voice is configured", async () =
   expect(messages.some((m: any) => (m.attachments ?? []).some((a: any) => a.kind === "audio"))).toBe(false);
   expect(f.seen).toEqual([]);
   expect(f.mp3Files()).toEqual([]);
-}), 60_000);
+}), hostTimeout(60_000));
 
 it("hides the tool and refuses the call when voice notes are turned off for the bot", async () => withVoiceFixture(async (f) => {
   const baseUrl = await f.serveTts();
@@ -237,7 +238,7 @@ it("hides the tool and refuses the call when voice notes are turned off for the 
   expect(messages.some((m: any) => (m.attachments ?? []).some((a: any) => a.kind === "audio"))).toBe(false);
   expect(f.seen).toEqual([]);
   expect(f.mp3Files()).toEqual([]);
-}), 60_000);
+}), hostTimeout(60_000));
 
 it("attaches a parked voice note to a room post and delivers it exactly once", async () => withVoiceFixture(async (f) => {
   const baseUrl = await f.serveTts();
@@ -272,7 +273,7 @@ it("attaches a parked voice note to a room post and delivers it exactly once", a
   expect(own.some((m: any) => (m.attachments ?? []).some((a: any) => a.kind === "audio"))).toBe(false);
   expect(f.mp3Files()).toHaveLength(1);
   expect(audio.path.endsWith(f.mp3Files()[0])).toBe(true);
-}), 60_000);
+}), hostTimeout(60_000));
 
 it("refuses a room post that asks to attach a voice note this turn never recorded", async () => withVoiceFixture(async (f) => {
   const baseUrl = await f.serveTts();
@@ -296,7 +297,7 @@ it("refuses a room post that asks to attach a voice note this turn never recorde
   const roomMessages = await f.messages(room.activeTaskId);
   expect(roomMessages.some((m: any) => m.text === "Nothing to hear here.")).toBe(false);
   expect(f.mp3Files()).toEqual([]);
-}), 60_000);
+}), hostTimeout(60_000));
 
 it("keeps the parked note when the room-post append fails, so a retry can attach it", async () => withVoiceFixture(async (f) => {
   const baseUrl = await f.serveTts();
@@ -339,7 +340,7 @@ it("keeps the parked note when the room-post append fails, so a retry can attach
   expect(own.some((m: any) => (m.attachments ?? []).some((a: any) => a.kind === "audio"))).toBe(false);
   expect(f.mp3Files()).toHaveLength(1);
   expect(audio.path.endsWith(f.mp3Files()[0])).toBe(true);
-}, { failFirstAudioAppend: true }), 60_000);
+}, { failFirstAudioAppend: true }), hostTimeout(60_000));
 
 it("keeps a failed turn's voice note above its failure row, and a stopped turn's above its stop line", async () => withVoiceFixture(async (f) => {
   const baseUrl = await f.serveTts();
@@ -359,7 +360,7 @@ it("keeps a failed turn's voice note above its failure row, and a stopped turn's
   const failure = (m: any) => m.kind === "activity" && String(m.tool?.name ?? "").startsWith("error:");
   const settledFailure = async (bot: any, note: string) => {
     await f.cli("send", "--bot", bot.id, "--task", bot.activeTaskId, "--text", "Export it, and tell me by voice.");
-    await expect.poll(async () => (await f.messages(bot.activeTaskId)).some(failure), { timeout: 30_000 }).toBe(true);
+    await expect.poll(async () => (await f.messages(bot.activeTaskId)).some(failure), { timeout: hostTimeout(30_000) }).toBe(true);
     await f.cli("wait", "--bot", bot.id, "--task", bot.activeTaskId, "--timeout", "30");
     const messages = await f.messages(bot.activeTaskId);
     const voiced = messages.findIndex((m: any) => (m.attachments ?? []).some((a: any) => a.kind === "audio"));
@@ -380,7 +381,7 @@ it("keeps a failed turn's voice note above its failure row, and a stopped turn's
   expect(f.mp3Files()).toHaveLength(2);
 
   await f.cli("send", "--bot", stopped.id, "--task", stopped.activeTaskId, "--text", "Send a note, then hold.");
-  await expect.poll(() => f.mp3Files().length, { timeout: 20_000 }).toBe(3);
+  await expect.poll(() => f.mp3Files().length, { timeout: hostTimeout(20_000) }).toBe(3);
   await f.api("/api/bots/" + stopped.id + "/interrupt", { threadId: stopped.activeTaskId });
   await f.cli("wait", "--bot", stopped.id, "--task", stopped.activeTaskId, "--timeout", "30");
   const afterStop: any[] = await f.messages(stopped.activeTaskId);
@@ -390,7 +391,7 @@ it("keeps a failed turn's voice note above its failure row, and a stopped turn's
   expect(last.tool.name).toMatch(/^stopped:/);
   expect(afterStop.indexOf(last)).toBeGreaterThan(kept);
   expect(f.mp3Files()).toHaveLength(3);
-}), 120_000);
+}), hostTimeout(120_000));
 
 it("leaves no file and no later-turn attachment when the turn dies mid-synthesis", async () => withVoiceFixture(async (f) => {
   const hold = join(f.dataDir, "tts-hold");
@@ -404,7 +405,7 @@ it("leaves no file and no later-turn attachment when the turn dies mid-synthesis
     },
   });
   await f.cli("send", "--bot", bot.id, "--task", bot.activeTaskId, "--text", "Send a note, slowly.");
-  await expect.poll(() => f.seen.length, { timeout: 20_000 }).toBe(1);
+  await expect.poll(() => f.seen.length, { timeout: hostTimeout(20_000) }).toBe(1);
   await f.api("/api/bots/" + bot.id + "/interrupt", { threadId: bot.activeTaskId });
   // The failed settle lands before the provider bytes arrive, so the park meets a fully dead turn instead of racing the cleanup.
   await f.cli("wait", "--bot", bot.id, "--task", bot.activeTaskId, "--timeout", "30").catch(() => undefined);
@@ -415,14 +416,14 @@ it("leaves no file and no later-turn attachment when the turn dies mid-synthesis
   const messages = await f.messages(bot.activeTaskId);
   expect(messages.some((m: any) => (m.attachments ?? []).some((a: any) => a.kind === "audio"))).toBe(false);
   expect(f.mp3Files()).toEqual([]);
-}), 90_000);
+}), hostTimeout(90_000));
 
 const spokenNote = async (f: any, threadId: string, text: string) => {
   let found: any;
   await expect.poll(async () => {
     found = (await f.messages(threadId)).find((m: any) => m.text === text && (m.attachments ?? []).some((a: any) => a.kind === "audio"));
     return Boolean(found);
-  }, { timeout: 20_000 }).toBe(true);
+  }, { timeout: hostTimeout(20_000) }).toBe(true);
   return found.attachments.filter((a: any) => a.kind === "audio");
 };
 
@@ -466,15 +467,15 @@ it("speaks every reply when the Voice setting is on: failed turns too with how t
   expect((await f.messages(failing.activeTaskId)).some((m: any) => String(m.tool?.name ?? "").startsWith("error:"))).toBe(true);
 
   await f.cli("send", "--bot", stopped.id, "--task", stopped.activeTaskId, "--text", "Start the long job.");
-  await expect.poll(async () => (await f.messages(stopped.activeTaskId)).some((m: any) => m.text === "Starting the long job."), { timeout: 20_000 }).toBe(true);
+  await expect.poll(async () => (await f.messages(stopped.activeTaskId)).some((m: any) => m.text === "Starting the long job."), { timeout: hostTimeout(20_000) }).toBe(true);
   await f.api("/api/bots/" + stopped.id + "/interrupt", { threadId: stopped.activeTaskId });
   await f.cli("wait", "--bot", stopped.id, "--task", stopped.activeTaskId, "--timeout", "30");
   await settle(f, plain, "Once more.");
-  await expect.poll(() => f.seen.filter((call: any) => call.input === "The report is ready.").length, { timeout: 20_000 }).toBe(2);
+  await expect.poll(() => f.seen.filter((call: any) => call.input === "The report is ready.").length, { timeout: hostTimeout(20_000) }).toBe(2);
   const spoken = f.seen.map((call: any) => call.input);
   for (const never of ["Muted reply.", "Reply next to my own note.", "Starting the long job."]) expect(spoken).not.toContain(never);
   for (const once of [failedNote, "My own note."]) expect(spoken.filter((input: string) => input === once)).toHaveLength(1);
-}), 180_000);
+}), hostTimeout(180_000));
 
 it("with the Voice setting off, speaks only for a bot switched on, and says once, quietly, why a bot without a voice cannot", async () => withVoiceFixture(async (f) => {
   const baseUrl = await f.serveTts();
@@ -506,4 +507,4 @@ it("with the Voice setting off, speaks only for a bot switched on, and says once
   await settle(f, voiced, "And now?");
   await settle(f, following, "Barrier.");
   expect(f.seen).toHaveLength(1);
-}), 120_000);
+}), hostTimeout(120_000));

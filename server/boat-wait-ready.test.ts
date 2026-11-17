@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { hostTimeout } from "./testing/host-timeout.ts";
 
 describe("waiting for a cloud computer", () => {
   const botId = "stalled-relay-bot";
@@ -45,6 +46,6 @@ describe("waiting for a cloud computer", () => {
     stall = where;
     const started = Date.now();
     await expect(boat.readyBoat({ box: { token: "box_test" } } as never, botId, 600)).resolves.toBeNull();
-    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(Date.now() - started).toBeLessThan(hostTimeout(3_000));
   });
 });

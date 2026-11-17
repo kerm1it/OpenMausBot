@@ -396,7 +396,7 @@ export async function launchVerificationServer(
       return "";
     }
   };
-  const deadline = Date.now() + hostTimeout(20_000);
+  const deadline = Date.now() + hostTimeout(30_000);
   try {
     for (;;) {
       if (signal?.aborted) throw new ControlOmbError("verification launch cancelled");

@@ -19,8 +19,8 @@ too) into areas, and runs only the jobs some area can affect:
 | docs | `*.md` at the root, everything under `docs/` and `apps/docs/`, `.github/FUNDING.yml` | lint, the docs tests (the three vitest files that read the docs) on Linux |
 | locales | `src/locales/*.json` except `en.json`, `src/locales/*.test.ts` | the build, the locale tests: every `src/` test and `scripts/generate-locale.test.mjs` in two Linux shards, with the Electron node tests |
 | web | the rest of `src/`, `public/`, the root `*-preview.html` pages | the build, the eight Linux shards, the renderer smoke |
-| script tests | `scripts/**/*.test.*` | the Linux shards (and Windows', see Windows), the renderer smoke, browser identity |
-| server | `server/`, `shared/`, `enterprise/`, `companion/`, `evals/`, `skills/`, `deploy/`, the composio broker, the Dockerfile, and the renderer files the server or a smoke loads | the build, Linux shards (and Windows', see Windows), behavior evals, packaged server, open-source edition, the macOS smokes, renderer smoke, browser identity, browser driver, Linux package |
+| script tests | `scripts/**/*.test.*` | the Linux and Windows shards, the renderer smoke, browser identity |
+| server | `server/`, `shared/`, `enterprise/`, `companion/`, `evals/`, `skills/`, `deploy/`, the composio broker, the Dockerfile, and the renderer files the server or a smoke loads | the build, Linux and Windows shards, behavior evals, packaged server, open-source edition, the macOS smokes, renderer smoke, browser identity, browser driver, Linux package |
 | Windows computer control | the `electron/` modules that start computer control and lend a PC's screen: `cua`, `cua-failure`, `cua-connection`, `capabilities`, `screen-status`, `shared-cua-connection`, `shared-computer-access`, `lent-screen-tools`, `lent-screen-failures`, `paced-typing` | the same as server, and Windows CUA |
 | desktop | the rest of `electron/`, `build/`, `electron-builder.yml`, `index.html` | the same as server |
 | control plane | `cloudflare/control-plane/` | the control-plane job |
@@ -60,16 +60,15 @@ sets (`laneOf` in `scripts/ci-scope.mjs`):
 
 | Event | Lane | What runs |
 | --- | --- | --- |
-| `pull_request` | its areas | the table above, with Linux shards, and Windows jobs only for a change that can break Windows (Windows below) |
+| `pull_request` | its areas | the table above; every area that selects host tests runs the Linux and Windows shards |
 | `push` to main, `merge_group` | main | static (lint and the CI checks), the build, the eight Linux and eight Windows shards with the Electron node tests, the macOS smokes job, behavior evals, the Linux and Windows packaged server smokes, the open-source edition, the control plane, the renderer smoke and Linux and Windows browser identity |
 | `schedule` (nightly, 21:17 UTC), `workflow_dispatch` (manual runs, the release branch's CI that `prepare-release.yml` starts, and the release lane) | full | every job on every platform: also the Windows and macOS shards, the Windows packaged server and Windows CUA smokes, Windows and macOS browser identity, the browser driver on all three, the Linux package and the Linux ARM64 installer |
 
 The main lane runs Linux, Windows and one macOS job. The macOS shards, the
 Windows CUA smoke and every smoke that needs a second macOS runner wait for
-the night or a release. A change that breaks only Windows shows up in its own
-PR when it can (Windows below), and otherwise in main's run after it merges; a
-change that breaks only macOS shows up in the nightly run or in the release
-lane, which only an emergency `ship_without_ci` release skips.
+the night or a release. A host-dependent change that breaks Windows shows up
+in its own PR; a change that breaks only macOS shows up in the nightly run or
+in the release lane, which only an emergency `ship_without_ci` release skips.
 
 - A push to main is scoped by its own commits (`before..after`): docs only
   (root Markdown, Markdown under `docs/`, `.github/FUNDING.yml`), or a
@@ -187,48 +186,28 @@ seven (four Vitest shards, two smokes, the iOS job with its hour-long
 simulator suite). With 25 open PRs the macOS jobs waited a median of six and a
 half hours. Now:
 
-- A PR runs the Vitest shards on Ubuntu (and Windows where its change can
-  break Windows), a push to main or a merge group on Ubuntu and Windows; the
-  full lane adds four macOS shards, which run the host e2e files only. Only a
-  couple of test blocks are macOS-only.
+- A PR selected for host tests runs the Vitest shards on Ubuntu and Windows;
+  the other PR areas run their Linux subsets. A push to main or a merge group
+  runs Ubuntu and Windows; the full lane adds four macOS shards, which run the
+  host e2e files only. Only a couple of test blocks are macOS-only.
 - Every PR's, push's and merge group's macOS checks are one job: the
   packaged-server smoke and the Electron smokes.
 - `ci-stop-closed.yml` cancels a PR's CI run when the PR is merged or closed. PR runs share a group named by the PR number (`ci-pr-<n>`), never by `github.ref`: a merged PR's closed event reports the base branch as `github.ref`, which made every merge cancel main's CI (fixed Oct 3 2026).
 
 ## Windows
 
-Windows runners are slow to get and a Windows shard takes as long as a Linux
-one, so a pull request runs the Windows jobs (the eight shards, the packaged
-server smoke, browser identity, the browser driver and, for a change that can
-affect anything or to the Electron modules it starts, the CUA smoke) only when
-its change can break Windows first
-(`windowsReason` in `scripts/ci-scope.mjs`):
+Every pull request whose selected checks include `host-tests` runs the eight
+Windows shards as well as Linux. This includes script tests, server, desktop,
+Windows computer control, shared e2e vectors and the catch-all `everything`
+area. The Windows packaged-server smoke, browser identity and browser driver
+follow the same platform selection when their area selects those jobs. Windows
+CUA remains an area-specific job for Windows computer-control and catch-all
+changes.
 
-- the PR carries the `windows` label;
-- a path names Windows (`win`, `win32`, `windows`, `nsis`, `powershell` as a
-  word of the path, `.ps1`, `.cmd`, `.bat`, `.exe`), or is the desktop app and
-  its installer (`electron/`, `build/`, `electron-builder.yml`), the
-  dependencies (`package.json`, the lockfile and workspace, `.npmrc`,
-  `third_party/`), `.gitattributes`, `vite.config.ts`, a script that builds,
-  bundles, prepares, packages, stages or smokes the app, or what decides how
-  the Windows shards run (`ci.yml`, `ci-scope.mjs`, the host e2e list, the
-  shard weights, the retry list and runner, `server/testing/host-timeout.ts`);
-- it changes one of the e2e files the Windows shards also run
-  (`scripts/testing/host-e2e.ts`);
-- an added or removed line of its code (not docs or translations) names
-  Windows: `win32`, `Windows`, `windows-latest`, PowerShell, `cmd.exe`,
-  `.exe`, `path.win32`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `PATHEXT`,
-  `ComSpec`, `windowsHide` or `windowsVerbatimArguments`.
-
-The static job's log says which one (`CI scope: Windows runs for …`). Every
-other PR leaves Windows to main's push run after it merges, the nightly run and
-the release lane. Over October 2026's last 300 merges this ran Windows on 37%
-of PRs instead of 81%.
-
-To run Windows on any PR, add the `windows` label, then re-run the CI workflow
-(or push): the static job reads the PR's labels when it runs. Adding the label
-alone starts nothing, because a run for every label change would cancel the
-PR's running checks.
+Docs, locales, renderer-only, control-plane, announcements and relay changes
+do not select `host-tests`, so their PR checks stay on their own Linux or
+service-specific lanes. There is no label, changed-path or changed-line
+override: the area-to-check mapping is the complete policy.
 
 ## Browser driver (S4)
 
@@ -264,9 +243,9 @@ answered by an upload, a dropdown list drawn by the viewer, a download served
 to it, the page's cursor and copied text).
 
 - The job uses the runner's installed Google Chrome (`OMB_CDP_E2E=1`) on the
-  same platforms as the vitest shards: Linux, and Windows where a PR runs it,
-  on PRs, all three in the full lane. Pushes to main and merge groups leave it
-  out. Linux runs
+  same platforms as the Vitest shards: Linux and, for host-test PRs, Windows;
+  all three run in the full lane. Pushes to main and merge groups leave it out.
+  Linux runs
   under Xvfb so the headed-identity case has a display.
 - On Linux it then builds the server image's `runtime` stage and runs the
   suites inside it as a non-root user against the image's Chrome for
@@ -383,8 +362,7 @@ instead (Settings → Secrets and variables → Actions → Variables; anything 
   every other run stays on GitHub: forks, teammates, bots, re-runs by anyone
   else, the nightly run and manual runs (the release lane needs every
   platform's shards by name). To give a teammate Boat too, add them to Boat's
-  list and to the condition in `ci.yml`'s `static` job. To run Windows on a PR
-  as well, label it `windows` (Windows above).
+  list and to the condition in `ci.yml`'s `static` job.
 - **What changes.** `static` runs on `boat-xlarge` (16 vCPU, 32 GB) and is
   named "preflight + Linux tests (Boat)". After its usual checks it
   runs the Linux vitest shards, behavior evals and the Linux packaged server

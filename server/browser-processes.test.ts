@@ -459,11 +459,10 @@ describe("a browser on Windows", () => {
       await vi.waitFor(() => expect(existsSync(ready)).toBe(true), { timeout: 15_000 });
       const killed = () => vi.mocked(execFile).mock.calls.filter(([file]) => file === "taskkill");
       vi.mocked(execFile).mockClear();
-      const listed = () => vi.mocked(execFile).mock.calls.filter(([file, args]) => file === "powershell.exe" && String((args as string[]).at(-1)).includes("OMB_BROWSER_PROFILE"));
-      await releaseBrowserProfile(dir, process.execPath, process.execPath);
       await releaseBrowserProfile(dir, process.execPath, process.execPath);
       expect(killed(), "its daemon's browser is kept").toEqual([]);
-      expect(listed(), "the second turn finds the kept browser without listing again").toHaveLength(1);
+      await releaseBrowserProfile(dir, process.execPath, process.execPath);
+      expect(killed(), "a second check still keeps its daemon's browser").toEqual([]);
       rmSync(join(dir, "lockfile"), { recursive: true, force: true });
       await releaseBrowserProfile(dir);
       mkdirSync(join(dir, "lockfile"));

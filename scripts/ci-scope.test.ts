@@ -10,9 +10,8 @@ import { parse } from "yaml";
 import {
   ALL_OS, AREA_CHECKS, ciOutputs, FULL_LANE_EVENTS, FULL_SCOPE, laneOf, LINUX_OS, MAIN_SCOPE, moveLinuxIntoStatic, QUEUED_SCOPE, SELECTABLE_JOBS,
   selectCiScope,
-  selectPushScope, SRC_OUTSIDE_RENDERER, versionOnlyPackageJson, VITEST_SUBSETS, vitestMatrix, WINDOWS_LABEL, WINDOWS_OS, windowsReason,
+  selectPushScope, SRC_OUTSIDE_RENDERER, versionOnlyPackageJson, VITEST_SUBSETS, vitestMatrix, WINDOWS_OS,
 } from "./ci-scope.mjs";
-import { HOST_E2E } from "./testing/host-e2e.ts";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const script = fileURLToPath(new URL("./ci-scope.mjs", import.meta.url));
@@ -435,55 +434,6 @@ describe("the Linux work in the static job, on a Boat VM", () => {
   });
 });
 
-describe("Windows on a pull request", () => {
-  const reason = (files: string[], lines: string[] = [], labels: string[] = []) =>
-    windowsReason({ files, labels, hostE2e: Object.keys(HOST_E2E), lines: () => lines });
-
-  it("runs for the windows label whatever changed", () => {
-    expect(WINDOWS_LABEL).toBe("windows");
-    expect(reason(["docs/guide.md"], [], ["bug", "windows"])).toBe('the "windows" label');
-    expect(reason(["server/index.ts"], [], ["Windows-ish"])).toBeNull();
-  });
-
-  it.each([
-    "electron/main.mjs", "build/installer.nsh", "electron-builder.yml", "maus.ps1", "scripts/build-cua-win.mjs",
-    "scripts/smoke-cua-win-embedded.mjs", "server/win32-paths.ts", "server/shell/windows.ts", "server/foo.win32.test.ts",
-    ".github/workflows/package-win.yml", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".gitattributes", "vite.config.ts",
-    "third_party/browser/agent-browser-windows-stdio.patch", ".github/workflows/ci.yml", "scripts/ci-scope.mjs",
-    "scripts/testing/host-e2e.ts", "scripts/testing/vitest-shard-weights.json", "server/testing/host-timeout.ts",
-    "scripts/prepare-cloudflared.mjs", "scripts/after-pack.mjs", ...Object.keys(HOST_E2E),
-  ])("runs for %s", (file) => {
-    expect(reason(["src/App.tsx", file])).toBe(file);
-  });
-
-  it.each([
-    "server/index.ts", "src/components/WindowFrame.tsx", "server/darwin.ts", "server/twin.ts", "scripts/verify-sidebar.ts",
-    "scripts/testing/rail-preview.tsx", "scripts/control-omb.ts", ".github/workflows/boat.yml", "tsconfig.json", "server/delta-context.e2e.test.ts",
-  ])("waits for main for %s alone", (file) => {
-    expect(reason([file])).toBeNull();
-  });
-
-  it.each([
-    ['+  if (process.platform === "win32") return;'], ["-  // Windows keeps a running process's folder"], ["+  const shell = \"powershell.exe\";"],
-    ["+  join(env.USERPROFILE, x)"], ["+  spawn(cmd, args, { windowsHide: true })"], ["+  path.win32.join(a, b)"], ["+    runs-on: windows-latest"],
-  ])("runs for a changed line %j", (line) => {
-    expect(reason(["server/index.ts"], ["diff --git a/server/index.ts b/server/index.ts", line])).toBe(`the changed line ${JSON.stringify(line)}`);
-  });
-
-  it("reads only added and removed lines, not file headers or a window", () => {
-    expect(reason(["server/index.ts"], [
-      "--- a/server/Windows.ts", "+++ b/server/Windows.ts", "@@ -1 +1 @@ Windows", " Windows context", "+const frame = window.open(url);",
-      "-  new BrowserWindow()", "+// two windows side by side",
-    ])).toBeNull();
-  });
-
-  it("reads the lines only when no label or path decided, and runs Windows when they cannot be read", () => {
-    const unread = () => { throw new Error("diff too large"); };
-    expect(windowsReason({ files: ["electron/main.mjs"], lines: unread })).toBe("electron/main.mjs");
-    expect(windowsReason({ files: ["server/index.ts"], lines: unread })).toBe("a change whose lines could not be read (diff too large)");
-  });
-});
-
 /** Relative imports, `@/` included, that load code when run; `import type` loads nothing. */
 const IMPORT = /(?:^|[^\w$.])(?:import|export)\s+(?!type\b)(?:[^"'`;]*?\sfrom\s*)?["']([^"']+)["']|(?:^|[^\w$.])(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/gm;
 const CODE = /\.[cm]?[jt]sx?$/;
@@ -629,8 +579,7 @@ describe("CI scope CLI", () => {
     const { output, stderr } = run(directory, "pull_request", {
       pull_request: { base: { sha: base }, head: { sha: git("rev-parse", "HEAD") } },
     });
-    // A server change that cannot break Windows first: its Windows jobs wait for main.
-    expect(output).toEqual({ jobs: SERVER_JOBS, vitest_os: LINUX, packaged_server_os: LINUX, vitest_matrix: vitestMatrix(LINUX) });
+    expect(output).toEqual({ jobs: SERVER_JOBS, vitest_os: PR, packaged_server_os: PR, vitest_matrix: vitestMatrix(PR) });
     expect(stderr).toBe("");
   });
 
@@ -881,20 +830,6 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
     return { directory, payload: { pull_request: { number: 7, base: { sha: base }, head: { sha: git("rev-parse", "HEAD") } } } };
   }
 
-  /** A GitHub that answers one pull request's labels, or fails with `status`. */
-  async function fakeLabelsApi(labels: string[], status = 200) {
-    const requests: string[] = [];
-    const server = createServer((request, response) => {
-      requests.push(`${request.method} ${request.url} ${request.headers.authorization}`);
-      response.statusCode = status;
-      response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify(status === 200 ? labels.map((name) => ({ name })) : { message: "nope" }));
-    });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    return { env: { GITHUB_API_URL: url, GH_TOKEN: "t", GITHUB_REPOSITORY: "o/r" }, requests, close: () => new Promise((resolve) => server.close(resolve)) };
-  }
-
   async function runPullRequest(directory: string, payload: unknown, env: Record<string, string> = {}) {
     const eventPath = join(directory, "event.json");
     const outputPath = join(directory, "output.txt");
@@ -910,65 +845,22 @@ describe("CI scope CLI on a pull request's Windows jobs", () => {
 
   const serverJobs = (oses: string[]) => ({ jobs: SERVER_JOBS, vitest_os: oses, packaged_server_os: oses, vitest_matrix: vitestMatrix(oses) });
 
-  it("runs the Windows jobs for a changed line that names Windows, and says why", async () => {
-    const { directory, payload } = serverChange('if (process.platform === "win32") quote();\n');
-    const { output, stdout, stderr } = await runPullRequest(directory, payload);
+  it.each([
+    ["server", "server/paths.ts", "export const greeting = \"hello\";\n"],
+    ["desktop", "electron/main.mjs", "app\n"],
+  ])("runs Linux and Windows for every %s pull request", async (_, file, content) => {
+    const { directory, payload } = serverChange(content, file);
+    const { output, stderr } = await runPullRequest(directory, payload);
     expect(output).toEqual(serverJobs(PR));
-    expect(stdout).toContain('Windows runs for the changed line "+if (process.platform === \\"win32\\") quote();"');
     expect(stderr).toBe("");
   });
 
-  it("leaves the Windows jobs to main for a change that cannot break Windows first, and says how to run them", async () => {
-    const { directory, payload } = serverChange("export const greeting = \"hello\";\n");
-    const { output, stdout, stderr } = await runPullRequest(directory, payload);
-    expect(output).toEqual(serverJobs(LINUX));
-    expect(stdout).toContain('label the PR "windows" and re-run');
-    expect(stderr).toBe("");
-  });
-
-  it("runs the Windows jobs for the desktop app", async () => {
-    const { directory, payload } = serverChange("app\n", "electron/main.mjs");
-    expect((await runPullRequest(directory, payload)).output).toEqual(serverJobs(PR));
-  });
-
-  it("runs the Windows jobs for the label the pull request has now, so a re-run after labelling runs them", async () => {
-    const { directory, payload } = serverChange("export const greeting = \"hello\";\n");
-    const api = await fakeLabelsApi(["bug", "windows"]);
-    try {
-      const { output, stderr } = await runPullRequest(directory, payload, api.env);
-      expect(output).toEqual(serverJobs(PR));
-      expect(stderr).toBe("");
-      expect(api.requests).toEqual(["GET /repos/o/r/issues/7/labels?per_page=100 Bearer t"]);
-    } finally {
-      await api.close();
-    }
-  });
-
-  it("falls back to the labels in the event when GitHub cannot answer", async () => {
-    const { directory, payload } = serverChange("export const greeting = \"hello\";\n");
-    const api = await fakeLabelsApi([], 502);
-    try {
-      const labelled = { pull_request: { ...payload.pull_request, labels: [{ name: "windows" }] } };
-      const { output, stderr } = await runPullRequest(directory, labelled, api.env);
-      expect(output).toEqual(serverJobs(PR));
-      expect(stderr).toContain("reading the pull request's labels from its event (HTTP 502");
-    } finally {
-      await api.close();
-    }
-  });
-
-  it("asks GitHub for no labels when the change selects no Windows job", async () => {
+  it("keeps a renderer-only pull request on Linux", async () => {
     const { directory, git, base } = fixture("src/App.tsx");
     writeFileSync(join(directory, "src/App.tsx"), "if (navigator.platform === \"win32\") {}\n");
     git("commit", "--quiet", "-am", "renderer");
-    const api = await fakeLabelsApi(["windows"]);
-    try {
-      const payload = { pull_request: { number: 7, base: { sha: base }, head: { sha: git("rev-parse", "HEAD") } } };
-      const { output } = await runPullRequest(directory, payload, api.env);
-      expect(output).toEqual(ciOutputs(selectCiScope(["src/App.tsx"]), LINUX));
-      expect(api.requests).toEqual([]);
-    } finally {
-      await api.close();
-    }
+    const payload = { pull_request: { number: 7, base: { sha: base }, head: { sha: git("rev-parse", "HEAD") } } };
+    const { output } = await runPullRequest(directory, payload);
+    expect(output).toEqual(ciOutputs(selectCiScope(["src/App.tsx"]), LINUX));
   });
 });

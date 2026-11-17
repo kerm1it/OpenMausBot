@@ -258,43 +258,6 @@ export function selectCiScope(files) {
   return { areas, checks: [...new Set(areas.flatMap((area) => AREA_CHECKS[area]))].sort() };
 }
 
-/** The pull request label that runs the Windows jobs whatever the change. */
-export const WINDOWS_LABEL = "windows";
-
-/** Paths whose change can break Windows first: Windows by name, the desktop app and its installer, the dependencies,
- * the scripts that build, package or smoke the app, and what decides how the Windows shards run. */
-export const WINDOWS_PATH = new RegExp([
-  String.raw`(?:^|[/._-])(?:win|win32|win64|windows|nsis|powershell|pwsh)(?:[/._-]|$)`,
-  String.raw`\.(?:ps1|psm1|psd1|cmd|bat|exe|msi|nsh|nsi)$`,
-  String.raw`^(?:electron|build|third_party)/`,
-  String.raw`^(?:electron-builder\.yml|package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc|\.gitattributes|vite\.config\.ts)$`,
-  String.raw`^\.github/workflows/ci\.yml$|^scripts/ci-scope\.mjs$`,
-  String.raw`^scripts/testing/(?:host-e2e\.ts|duration-sequencer\.ts|vitest-shard-weights\.json|ci-retry-[^/]+)$|^server/testing/host-timeout\.ts$`,
-  String.raw`^scripts/(?:build|bundle|prepare|package|smoke|after-pack|stage)[^/]*$`,
-].join("|"), "i");
-
-/** A changed line of code that names Windows or one of its APIs. */
-export const WINDOWS_TEXT = new RegExp([
-  String.raw`\bwin32\b|\bWindows\b|\bwindows-latest\b|[Pp]ower[Ss]hell|\bpwsh\b|\bcmd\.exe\b|\.exe\b|\bpath\.win32\b`,
-  String.raw`\b(?:USERPROFILE|LOCALAPPDATA|APPDATA|PATHEXT|ComSpec)\b|\bwindows(?:Hide|VerbatimArguments)\b`,
-].join("|"));
-
-/** Why a pull request runs the Windows jobs, or null when nothing in it is Windows-sensitive: its label, a path above,
- * an e2e file the Windows shards also run (`hostE2e`), or a changed line in `lines` (`git diff -U0` of its code). */
-export function windowsReason({ files, labels = [], hostE2e = [], lines = () => [] }) {
-  if (labels.includes(WINDOWS_LABEL)) return `the "${WINDOWS_LABEL}" label`;
-  const file = files.find((path) => WINDOWS_PATH.test(path) || hostE2e.includes(path));
-  if (file) return file;
-  let changed;
-  try {
-    changed = lines();
-  } catch (error) {
-    return `a change whose lines could not be read (${error.message})`;
-  }
-  const line = changed.find((text) => /^[+-](?![+-]{2} )/.test(text) && WINDOWS_TEXT.test(text));
-  return line ? `the changed line ${JSON.stringify(line.slice(0, 80))}` : null;
-}
-
 /** True when two package.json texts differ only in the top-level "version"
  * (the release bump, prepare-release.yml). Anything else that changed, a
  * reordered key included, or text that is not a JSON object, is false. */
@@ -328,10 +291,9 @@ export function selectPushScope(files, show) {
 }
 
 // macOS runners are the scarce ones (five at a time for the whole account),
-// and only a couple of test blocks are macOS-only, so a PR runs the suite on
-// Linux, and on Windows only when its change can break Windows (windowsReason);
-// a push to main and a merge group run Linux and Windows. The full lane adds
-// macOS. A PR that can affect the macOS smokes still runs them.
+// and only a couple of test blocks are macOS-only. A PR selected for host tests,
+// and every push to main or merge group, runs Linux and Windows. The full lane
+// adds macOS. A PR that can affect the macOS smokes still runs them.
 export const ALL_OS = ["macos-latest", "ubuntu-latest", "windows-latest"];
 export const LINUX_OS = ["ubuntu-latest"];
 export const WINDOWS_OS = ["ubuntu-latest", "windows-latest"];
@@ -422,13 +384,6 @@ function changedFiles(range) {
   return diff.slice(0, -1).split("\0");
 }
 
-/** The added and removed lines of a range's code, docs and translations left out. */
-function changedCodeLines(range) {
-  return execFileSync("git", [
-    "diff", "-U0", "--no-renames", "--no-color", "--no-ext-diff", range, "--", ".", ":(exclude)*.md", ":(exclude)docs/**", ":(exclude)src/locales/**",
-  ], { encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] }).split("\n");
-}
-
 async function github(path) {
   const { GH_TOKEN, GITHUB_REPOSITORY, GITHUB_API_URL = "https://api.github.com" } = process.env;
   if (!GH_TOKEN || !GITHUB_REPOSITORY) throw new Error("GH_TOKEN and GITHUB_REPOSITORY are needed to read CI runs");
@@ -441,19 +396,6 @@ async function github(path) {
 }
 
 const ciRuns = async (sha) => (await github(`/actions/workflows/ci.yml/runs?head_sha=${sha}&per_page=100`)).workflow_runs;
-
-/** A pull request's labels as they are now, so a label added after the push counts when the run is re-run; the
- * event's own list when GitHub cannot be read. */
-async function pullRequestLabels(pr) {
-  const fromEvent = (Array.isArray(pr?.labels) ? pr.labels : []).map((label) => label?.name).filter((name) => typeof name === "string");
-  if (!Number.isSafeInteger(pr?.number) || !process.env.GH_TOKEN || !process.env.GITHUB_REPOSITORY) return fromEvent;
-  try {
-    return (await github(`/issues/${pr.number}/labels?per_page=100`)).map((label) => label.name);
-  } catch (error) {
-    console.warn(`CI scope: reading the pull request's labels from its event (${error.message})`);
-    return fromEvent;
-  }
-}
 
 /** Did the commit before this push get a green CI run of its own? Main keeps
  * one run going and one waiting, and a push replaces the waiting run: if the
@@ -488,18 +430,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       }
       const files = changedFiles(`${base}...${head}`);
       scope = selectCiScope(files);
-      vitestOs = LINUX_OS;
-      if (scope.checks.includes("host-tests")) {
-        const why = windowsReason({
-          files,
-          labels: await pullRequestLabels(pr),
-          hostE2e: Object.keys((await import("./testing/host-e2e.ts")).HOST_E2E),
-          lines: () => changedCodeLines(`${base}...${head}`),
-        });
-        if (why) vitestOs = WINDOWS_OS;
-        console.log(why ? `CI scope: Windows runs for ${why}`
-          : `CI scope: nothing here can break Windows first, so its jobs wait for main (label the PR "${WINDOWS_LABEL}" and re-run to run them)`);
-      }
+      vitestOs = scope.checks.includes("host-tests") ? WINDOWS_OS : LINUX_OS;
     } catch (error) {
       console.warn(`CI scope: using all checks because the pull request diff is unavailable: ${error.message}`);
     }

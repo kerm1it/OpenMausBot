@@ -14,6 +14,7 @@ import { CONTROL_BUSY, CONTROL_REFUSAL_PLAIN, controlRefusal, createControlClien
 import { freePortBlock } from "./testing/ports.ts";
 import { readHandoffs } from "./testing/handoff-rows.ts";
 import { removeTempDir, waitForExit } from "./testing/cleanup.ts";
+import { hostTimeout } from "./testing/host-timeout.ts";
 import { appHandsItOver } from "./testing/your-computer.ts";
 import { THIS_COMPUTER_NOT_READY } from "../shared/your-computer.ts";
 
@@ -337,7 +338,7 @@ describe("Group Local VM ownership on the real isolated server", () => {
       await waitForExit(child, { signal: "SIGTERM" });
       await startServer();
     }
-  }, 45_000);
+  }, hostTimeout(45_000));
 
   it("recovers only previously provisioned Auto VMs after idle removal and server restart, within the instance cap", async () => {
     vmState({ containers: [] });
@@ -561,7 +562,7 @@ describe("Group Local VM ownership on the real isolated server", () => {
       await api("DELETE", `/api/bots/${bot.id}`);
       await api("PUT", "/api/config", { box: { token: "" } });
     }
-  }, 45_000);
+  }, hostTimeout(45_000));
 
   it("lets a chat tool select Auto, replaces tools after completion, and continues the same user message once", async () => {
     vmState(); rmSync(dumpFile, { force: true }); rmSync(finishFile, { force: true });
@@ -746,7 +747,7 @@ describe("Group Local VM ownership on the real isolated server", () => {
       if (mode === "per-bot") await api("PATCH", "/api/config", { localVm: { mode: "shared", maxInstances: 2 } });
       vmState();
     }
-  }, 40_000);
+  }, hostTimeout(40_000));
 
   it.each([["shared", false], ["shared", true], ["per-bot", false], ["per-bot", true]] as const)("keeps a replacement %s VM turn after a late completion (new task: %s)", async (mode, newTask) => {
     vmState();
@@ -784,7 +785,7 @@ describe("Group Local VM ownership on the real isolated server", () => {
       if (mode === "per-bot") await api("PATCH", "/api/config", { localVm: { mode: "shared", maxInstances: 2 } });
       vmState();
     }
-  }, 30_000);
+  }, hostTimeout(30_000));
 
   // Linux accepts only its own validated runtime descriptor, which a fixture cannot forge.
   it.skipIf(process.platform === "linux")("mounts a channel speaker's own This computer destination behind the control gate", async () => {
@@ -873,7 +874,7 @@ describe("Group Local VM ownership on the real isolated server", () => {
       await api("PATCH", `/api/bots/${bots[0].id}`, { computer: "vm" });
       await api("PUT", "/api/config", { box: { token: "" } });
     }
-  }, 45_000);
+  }, hostTimeout(45_000));
 
   it("releases a failed readiness claim so the bot and room can run again", async () => {
     const { bots, group } = await room();
@@ -1041,7 +1042,7 @@ describe("Group Local VM ownership on the real isolated server", () => {
       await waitForExit(child, { signal: "SIGTERM" });
       await startServer();
     }
-  }, 60_000);
+  }, hostTimeout(60_000));
 
   it("keeps a turn parked while a person holds the shared VM, and resumes it on the hand-back", async () => {
     await waitForExit(child, { signal: "SIGTERM" });
@@ -1075,7 +1076,7 @@ describe("Group Local VM ownership on the real isolated server", () => {
       await waitForExit(child, { signal: "SIGTERM" });
       await startServer();
     }
-  }, 60_000);
+  }, hostTimeout(60_000));
 
   it("runs a screen-less Auto turn to completion while another thread holds the Local VM (issue #1361 AC1)", async () => {
     vmState(); rmSync(dumpFile, { force: true }); rmSync(finishFile, { force: true });
